@@ -25,7 +25,7 @@ def get_data(bin_file : str, column_size: int, row_size: int, key_ints: int,
         Returns:
             np.array in shape (nframes, column_size, nreps, row_size)
         '''
-        polarity = -1
+        polarity = -1 #TODO: Check this again! In the c++ code this is done aftes some analysis
         frames_per_chunk = 20
         raw_row_size = column_size + key_ints
         raw_frame_size = column_size * raw_row_size * nreps
@@ -65,6 +65,7 @@ def get_data(bin_file : str, column_size: int, row_size: int, key_ints: int,
             frame_end_indices = valid_frames[:,1]
             del valid_frames
             gc.collect()
+            #offset is in bytes, uint16 = 16 bit = 2 bytes
             offset += chunk_size * 2
             count += 1
             inp_data = np.array([inp_data[start+1:end+1, :64] 

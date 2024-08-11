@@ -18,7 +18,8 @@ This is exposed to the user when importing nproan.
 
 analysis:
 Contains functions used for analysing/manipulating data. More complex
-functions are in here (eg more complex than np.nanmean)
+functions are in here (eg more complex than np.nanmean).
+Funtions used in roan_steps should be from this module.
 This is exposed to the user when importing nproan.
 
 display:
@@ -100,3 +101,6 @@ My current philosophy for doing stuff:
 - provide some functions that do data manipulation inplace
 - data that is loaded from file in the filter or gain step is stored in a class 
     variable
+
+Steps to upload package:
+https://packaging.python.org/en/latest/tutorials/packaging-projects/
