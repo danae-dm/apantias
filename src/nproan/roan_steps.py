@@ -48,6 +48,11 @@ class OffNoi():
         self._logger.info(f'Parameters loaded:')
         self.params.print_contents()
 
+        ram_needed = af.get_ram_usage_in_gb(self.nframes, self.column_size, self.nreps, self.row_size)*2 +5
+        self._logger.info(f'Estimated RAM needed for this step: {ram_needed} GB')
+        if ram_needed > 160:
+            self._logger.error('Estimated RAM needed is more than 160 GB. Exiting.')
+
     def calculate(self) -> None:   
         #create the directory for the data
         os.makedirs(self.common_dir, exist_ok=True)

@@ -129,3 +129,16 @@ def sort_with_indices(arr: np.ndarray) -> np.ndarray:
 
 def get_array_from_file(folder: str, filename: str) -> np.ndarray:
     return np.load(os.path.join(folder, filename), allow_pickle=True)
+
+def get_ram_usage_in_gb(frames: int, column_size: int, nreps: int, row_size: int) -> int:
+    '''
+    Calculates the RAM usage in GB for a 4D array of the given dimensions.
+    Args:
+        frames: int
+        column_size: int
+        nreps: int
+        row_size: int
+    Returns:
+        int
+    '''
+    return int(frames * column_size * nreps * row_size * 8 / 1024**3)

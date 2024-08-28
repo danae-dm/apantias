@@ -60,6 +60,8 @@ load and should be only loaded when neccesary.
 
 TODO:
 Prio:
+- add additional info to .npz file output
+- optimize bad slope algorithm
 - bad slopes should be ignored in the fitting in the offnoi step
 - add infos to plots
 - check documentation of functions
