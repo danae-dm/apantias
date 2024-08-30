@@ -251,7 +251,7 @@ def get_bad_slopes(data: np.ndarray, thres_bad_slopes: int,
         _logger.error('Input data is not a 4D array.')
         raise ValueError('Input data is not a 4D array.')
     _logger.info('Calculating bad slopes')
-    slopes = np.apply_along_axis(fitting.linear_fit, axis = 2, arr = data)[:, :, 0, :]
+    slopes = parallel_funcs.apply_slope_fit_along_frames(data)
     _logger.debug(f'Shape of slopes: {slopes.shape}')
     fit = fitting.fit_gauss_to_hist(slopes.flatten())
     _logger.debug(f'Fit: {fit}')
@@ -337,22 +337,23 @@ def calc_event_map(avg_over_nreps: np.ndarray, noise_fitted: np.ndarray,
     _logger.info('Finding events')
     threshold_map = noise_fitted * thres_event
     events = avg_over_nreps > threshold_map[np.newaxis,:,:]
-    signals = avg_over_nreps[events]
-    indices = np.transpose(np.where(events))
-    _logger.info(f'{signals.shape[0]} events found')
-    event_array = np.concatenate(
-        (indices, signals[:,np.newaxis]),
-          axis = 1
-        )
+    signals = np.full(avg_over_nreps.shape, np.nan)
+    signals[events] = avg_over_nreps[events]
+    mask = ~np.isnan(signals)
+    indices = np.argwhere(mask)
+    values = signals[mask]
+    _logger.info(f'{indices.shape[0]} events found')
     event_map = np.zeros((64,64), dtype = object)
-    event_map.fill([])
-    for entry in event_array:
+    for i in range(event_map.shape[0]):
+        for j in range(event_map.shape[1]):
+            event_map[i, j] = {'frame': [], 'signal': []}
+    for index, entry in enumerate(indices):
+        frame = int(entry[0])
         row = int(entry[1])
         column = int(entry[2])
-        signal = entry[3]
-        event_map[row][column] = np.append(
-            event_map[row][column], signal
-            )
+        signal = values[index]
+        event_map[row][column]['frame'].append(frame)
+        event_map[row][column]['signal'].append(signal)
     return event_map
 
 def get_sum_of_event_signals(event_map: np.ndarray, 
@@ -370,7 +371,7 @@ def get_sum_of_event_signals(event_map: np.ndarray,
     sum_of_events = np.zeros((row_size,column_size))
     for row in range(row_size):
         for column in range(column_size):
-            sum_of_events[row][column] = sum(event_map[row][column])
+            sum_of_events[row][column] = sum(event_map[row][column]['signal'])
     return sum_of_events
 
 def get_sum_of_event_counts(event_map: np.ndarray, 
@@ -387,7 +388,7 @@ def get_sum_of_event_counts(event_map: np.ndarray,
     sum_of_events = np.zeros((row_size,column_size))
     for row in range(row_size):
         for column in range(column_size):
-            sum_of_events[row][column] = len(event_map[row][column])
+            sum_of_events[row][column] = len(event_map[row][column]['signal'])
     return sum_of_events
 
 def get_gain_fit(event_map: np.ndarray, row_size: int, column_size: int, 
@@ -435,7 +436,7 @@ def get_gain_fit(event_map: np.ndarray, row_size: int, column_size: int,
     count_too_few = 0
     for i in range(event_map.shape[0]):
         for j in range(event_map.shape[1]):
-            signals = event_map[i,j]
+            signals = event_map[i,j]['signal']
             if len(signals) >= min_signals:
                 params = fit_hist(signals)
                 mean[i,j] = params[0]

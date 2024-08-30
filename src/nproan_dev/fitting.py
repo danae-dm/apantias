@@ -3,6 +3,7 @@ import gc
 from scipy.optimize import curve_fit
 import numpy as np
 from iminuit import cost, Minuit
+from numba import njit, prange
 
 from . import logger
 
@@ -111,7 +112,20 @@ def two_gaussians(x: float, a1: float, mu1: float, sigma1: float,
     return (a1 * np.exp(-(x - mu1)**2 / (2 * sigma1**2) +
             a2 * np.exp(-(x - mu2)**2 / (2 * sigma2**2))))
 
+
+@njit(parallel=False)
 def linear_fit(data: np.ndarray) -> np.ndarray:
     x = np.arange(data.size)
-    k, d = np.polyfit(x, data, 1)
+    n = data.size
+    
+    # Calculate the sums needed for the linear fit
+    sum_x = np.sum(x)
+    sum_y = np.sum(data)
+    sum_xx = np.sum(x * x)
+    sum_xy = np.sum(x * data)
+    
+    # Calculate the slope (k) and intercept (d)
+    k = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x)
+    d = (sum_y - k * sum_x) / n
+    
     return np.array([k, d])

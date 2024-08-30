@@ -2,6 +2,7 @@ import numpy as np
 from numba import njit, prange
 
 from . import logger
+from . import fitting
 
 _logger = logger.Logger(__name__, 'info').get_logger()
 
@@ -12,6 +13,30 @@ Test if its good to always use parallel functions.
 Write them only for keepdims=false and use np.newaxis if neccesary.
 move to analysis funcs when they work.
 '''
+
+@njit(parallel=True)
+def apply_slope_fit_along_frames(data):
+    '''
+    The equivalent to np.apply_along_axis(func, axis=2, data).
+    Args:
+        data: 4D np.array
+    Returns:
+        3D np.array
+    '''
+    if data.ndim != 4:
+        _logger.error('Input data is not a 4D array.')
+        raise ValueError('Input data is not a 4D array.')
+    axis_0_size = data.shape[0]
+    axis_1_size = data.shape[1]
+    axis_2_size = data.shape[2]
+    axis_3_size = data.shape[3]
+    output = np.empty((axis_0_size,axis_1_size,axis_3_size))
+    for frame in prange(axis_0_size):
+        for row in range(axis_1_size):
+            for col in range(axis_3_size):
+                slope = fitting.linear_fit(data[frame,row,:,col])
+                output[frame][row][col] = slope[0]
+    return output
 
 def nanmedian(data: np.ndarray, 
                        axis: int, 
