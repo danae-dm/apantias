@@ -42,7 +42,8 @@ def get_data(bin_file : str, column_size: int, row_size: int, key_ints: int,
             #check if file is at its end
             if inp_data.size == 0:
                 _logger.warning(f'Loaded {frames_here} of {nframes} requested frames, end of file reached.')
-                return polarity*output[:frames_here].copy()
+                #return polarity*output[:frames_here].copy()
+                return polarity*output[:frames_here]
             _logger.info(f'Reading chunk {count+1} from bin file, {frames_here} frames loaded')
             #reshape the array into rows -> (#ofRows,67)
             inp_data = inp_data.reshape(-1, raw_row_size)
@@ -81,7 +82,8 @@ def get_data(bin_file : str, column_size: int, row_size: int, key_ints: int,
                 output[frames_here:] = inp_data[:nframes-frames_here]
                 frames_here += frames_inc
                 _logger.info(f'\nLoaded {nframes} frames')
-                return polarity*output.copy()
+                #return polarity*output.copy()
+                return polarity*output
             output[frames_here:frames_here+frames_inc] = \
             inp_data.reshape(-1, column_size, 
                               nreps, row_size).astype(float)
@@ -138,6 +140,41 @@ def exclude_nreps_eval(data: np.ndarray, nreps_eval: list) -> np.ndarray:
     mask = mask.astype(bool)
     _logger.info(f'Excluded {np.sum(~mask)} nreps')
     return data[:,:,mask,:]
+
+def exclude_nreps_eval_offset_raw(data: np.ndarray, nreps_eval: list) -> np.ndarray:
+    '''
+    Deletes nreps from offset_raw that are not in the list nreps_eval.
+    nreps_eval is a list of 3 integers: [lower, upper, step]
+    Args:
+        data: np.array (nframes, column_size, nreps, row_size)
+        nreps_eval: list of 3 ints
+    Returns:
+        np.array View(!) (nframes, column_size, nreps-X, row_size)
+    '''
+    #TODO: optimize this
+    if np.ndim(data) != 3:
+        _logger.error('Data has wrong dimensions')
+        return None
+    if len(nreps_eval) != 3:
+        _logger.error('nreps_eval must be a list of 3 integers')
+        raise ValueError('nreps_eval must be a list of 3 integers')
+    lower = nreps_eval[0]
+    upper = nreps_eval[1]
+    step = nreps_eval[2]
+    if upper == -1:
+        upper = data.shape[1]
+    if lower < 0:
+        raise ValueError('Lower limit must be greater or equal 0')
+    if upper > data.shape[1]:
+        raise ValueError('Upper limit is greater than the number of nreps')
+    if upper < lower:
+        raise ValueError('Upper limit must be greater than lower limit')
+    _logger.info('Excluding nreps')
+    mask = np.zeros(data.shape[1])
+    mask[lower:upper:step] = 1
+    mask = mask.astype(bool)
+    _logger.info(f'Excluded {np.sum(~mask)} nreps')
+    return data[:,mask,:]
 
 def exclude_mips_frames(data: np.ndarray, thres_mips: int) -> np.ndarray:
     '''

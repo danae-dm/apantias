@@ -195,7 +195,16 @@ class Filter():
         gc.collect()
         if self.nreps_eval:
             data = an.exclude_nreps_eval(data, self.nreps_eval)
+            #number of nreps in offnoi can be different from filter
+            #BUT: #offnoi must be bigger than #filter!
+            self._logger.debug(f'Shape of offset_raw: {self.offset_raw.shape}')
+            if self.offset_raw.shape[1] < data.shape[2]:
+                self.logger.error('Number of nreps in offnoi is smaller than in filter. Exiting.')
+                raise ValueError('Number of nreps in offnoi is smaller than in filter.')
+            elif self.offset_raw.shape[1] != data.shape[2]:
+                self.offset_raw = an.exclude_nreps_eval_offset_raw(self.offset_raw, self.nreps_eval)
             self._logger.debug(f'Shape of data: {data.shape}')
+            self._logger.debug(f'Shape of offset_raw: {self.offset_raw.shape}')
         #omit bad pixels and mips frames
         if self.bad_pixels:
             data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
