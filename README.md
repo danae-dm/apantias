@@ -61,13 +61,10 @@ load and should be only loaded when neccesary.
 TODO:
 Prio:
 - add additional info to .npz file output
-- optimize bad slope algorithm
 - bad slopes should be ignored in the fitting in the offnoi step
 - add infos to plots
 - check documentation of functions
-- make fitting better: implement a second fitting algorithm and add an option for it
 - wiki schreiben
-- dinge parallelisieren
 - add type hints and write nice documentation (almost done)
 - consider combining analysis and analysis_funcs
 
