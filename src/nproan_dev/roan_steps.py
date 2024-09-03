@@ -91,9 +91,32 @@ class PreprocessData():
         for step in range(steps_needed):
             self._logger.info(f'Performing step {step+1} of {steps_needed} total Steps')
             data, offset = an.get_data_2(self.offnoi_bin_file, self.column_size, self.row_size, self.key_ints, self.offnoi_nreps, frames_per_step, offset)
-            data = an.exclude_mips_and_bad_frames(data, self.offnoi_thres_mips, self.offnoi_thres_bad_frames)
-            print(data.shape)
-            del data
+            
+            #exclude nreps_eval from data
+            if self.nreps_eval:
+                data = an.exclude_nreps_eval(data, self.nreps_eval)
+                self._logger.debug(f'Shape of data: {data.shape}')
+            #set values of all frames and nreps of bad pixels to nan
+            if self.bad_pixels:
+                data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
+            #delete bad frames from data
+            if self.thres_bad_frames != 0 or self.thres_mips != 0:
+                data = an.exclude_mips_and_bad_frames(data, self.offnoi_thres_mips, 
+                                                      self.offnoi_thres_bad_frames)
+                self._logger.debug(f'Shape of data: {data.shape}')
+
+            '''
+            TODO here:
+            - calculate offset_raw on the raw data and save/update it
+            - calculate data - offset_raw
+            - correct common mode
+            - calculate rndr signals and save/update it
+            - calculate bad slopes and save/update them
+
+            - do the same preprocessing for the filter data
+
+            - rewrite offnoi and filter classes to use the new data
+            '''
 
 
 
