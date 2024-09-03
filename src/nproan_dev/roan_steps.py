@@ -91,7 +91,9 @@ class PreprocessData():
         for step in range(steps_needed):
             self._logger.info(f'Performing step {step+1} of {steps_needed} total Steps')
             data, offset = an.get_data_2(self.offnoi_bin_file, self.column_size, self.row_size, self.key_ints, self.offnoi_nreps, frames_per_step, offset)
-            print(offset)
+            data = an.exclude_mips_and_bad_frames(data, self.offnoi_thres_mips, self.offnoi_thres_bad_frames)
+            print(data.shape)
+            del data
 
 
 

@@ -257,6 +257,39 @@ def exclude_nreps_eval_offset_raw(data: np.ndarray, nreps_eval: list) -> np.ndar
     _logger.info(f'Excluded {np.sum(~mask)} nreps')
     return data[:,mask,:]
 
+def exclude_mips_and_bad_frames(data: np.ndarray, thres_mips: int, thres_bad_frames: int) -> np.ndarray:
+    '''
+    Combines exclude_mips_frames and exclude_bad_frames to exclude frames
+    that are above or below the median by a certain threshold.
+    Args:
+        data: np.array (nframes, column_size, nreps, row_size)
+        thres_mips: absolute threshold in adu
+        thres_bad_frames: used with the fitted sigma do exclude frames
+    Returns:
+        np.array (nframes-X, column_size, nreps, row_size)
+    '''
+    if np.ndim(data) != 4:
+        _logger.error('Input data is not a 4D array.')
+        raise ValueError('Input data is not a 4D array.')
+    _logger.info(f'Excluding bad frames due to MIPS, threshold: {thres_mips}')
+    _logger.info(f'Excluding bad frames, threshold: {thres_bad_frames}')
+    median = parallel_funcs.nanmedian(data, axis=3)
+    median = parallel_funcs.nanmedian(median, axis=2)
+    median = parallel_funcs.nanmedian(median, axis=1)
+    #calculate mips mask
+    mips_mask = (data > median[:,np.newaxis,np.newaxis,np.newaxis] + thres_mips) | (data < median[:,np.newaxis,np.newaxis,np.newaxis] - thres_mips)
+    mips_mask = np.any(mips_mask, axis = (1,2,3))
+    _logger.info(f'Excluded {np.sum(mips_mask)} frames')
+    #calculate bad frames mask
+    fit = fitting.fit_gauss_to_hist(median)
+    lower_bound = fit[1] - thres_bad_frames*np.abs(fit[2])
+    upper_bound = fit[1] + thres_bad_frames*np.abs(fit[2])
+    bad_frames_mask = (median < lower_bound) | (median > upper_bound)
+    _logger.info(f'Excluded {np.sum(bad_frames_mask)} frames')
+    mask = mips_mask | bad_frames_mask
+    return data[~mask]
+
+
 def exclude_mips_frames(data: np.ndarray, thres_mips: int) -> np.ndarray:
     '''
     Calculates the median of each frame and deletes frames that are
