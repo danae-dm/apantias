@@ -93,14 +93,14 @@ class PreprocessData():
             data, offset = an.get_data_2(self.offnoi_bin_file, self.column_size, self.row_size, self.key_ints, self.offnoi_nreps, frames_per_step, offset)
             
             #exclude nreps_eval from data
-            if self.nreps_eval:
-                data = an.exclude_nreps_eval(data, self.nreps_eval)
+            if self.offnoi_nreps_eval:
+                data = an.exclude_nreps_eval(data, self.offnoi_nreps_eval)
                 self._logger.debug(f'Shape of data: {data.shape}')
             #set values of all frames and nreps of bad pixels to nan
             if self.bad_pixels:
                 data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
             #delete bad frames from data
-            if self.thres_bad_frames != 0 or self.thres_mips != 0:
+            if self.offnoi_thres_bad_frames != 0 or self.offnoi_thres_mips != 0:
                 data = an.exclude_mips_and_bad_frames(data, self.offnoi_thres_mips, 
                                                       self.offnoi_thres_bad_frames)
                 self._logger.debug(f'Shape of data: {data.shape}')
