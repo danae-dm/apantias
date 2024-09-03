@@ -141,4 +141,4 @@ def get_ram_usage_in_gb(frames: int, column_size: int, nreps: int, row_size: int
     Returns:
         int
     '''
-    return int(frames * column_size * nreps * row_size * 8 / 1024**3)
+    return int(frames * column_size * nreps * row_size * 8 / 1024**3)+1

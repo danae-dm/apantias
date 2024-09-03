@@ -1,5 +1,6 @@
 import gc
 import os
+import psutil
 from datetime import datetime
 
 import numpy as np
@@ -10,23 +11,110 @@ from . import analysis as an
 from . import params as pm
 from . import fitting as fit
 
-class OffNoi():
-    _logger = logger.Logger('nproan-offnoi', 'debug').get_logger()
+class PreprocessData():
+    _logger = logger.Logger('nproan-preprocess', 'debug').get_logger()
 
     def __init__(self, prm_file: str = None) -> None:
         self.load(prm_file)
-        self._logger.info('OffNoi object created')
+        self._logger.info('PreprocessData object created')
 
     def load(self, prm_file: str) -> None:
         self.params = pm.Params(prm_file)
         self.params_dict = self.params.get_dict()
-        
+
         #common parameters
         self.results_dir = self.params_dict['common_results_dir']
         self.column_size = self.params_dict['common_column_size']
         self.row_size = self.params_dict['common_row_size']
         self.key_ints = self.params_dict['common_key_ints']
         self.bad_pixels = self.params_dict['common_bad_pixels']
+
+        #offnoi parameters
+        self.offnoi_bin_file = self.params_dict['offnoi_bin_file']
+        self.offnoi_nreps = self.params_dict['offnoi_nreps']
+        self.offnoi_nframes = self.params_dict['offnoi_nframes']
+        self.offnoi_nreps_eval = self.params_dict['offnoi_nreps_eval']
+        self.offnoi_comm_mode = self.params_dict['offnoi_comm_mode']
+        self.offnoi_thres_mips = self.params_dict['offnoi_thres_mips']
+        self.offnoi_thres_bad_frames = self.params_dict['offnoi_thres_bad_frames']
+        self.offnoi_thres_bad_slopes = self.params_dict['offnoi_thres_bad_slopes']
+
+        #filter parameters
+        self.filter_bin_file = self.params_dict['filter_bin_file']
+        self.filter_nreps = self.params_dict['filter_nreps']
+        self.filter_nframes = self.params_dict['filter_nframes']
+        self.filter_nreps_eval = self.params_dict['filter_nreps_eval']
+        self.filter_comm_mode = self.params_dict['filter_comm_mode']
+        self.filter_thres_mips = self.params_dict['filter_thres_mips']
+        self.filter_thres_event = self.params_dict['filter_thres_event']
+        self.filter_use_fitted_offset = self.params_dict['filter_use_fitted_offset']
+        self.filter_thres_bad_frames = self.params_dict['filter_thres_bad_frames']
+        self.filter_thres_bad_slopes = self.params_dict['filter_thres_bad_slopes']
+
+        #directories
+        timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+        filename = os.path.basename(self.filter_bin_file)[:-4]
+        self.common_dir = os.path.join(
+            self.results_dir, timestamp + '_' + filename)
+        self.step_dir = os.path.join(self.common_dir, 'preprocess')
+        self._logger.info(f'Parameters loaded:')
+        self.params.print_contents()
+
+    def calculate(self) -> None:
+        #create the directory for the data
+        os.makedirs(self.common_dir, exist_ok=True)
+        self._logger.info(f'Created common directory for data: {self.common_dir}')
+        #now, create the working directory for the preproc step
+        os.makedirs(self.step_dir, exist_ok=True)
+
+        #PREPROCESS OFFNOI DATA
+        #check how big the raw data will be
+        self._logger.info('Start preprocessing offnoi data')
+        #the estimation factor is estimated, adjust this if needed
+        estimated_ram_usage = af.get_ram_usage_in_gb(
+            self.offnoi_nframes, self.column_size, self.offnoi_nreps, self.row_size)*2.3
+        # Get the available memory in bytes
+        virtual_memory = psutil.virtual_memory()
+        available_memory_in_bytes = virtual_memory.available
+        available_memory_in_gb = available_memory_in_bytes / (1024 ** 3)
+
+        self._logger.info(f'RAM available: {available_memory_in_gb:.1f} GB')
+        self._logger.info(f'Estimated RAM usage: {estimated_ram_usage:.1f} GB')
+        steps_needed = int(estimated_ram_usage / available_memory_in_gb) + 1
+        self._logger.info(f'Steps needed: {steps_needed}')
+
+        #is set to 8, this is the offset (header) in the .bin file
+        offset = 8
+
+        #calculate how much frames can be loaded at once:
+        frames_per_step = int(self.offnoi_nframes / steps_needed)
+        for step in range(steps_needed):
+            self._logger.info(f'Performing step {step+1} of {steps_needed} total Steps')
+            data, offset = an.get_data_2(self.offnoi_bin_file, self.column_size, self.row_size, self.key_ints, self.offnoi_nreps, frames_per_step, offset)
+            print(offset)
+
+
+
+class OffNoi():
+    _logger = logger.Logger('nproan-offnoi', 'debug').get_logger()
+
+    def __init__(self, prm_file: str = None, preproc_dir: str = None) -> None:
+        if prm_file is None or preproc_dir is None:
+            raise ValueError('No parameter file or preprocess directory given.')
+        self.load(prm_file, preproc_dir)
+        self._logger.info('OffNoi object created')
+
+    def load(self, prm_file: str, preproc_dir: str) -> None:
+        self.params = pm.Params(prm_file)
+        self.params_dict = self.params.get_dict()
+
+        #common parameters
+        self.results_dir = self.params_dict['common_results_dir']
+        self.column_size = self.params_dict['common_column_size']
+        self.row_size = self.params_dict['common_row_size']
+        self.key_ints = self.params_dict['common_key_ints']
+        self.bad_pixels = self.params_dict['common_bad_pixels']
+
         #offnoi parameters
         self.bin_file = self.params_dict['offnoi_bin_file']
         self.nreps = self.params_dict['offnoi_nreps']
@@ -36,6 +124,11 @@ class OffNoi():
         self.thres_mips = self.params_dict['offnoi_thres_mips']
         self.thres_bad_frames = self.params_dict['offnoi_thres_bad_frames']
         self.thres_bad_slopes = self.params_dict['offnoi_thres_bad_slopes']
+
+        #directories
+        #set self.common_dir to the parent directory of offnoi_dir
+        self.common_dir = os.path.dirname(preproc_dir)
+        self.step_dir = None
 
         #directories, they will be created in calculate()
         timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -48,15 +141,7 @@ class OffNoi():
         self._logger.info(f'Parameters loaded:')
         self.params.print_contents()
 
-        ram_needed = af.get_ram_usage_in_gb(self.nframes, self.column_size, self.nreps, self.row_size)*2 +5
-        self._logger.info(f'Estimated RAM needed for this step: {ram_needed} GB')
-        if ram_needed > 160:
-            self._logger.error('Estimated RAM needed is more than 160 GB. Exiting.')
-
     def calculate(self) -> None:   
-        #create the directory for the data
-        os.makedirs(self.common_dir, exist_ok=True)
-        self._logger.info(f'Created common directory for data: {self.common_dir}')
         #now, create the working directory for the offnoi step
         os.makedirs(self.step_dir, exist_ok=True)
         self._logger.info(f'Created working directory for offnoi step: {self.step_dir}')
