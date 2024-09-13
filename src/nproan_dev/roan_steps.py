@@ -14,7 +14,8 @@ from . import fitting as fit
 class PreprocessData():
     _logger = logger.Logger('nproan-preprocess', 'debug').get_logger()
 
-    def __init__(self, prm_file: str = None) -> None:
+    def __init__(self, prm_file: str, ram_available: int) -> None:
+        self.ram_available = ram_available
         self.load(prm_file)
         self._logger.info('PreprocessData object created')
 
@@ -57,6 +58,7 @@ class PreprocessData():
         self.total_frames_processed = 0
         self.frames_per_step = 0
         self.final_frames_per_step = 0
+
 
         #directories
         timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -108,12 +110,10 @@ class PreprocessData():
         available_memory_in_bytes = virtual_memory.available
         available_memory_in_gb = available_memory_in_bytes / (1024 ** 3)
         """
-        #just assume we have 64 GB of RAM
-        available_memory_in_gb = 64
 
-        self._logger.info(f'RAM available: {available_memory_in_gb:.1f} GB')
+        self._logger.info(f'RAM available: {self.ram_available:.1f} GB')
         self._logger.info(f'Estimated RAM usage: {estimated_ram_usage:.1f} GB')
-        steps_needed = int(estimated_ram_usage / available_memory_in_gb) + 1
+        steps_needed = int(estimated_ram_usage / self.ram_available) + 1
         self._logger.info(f'Steps needed: {steps_needed}')
 
         #is set to 8, this is the offset (header) in the .bin file
@@ -183,13 +183,13 @@ class PreprocessData():
         #just assume we have 64 GB of RAM
         available_memory_in_gb = 64
 
-        self._logger.info(f'RAM available: {available_memory_in_gb:.1f} GB')
+        self._logger.info(f'RAM available: {self.ram_available:.1f} GB')
         self._logger.info(f'Estimated RAM usage: {estimated_ram_usage:.1f} GB')
-        steps_needed = int(estimated_ram_usage / available_memory_in_gb) + 1
+        steps_needed = int(estimated_ram_usage / self.ram_available) + 1
         self._logger.info(f'Steps needed: {steps_needed}')
 
         #calculate how much frames can be loaded at once, reset other counters
-        self.frames_per_step = int(self.offnoi_nframes / steps_needed)
+        self.frames_per_step = int(self.filter_nframes / steps_needed)
         self.current_offset = 8
         self.total_frames_processed = 0
         self.final_frames_per_step = 0
@@ -206,7 +206,7 @@ class PreprocessData():
             
             #exclude nreps_eval from data
             if self.filter_nreps_eval:
-                data = an.exclude_nreps_eval(data, self.offnoi_nreps_eval)
+                data = an.exclude_nreps_eval(data, self.filter_nreps_eval)
                 self._logger.debug(f'Shape of data: {data.shape}')
             #set values of all frames and nreps of bad pixels to nan
             if self.bad_pixels:
@@ -235,7 +235,7 @@ class PreprocessData():
             #calculate bad slopes and update file
             if self.filter_thres_bad_slopes != 0:
                 bad_slopes_0, bad_slopes_1, bad_slopes_2 = an.get_bad_slopes(data, 
-                                                                             self.offnoi_thres_bad_slopes)
+                                                                             self.filter_thres_bad_slopes)
                 self.update_npy_file('filter_bad_slopes_pos.npy', bad_slopes_0)
                 self.update_npy_file('filter_bad_slopes_data.npy', bad_slopes_1)
                 self.update_npy_file('filter_bad_slopes_value.npy', bad_slopes_2)
@@ -294,59 +294,11 @@ class OffNoi():
         self._logger.info(f'Created working directory for offnoi step: {self.step_dir}')
         # and save the parameter file there
         self.params.save(os.path.join(self.step_dir, 'parameters.json'))
-
-        data = an.get_data(self.bin_file, 
-                           self.column_size, 
-                           self.row_size, 
-                           self.key_ints, 
-                           self.nreps, 
-                           self.nframes)
-        gc.collect()
-        #delete nreps_eval from data
-        if self.nreps_eval:
-            data = an.exclude_nreps_eval(data, self.nreps_eval)
-            self._logger.debug(f'Shape of data: {data.shape}')
-        #set values of all frames and nreps of bad pixels to nan
-        if self.bad_pixels:
-            data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
-        #deletes bad frames from data
-        if self.thres_bad_frames != 0:
-            data = an.exclude_bad_frames(data, self.thres_bad_frames, self.step_dir)
-            self._logger.debug(f'Shape of data: {data.shape}')
-        #deletes frames with mips above threshold from data
-        if self.thres_mips != 0:
-            data = an.exclude_mips_frames(data, self.thres_mips)
-            self._logger.debug(f'Shape of data: {data.shape}')
-        #calculate offset_raw on the raw data and save it
-        avg_over_frames = af.get_avg_over_frames(data)
-        np.save(os.path.join(self.step_dir, 'offset_raw.npy'),
-                avg_over_frames)
-        #calculate offset and save it
-        avg_over_frames_and_nreps = af.get_avg_over_frames_and_nreps(data)
-        np.save(os.path.join(self.step_dir, 'offset.npy'),
-                avg_over_frames_and_nreps)
-        #offset the data and correct for common mode if necessary
-        data -= avg_over_frames[np.newaxis,:,:,:]
-        del avg_over_frames
-        gc.collect()
-        if self.comm_mode is True:
-            an.correct_common_mode(data)
-        #calculate rndr signals and save it
-        avg_over_nreps = af.get_avg_over_nreps(data)
-        np.save(os.path.join(self.step_dir, 'rndr_signals.npy'),
-                avg_over_nreps)
+        #get data from preprocess step
+        avg_over_nreps = np.load(os.path.join(self.common_dir, 'preprocess', 'offnoi_rndr_signals.npy'))
         #calculate fitted offset and noise and save it (including fit errors)
-        fit_unbinned = fit.get_unbinned_fit_gauss(avg_over_nreps)
         fit_curve_fit = fit.get_fit_gauss(avg_over_nreps)
-        np.save(os.path.join(self.step_dir, 'offnoi_fit_unbinned.npy'), fit_unbinned)
         np.save(os.path.join(self.step_dir, 'offnoi_fit.npy'), fit_curve_fit)
-        if self.thres_bad_slopes != 0:
-            bad_slopes_0, bad_slopes_1, bad_slopes_2 = an.get_bad_slopes(data, 
-                                                                         self.thres_bad_slopes, 
-                                                                         self.step_dir)
-            np.save(os.path.join(self.step_dir, 'bad_slopes_pos.npy'), bad_slopes_0)
-            np.save(os.path.join(self.step_dir, 'bad_slopes_data.npy'), bad_slopes_1)
-            np.save(os.path.join(self.step_dir, 'bad_slopes_value.npy'), bad_slopes_2)
 
 class Filter():
 
@@ -429,49 +381,7 @@ class Filter():
         self._logger.info(f'Created directory for filter step: {self.step_dir}')
         # and save the parameter file there
         self.params.save(os.path.join(self.step_dir, 'parameters.json'))
-
-        data = an.get_data(self.bin_file, 
-                           self.column_size, 
-                           self.row_size, 
-                           self.key_ints, 
-                           self.nreps, 
-                           self.nframes)
-        gc.collect()
-        if self.nreps_eval:
-            data = an.exclude_nreps_eval(data, self.nreps_eval)
-            #number of nreps in offnoi can be different from filter
-            #BUT: #offnoi must be bigger than #filter!
-            self._logger.debug(f'Shape of offset_raw: {self.offset_raw.shape}')
-            if self.offset_raw.shape[1] < data.shape[2]:
-                self.logger.error('Number of nreps in offnoi is smaller than in filter. Exiting.')
-                raise ValueError('Number of nreps in offnoi is smaller than in filter.')
-            elif self.offset_raw.shape[1] != data.shape[2]:
-                self.offset_raw = an.exclude_nreps_eval_offset_raw(self.offset_raw, 
-                                                                   self.nreps_eval)
-            self._logger.debug(f'Shape of data: {data.shape}')
-            self._logger.debug(f'Shape of offset_raw: {self.offset_raw.shape}')
-        #omit bad pixels and mips frames
-        if self.bad_pixels:
-            data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
-        if self.thres_bad_frames != 0:
-            data = an.exclude_bad_frames(data, self.thres_bad_frames, self.step_dir)
-            self._logger.debug(f'Shape of data: {data.shape}')
-        if self.thres_mips != 0:
-            data = an.exclude_mips_frames(data, self.thres_mips)
-            self._logger.debug(f'Shape of data: {data.shape}')
-        #offset the data and correct for common mode if necessary
-        data = data - self.offset_raw[np.newaxis,:,:,:]
-        self.offset_raw = None
-        gc.collect()
-        if self.comm_mode:
-            an.correct_common_mode(data)
-        if self.use_fitted_offset:
-            #take care here, offset fitted can contain np.nan
-            data -= np.nan_to_num(self.offset_fitted[np.newaxis,:,np.newaxis,:])
-        avg_over_nreps = af.get_avg_over_nreps(data)
-        np.save(os.path.join(self.step_dir, 'rndr_signals.npy'),
-                avg_over_nreps)
-        #calculate event map and save it
+        avg_over_nreps = np.load(os.path.join(self.common_dir, 'preprocess', 'filter_rndr_signals.npy'))
         event_map = an.calc_event_map(avg_over_nreps, self.noise_fitted, self.thres_event)
         np.save(os.path.join(self.step_dir, 'event_map.npy'),
                 event_map)
@@ -479,13 +389,6 @@ class Filter():
                 an.get_sum_of_event_signals(event_map, self.row_size, self.column_size))
         np.save(os.path.join(self.step_dir, 'sum_of_event_counts.npy'),
                 an.get_sum_of_event_counts(event_map, self.row_size, self.column_size))
-        if self.thres_bad_slopes != 0:
-            bad_slopes_0, bad_slopes_1, bad_slopes_2 = an.get_bad_slopes(data, 
-                                                                         self.thres_bad_slopes, 
-                                                                         self.step_dir)
-            np.save(os.path.join(self.step_dir, 'bad_slopes_pos.npy'), bad_slopes_0)
-            np.save(os.path.join(self.step_dir, 'bad_slopes_data.npy'), bad_slopes_1)
-            np.save(os.path.join(self.step_dir, 'bad_slopes_value.npy'), bad_slopes_2)
 
 class Gain():
 
