@@ -60,8 +60,18 @@ load and should be only loaded when neccesary.
 
 TODO:
 Prio:
-- check file consistency with new mips/bad frames
-- something is wrong with the slopes in the new version
+- schaun ob die neuen mips/bad frames so sinn machen. ich hab beobachtet, dass die neue Verion
+    (dies in einem macht) weniger frames rausschmeisst
+- Die bad Slopes in der neuen Version anschaun, irgendwas macht die anders.
+- Überlegen ob man den OffNoi Step nicht komplett weglässt. Eigentlich kann man alles im 
+    preprocessing machen
+- Fitting auch ins Preprocessing, nochmal genau durchüberlegen wie das mit dem Filter Step 
+    funktionieren soll
+- Filter/Offnoi umbenennen?
+- Bad Slopes Pixelweise berechnen: Ein Histogramm mit dem Slope wert pro Pixel fitten und mit dem
+    als Kriterium die Bad Slopes berechnen
+- Bad Slopes beim fitten ignorieren
+
 - delete parameter "use_fitted_offset" since it will be true everytime
 - add additional info to .npz file output
 - bad slopes should be ignored in the fitting in the offnoi step
