@@ -60,7 +60,8 @@ load and should be only loaded when neccesary.
 
 TODO:
 Prio:
-- check file consistency in 20240913-105930_P12_WXX_H12_240816_04 (compare to Test_old)
+- check file consistency with new mips/bad frames
+- something is wrong with the slopes in the new version
 - delete parameter "use_fitted_offset" since it will be true everytime
 - add additional info to .npz file output
 - bad slopes should be ignored in the fitting in the offnoi step
