@@ -346,13 +346,6 @@ class Filter():
             self._logger.error('Parameters in offnoi directory do not match')
             return
         try:
-            #offset_raw is quite big. deleted after use
-            self.offset_raw = af.get_array_from_file(
-                offnoi_dir, 'offset_raw.npy')
-            self._logger.debug(self.offset_raw.shape)
-            if self.offset_raw is None:
-                self._logger.error('Error loading offset_raw data\n')
-                return
             self.offset_fitted = af.get_array_from_file(
                 offnoi_dir, 'offnoi_fit.npy'
             )[1]
@@ -382,6 +375,8 @@ class Filter():
         # and save the parameter file there
         self.params.save(os.path.join(self.step_dir, 'parameters.json'))
         avg_over_nreps = np.load(os.path.join(self.common_dir, 'preprocess', 'filter_rndr_signals.npy'))
+        #subtract the fitted offset from the data
+        avg_over_nreps -= self.offset_fitted
         event_map = an.calc_event_map(avg_over_nreps, self.noise_fitted, self.thres_event)
         np.save(os.path.join(self.step_dir, 'event_map.npy'),
                 event_map)
