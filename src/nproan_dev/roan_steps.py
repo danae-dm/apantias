@@ -56,25 +56,36 @@ class PreprocessData():
         self.current_offset = 8
         self.total_frames_processed = 0
         self.frames_per_step = 0
+        self.final_frames_per_step = 0
 
         #directories
         timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
         #TODO: think of a better file name
-        filename = os.path.basename(self.filter[0])[:-4]
+        filename = os.path.basename(self.filter_bin_file[0])[:-4]
         self.common_dir = os.path.join(
             self.results_dir, timestamp + '_' + filename)
         self.step_dir = os.path.join(self.common_dir, 'preprocess')
         self._logger.info(f'Parameters loaded:')
         self.params.print_contents()
 
-    def update_offset_raw(self, old_data: np.ndarray, new_data: np.ndarray) -> np.ndarray:
-        '''
-        #track processed frames in Class variables!
-    def update_offset_raw(total_frames_processed, old_data, new_frames_processed, new_data):
-        #TODO: check file consistency
-        return (old_data * total_frames_processed + new_data * new_frames_processed)/(total_frames_processed + new_frames_processed)
-        '''
-        return 
+    def update_offset_raw(self, file_name: str, new_data: np.ndarray) -> None:
+        file_path = os.path.join(self.step_dir, file_name)
+        if os.path.exists(file_path):
+            old_data = np.load(file_path)
+            output = (old_data * self.total_frames_processed 
+                    + new_data * self.final_frames_per_step) / (self.total_frames_processed + self.final_frames_per_step)
+        else:
+            output = new_data
+        np.save(file_path, output)
+
+    def update_npy_file(self, file_name: str, new_data: np.ndarray) -> None:
+        file_path = os.path.join(self.step_dir, file_name)
+        if os.path.exists(file_path):
+            old_data = np.load(file_path)
+            output = np.concatenate((old_data, new_data), axis=0)
+        else:
+            output = new_data
+        np.save(file_path, output)
 
     def calculate(self) -> None:
         #create the directory for the data
@@ -84,15 +95,21 @@ class PreprocessData():
         os.makedirs(self.step_dir, exist_ok=True)
 
         #PREPROCESS OFFNOI DATA
+
         #check how big the raw data will be
         self._logger.info('Start preprocessing offnoi data')
         #the estimation factor is estimated, adjust this if needed
         estimated_ram_usage = af.get_ram_usage_in_gb(
             self.offnoi_nframes, self.column_size, self.offnoi_nreps, self.row_size)*2.3
         # Get the available memory in bytes
+        """
+        this does not work in juyperhub
         virtual_memory = psutil.virtual_memory()
         available_memory_in_bytes = virtual_memory.available
         available_memory_in_gb = available_memory_in_bytes / (1024 ** 3)
+        """
+        #just assume we have 64 GB of RAM
+        available_memory_in_gb = 64
 
         self._logger.info(f'RAM available: {available_memory_in_gb:.1f} GB')
         self._logger.info(f'Estimated RAM usage: {estimated_ram_usage:.1f} GB')
@@ -125,19 +142,105 @@ class PreprocessData():
                                                       self.offnoi_thres_bad_frames)
                 self._logger.debug(f'Shape of data: {data.shape}')
 
-            '''
-            TODO here:
-            - calculate offset_raw on the raw data and save/update it
-            - track how much frames have been processed for offset_raw
-            - calculate data - offset_raw
-            - correct common mode
-            - calculate rndr signals and save/update it
-            - calculate bad slopes and save/update them
+            self.final_frames_per_step = data.shape[0]
+            #Calculate offset_raw on the raw data and update file
+            avg_over_frames = af.get_avg_over_frames(data)
+            self.update_offset_raw('offnoi_offset_raw.npy', avg_over_frames)
+            self.total_frames_processed += self.final_frames_per_step
+            #calculate offset and update file
+            avg_over_frames_and_nreps = af.get_avg_over_frames_and_nreps(data, avg_over_frames = avg_over_frames)
+            self.update_npy_file('offnoi_offset.npy', avg_over_frames_and_nreps)
+            #offset the data and correct for common mode if necessary
+            data -= avg_over_frames[np.newaxis,:,:,:]
+            if self.offnoi_comm_mode is True:
+                an.correct_common_mode(data)
+            #calculate rndr signals and update file
+            avg_over_nreps = af.get_avg_over_nreps(data)
+            self.update_npy_file('offnoi_rndr_signals.npy', avg_over_nreps)
+            #calculate bad slopes and update file
+            if self.offnoi_thres_bad_slopes != 0:
+                bad_slopes_0, bad_slopes_1, bad_slopes_2 = an.get_bad_slopes(data, 
+                                                                             self.offnoi_thres_bad_slopes)
+                self.update_npy_file('offnoi_bad_slopes_pos.npy', bad_slopes_0)
+                self.update_npy_file('offnoi_bad_slopes_data.npy', bad_slopes_1)
+                self.update_npy_file('offnoi_bad_slopes_value.npy', bad_slopes_2)
+            self._logger.info(f'Finished step {step+1} of {steps_needed} total Steps for offnoi data')
 
-            - do the same preprocessing for the filter data
+        #PREPROCESS FILTER DATA
+        self._logger.info('Start preprocessing filter data')
+        #check how big the raw data will be
+        #the estimation factor is estimated, adjust this if needed
+        estimated_ram_usage = af.get_ram_usage_in_gb(
+            self.filter_nframes, self.column_size, self.filter_nreps, self.row_size)*2.3
+        
+        # Get the available memory in bytes
+        '''
+        this does not work in juyperhub
+        virtual_memory = psutil.virtual_memory()
+        available_memory_in_bytes = virtual_memory.available
+        available_memory_in_gb = available_memory_in_bytes / (1024 ** 3)
+        '''
+        #just assume we have 64 GB of RAM
+        available_memory_in_gb = 64
 
-            - rewrite offnoi and filter classes to use the new data
-            '''
+        self._logger.info(f'RAM available: {available_memory_in_gb:.1f} GB')
+        self._logger.info(f'Estimated RAM usage: {estimated_ram_usage:.1f} GB')
+        steps_needed = int(estimated_ram_usage / available_memory_in_gb) + 1
+        self._logger.info(f'Steps needed: {steps_needed}')
+
+        #calculate how much frames can be loaded at once, reset other counters
+        self.frames_per_step = int(self.offnoi_nframes / steps_needed)
+        self.current_offset = 8
+        self.total_frames_processed = 0
+        self.final_frames_per_step = 0
+
+        for step in range(steps_needed):
+            self._logger.info(f'Performing step {step+1} of {steps_needed} total Steps')
+            data, self.current_offset = an.get_data_2(self.filter_bin_file, 
+                                         self.column_size, 
+                                         self.row_size, 
+                                         self.key_ints, 
+                                         self.filter_nreps, 
+                                         self.frames_per_step, 
+                                         self.current_offset)
+            
+            #exclude nreps_eval from data
+            if self.filter_nreps_eval:
+                data = an.exclude_nreps_eval(data, self.offnoi_nreps_eval)
+                self._logger.debug(f'Shape of data: {data.shape}')
+            #set values of all frames and nreps of bad pixels to nan
+            if self.bad_pixels:
+                data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
+            #delete bad frames from data
+            if self.filter_thres_bad_frames != 0 or self.filter_thres_mips != 0:
+                data = an.exclude_mips_and_bad_frames(data, self.filter_thres_mips, 
+                                                      self.filter_thres_bad_frames)
+                self._logger.debug(f'Shape of data: {data.shape}')
+
+            self.final_frames_per_step = data.shape[0]
+            #Calculate offset_raw on the raw data and update file
+            avg_over_frames = af.get_avg_over_frames(data)
+            self.update_offset_raw('filter_offset_raw.npy', avg_over_frames)
+            self.total_frames_processed += self.final_frames_per_step
+            #calculate offset and update file
+            avg_over_frames_and_nreps = af.get_avg_over_frames_and_nreps(data, avg_over_frames = avg_over_frames)
+            self.update_npy_file('filter_offset.npy', avg_over_frames_and_nreps)
+            #offset the data and correct for common mode if necessary
+            data -= avg_over_frames[np.newaxis,:,:,:]
+            if self.filter_comm_mode is True:
+                an.correct_common_mode(data)
+            #calculate rndr signals and update file
+            avg_over_nreps = af.get_avg_over_nreps(data)
+            self.update_npy_file('filter_rndr_signals.npy', avg_over_nreps)
+            #calculate bad slopes and update file
+            if self.filter_thres_bad_slopes != 0:
+                bad_slopes_0, bad_slopes_1, bad_slopes_2 = an.get_bad_slopes(data, 
+                                                                             self.offnoi_thres_bad_slopes)
+                self.update_npy_file('filter_bad_slopes_pos.npy', bad_slopes_0)
+                self.update_npy_file('filter_bad_slopes_data.npy', bad_slopes_1)
+                self.update_npy_file('filter_bad_slopes_value.npy', bad_slopes_2)
+            self._logger.info(f'Finished step {step+1} of {steps_needed} total Steps for offnoi data')
+
 
 class OffNoi():
     _logger = logger.Logger('nproan-offnoi', 'debug').get_logger()

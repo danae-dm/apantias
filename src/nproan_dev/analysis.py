@@ -118,7 +118,7 @@ def get_data_2(bin_file : str, column_size: int, row_size: int, key_ints: int,
         frames_here = 0
 
         while True:
-            inp_data = np.fromfile(bin_file, dtype='uint16', 
+            inp_data = np.fromfile(bin_file[0], dtype='uint16', 
                                    count = chunk_size, offset = offset)
             #check if file is at its end
             if inp_data.size == 0:
