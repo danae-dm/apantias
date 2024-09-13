@@ -380,10 +380,6 @@ def get_bad_slopes(data: np.ndarray, thres_bad_slopes: int,
     _logger.info(f'Found {len(bad_slopes_pos)} bad Slopes')
     _logger.debug(f'Shape of bad slopes data: {bad_slopes_data.shape}')
     _logger.debug(f'Shape of bad slopes pos: {bad_slopes_pos.shape}')
-    title = f'Slope Values for each Pixel and Frame. {len(bad_slopes_pos)} bad slopes found.'
-    display.draw_hist_and_gauss_fit(slopes.flatten(), 100, fit[0], fit[1], fit[2],
-                            'bad_slopes', 
-                            save_to = step_dir)
     return bad_slopes_pos, bad_slopes_data, bad_slopes_value
 
 def set_bad_pixellist_to_nan(data: np.ndarray, 
