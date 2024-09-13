@@ -20,25 +20,25 @@ class Params:
         'common_bad_pixels': []             #list of tuples
     }
     offnoi_params = {
-        'offnoi_bin_file': "",              #str
-        'offnoi_nreps': 200,                 #int
-        'offnoi_nframes': 100,                #int
-        'offnoi_nreps_eval': [0,-1,1],        #list of ints
-        'offnoi_comm_mode': True,             #bool
-        'offnoi_thres_mips': 1000,            #float
-        'offnoi_thres_bad_frames': 5,          #float
-        'offnoi_thres_bad_slopes': 5          #float
+        'offnoi_bin_file': [],              #list of str
+        'offnoi_nreps': 200,                #int
+        'offnoi_nframes': 100,              #int
+        'offnoi_nreps_eval': [0,-1,1],      #list of ints
+        'offnoi_comm_mode': True,           #bool
+        'offnoi_thres_mips': 1000,          #float
+        'offnoi_thres_bad_frames': 5,       #float
+        'offnoi_thres_bad_slopes': 5        #float
     }
     filter_params = {
-        'filter_bin_file': "",            #str
-        'filter_nreps': 200,               #int
+        'filter_bin_file': [],              #list of str
+        'filter_nreps': 200,                #int
         'filter_nframes': 100,              #int
-        'filter_nreps_eval': [0,-1,1],           #list of ints
+        'filter_nreps_eval': [0,-1,1],      #list of ints
         'filter_comm_mode': True,           #bool
         'filter_thres_mips': 1000,          #float
         'filter_thres_event': 5,            #float
         'filter_use_fitted_offset': False,  #bool
-        'filter_thres_bad_frames': 5,        #float
+        'filter_thres_bad_frames': 5,       #float
         'filter_thres_bad_slopes': 5        #float
     }
     gain_params = {
@@ -53,7 +53,7 @@ class Params:
         'common_key_ints': int,
         'common_bad_pixels': list,          #actually, list of tuples
 
-        'offnoi_bin_file': str,
+        'offnoi_bin_file': list,
         'offnoi_nreps': int,
         'offnoi_nframes': int,
         'offnoi_nreps_eval': list,
@@ -62,7 +62,7 @@ class Params:
         'offnoi_thres_bad_frames': (int, float),
         'offnoi_thres_bad_slopes': (int, float),
 
-        'filter_bin_file': str,
+        'filter_bin_file': list,
         'filter_nreps': int,
         'filter_nframes': int,
         'filter_nreps_eval': list,
@@ -247,7 +247,8 @@ class Params:
             return False
         
     def estimate_ram_usage(self) -> None:
-        pixel_per_frame = self.param_dict['common_column_size'] * self.param_dict['common_row_size']
+        pixel_per_frame = self.param_dict['common_column_size'] * \
+            self.param_dict['common_row_size']
         frames_offnoi = self.param_dict['offnoi_nframes']
         frames_filter = self.param_dict['filter_nframes']
         nreps_offnoi = self.param_dict['offnoi_nreps']
