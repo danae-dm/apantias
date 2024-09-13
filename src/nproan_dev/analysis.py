@@ -281,10 +281,13 @@ def exclude_mips_and_bad_frames(data: np.ndarray, thres_mips: int, thres_bad_fra
     mips_mask = np.any(mips_mask, axis = (1,2,3))
     _logger.info(f'Excluded {np.sum(mips_mask)} frames')
     #calculate bad frames mask
-    fit = fitting.fit_gauss_to_hist(median)
+    mean = parallel_funcs.nanmean(data, axis=3)
+    mean = parallel_funcs.nanmean(median, axis=2)
+    mean = parallel_funcs.nanmean(median, axis=1)
+    fit = fitting.fit_gauss_to_hist(mean)
     lower_bound = fit[1] - thres_bad_frames*np.abs(fit[2])
     upper_bound = fit[1] + thres_bad_frames*np.abs(fit[2])
-    bad_frames_mask = (median < lower_bound) | (median > upper_bound)
+    bad_frames_mask = (mean < lower_bound) | (mean > upper_bound)
     _logger.info(f'Excluded {np.sum(bad_frames_mask)} frames')
     mask = mips_mask | bad_frames_mask
     return data[~mask]
