@@ -11,7 +11,7 @@ from . import analysis as an
 from . import params as pm
 from . import fitting as fit
 
-class Steps():
+class RoanSteps():
     _logger = logger.Logger('nproan-preprocess', 'debug').get_logger()
 
     def __init__(self, prm_file: str, ram: int) -> None:
