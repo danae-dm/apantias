@@ -118,7 +118,7 @@ def get_data_2(bin_file : str, column_size: int, row_size: int, key_ints: int,
         frames_here = 0
 
         while True:
-            inp_data = np.fromfile(bin_file[0], dtype='uint16', 
+            inp_data = np.fromfile(bin_file, dtype='uint16', 
                                    count = chunk_size, offset = offset)
             #check if file is at its end
             if inp_data.size == 0:
@@ -290,7 +290,7 @@ def exclude_mips_and_bad_frames(data: np.ndarray, thres_mips: int, thres_bad_fra
     upper_bound = fit[1] + thres_bad_frames*np.abs(fit[2])
     bad_frames_mask = (mean < lower_bound) | (mean > upper_bound)
     _logger.info(f'Excluded {np.sum(bad_frames_mask)} bad frames')
-    _logger.info(f'Indices: {np.where(bad_frames_mask)[0]}')
+    _logger.debug(f'Indices: {np.where(bad_frames_mask)[0]}')
     mask = mips_mask | bad_frames_mask
     return data[~mask]
 

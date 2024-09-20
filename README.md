@@ -59,6 +59,7 @@ This is NOT exposed to the user when importing nproan. It takes a long time to
 load and should be only loaded when neccesary.
 
 TODO:
+- use dictionaries in .npy files
 - add additional info to .npz file output
 - bad slopes should be ignored in the fitting in the offnoi step
 - add infos to plots

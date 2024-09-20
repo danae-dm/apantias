@@ -13,7 +13,7 @@ from . import fitting as fit
 from . import parallel_funcs as pf
 
 class RoanSteps():
-    _logger = logger.Logger('nproan-preprocess', 'debug').get_logger()
+    _logger = logger.Logger('nproan-RoanSteps', 'debug').get_logger()
 
     def __init__(self, prm_file: str, ram: int) -> None:
         self.ram_available = ram
@@ -117,7 +117,7 @@ class RoanSteps():
         for step in range(steps_needed):
             self._logger.info(f'Performing step {step+1} of {steps_needed} total Steps')
             #load data from bin file sequentially
-            data, self.current_offset = an.get_data_2(self.offnoi_bin_file, 
+            data, self.current_offset = an.get_data_2(self.offnoi_bin_file[0], 
                                          self.column_size, 
                                          self.row_size, 
                                          self.key_ints, 
@@ -197,7 +197,7 @@ class RoanSteps():
 
         for step in range(steps_needed):
             self._logger.info(f'Performing step {step+1} of {steps_needed} total Steps')
-            data, self.current_offset = an.get_data_2(self.filter_bin_file, 
+            data, self.current_offset = an.get_data_2(self.filter_bin_file[0], 
                                          self.column_size, 
                                          self.row_size, 
                                          self.key_ints, 
