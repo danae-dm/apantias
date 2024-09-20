@@ -97,7 +97,7 @@ class RoanSteps():
         os.makedirs(self.step_dir, exist_ok=True)
         self._logger.info(f'Created working directory for offnoi step: {self.step_dir}')
         estimated_ram_usage = af.get_ram_usage_in_gb(
-            self.offnoi_nframes, self.column_size, self.offnoi_nreps, self.row_size)*2.3
+            self.offnoi_nframes, self.column_size, self.offnoi_nreps, self.row_size)*2.5
         self._logger.info(f'RAM available: {self.ram_available:.1f} GB')
         self._logger.info(f'Estimated RAM usage: {estimated_ram_usage:.1f} GB')
         steps_needed = int(estimated_ram_usage / self.ram_available) + 1
@@ -154,12 +154,16 @@ class RoanSteps():
                 slopes = an.get_bad_slopes(data, 
                                            self.offnoi_thres_bad_slopes,
                                            self.total_frames_processed)
-                self._update_npy_file('offnoi_bad_slopes_pos.npy', slopes['pos'])
-                self._update_npy_file('offnoi_bad_slopes_data.npy', slopes['data'])
-                self._update_npy_file('offnoi_bad_slopes_value.npy', slopes['fit'])
+                self._update_npy_file('offnoi_bad_slopes.npy', slopes)
+            self.total_frames_processed += self.final_frames_per_step
             self._logger.info(f'Finished step {step+1} of {steps_needed} total Steps')
             
-            self.total_frames_processed += self.final_frames_per_step
+            '''
+            TODO:
+            Hab get_slopes umgeschrieben, sodass es nur den linearen fit zurückgibt.
+            fitting muss nach den ganzen steps implementiert werden, vorher war das nur
+            pro step über die frames gefitted. das war nicht ideal.
+            '''
         
         avg_over_nreps_final = np.load(os.path.join(self.step_dir, 
                                                     'offnoi_rndr_signals.npy'))
@@ -178,7 +182,7 @@ class RoanSteps():
         os.makedirs(self.step_dir, exist_ok=True)
         self._logger.info(f'Created working directory for filter step: {self.step_dir}')
         estimated_ram_usage = af.get_ram_usage_in_gb(
-            self.filter_nframes, self.column_size, self.filter_nreps, self.row_size)*2.3
+            self.filter_nframes, self.column_size, self.filter_nreps, self.row_size)*2.5
         self._logger.info(f'RAM available: {self.ram_available:.1f} GB')
         self._logger.info(f'Estimated RAM usage: {estimated_ram_usage:.1f} GB')
         steps_needed = int(estimated_ram_usage / self.ram_available) + 1
@@ -237,8 +241,8 @@ class RoanSteps():
                                            self.filter_thres_bad_slopes,
                                            self.total_frames_processed)
                 self._update_npy_file('filter_bad_slopes_pos.npy', slopes['pos'])
-                self._update_npy_file('filter_bad_slopes_data.npy', slopes['data'])
-                self._update_npy_file('filter_bad_slopes_value.npy', slopes['fit'])
+                self._update_npy_file('filter_bad_slopes_fit.npy', slopes['fit'])
+                self._update_npy_file('filter_bad_slopes_slopes.npy', slopes['slopes'])
             self._logger.info(f'Finished step {step+1} of {steps_needed} total Steps')
             self.total_frames_processed += self.final_frames_per_step
         

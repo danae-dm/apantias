@@ -280,7 +280,7 @@ def exclude_mips_and_bad_frames(data: np.ndarray, thres_mips: int, thres_bad_fra
     mips_mask = (data > median[:,np.newaxis,np.newaxis,np.newaxis] + thres_mips) | (data < median[:,np.newaxis,np.newaxis,np.newaxis] - thres_mips)
     mips_mask = np.any(mips_mask, axis = (1,2,3))
     _logger.info(f'Excluded {np.sum(mips_mask)} frames due to mips')
-    _logger.info(f'Indices: {np.where(mips_mask)[0]}')
+    _logger.debug(f'Indices: {np.where(mips_mask)[0]}')
     #calculate bad frames mask
     mean = parallel_funcs.nanmean(data, axis=3)
     mean = parallel_funcs.nanmean(mean, axis=2)
@@ -354,7 +354,7 @@ def exclude_bad_frames(data: np.ndarray, thres_bad_frames: int,
 def get_bad_slopes(data: np.ndarray, 
                    thres_bad_slopes: int,
                    frames_already_processed: int,
-                   step_dir: str = None)-> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                   save_data: bool = False)-> dict:
     '''
     Calculates the slope over nreps for every pixel and frame.
     It then fits a gaussian to the histogram of the slopes, and determines
@@ -364,8 +364,9 @@ def get_bad_slopes(data: np.ndarray,
         thres_bad_slopes: used with the fitted sigma to determine bad slopes
         step_dir (optional): directory in which plot is saved
     Returns:
-        slope_dict: dictionary with the ['pos'] of the bad slopes, the ['data'] and
-                    the fitting parameters ['fit']
+        slope_dict: dictionary with the ['pos'] of the bad slopes, the ['data'],
+                    the fitting parameters ['fit'] and the calculated ['slopes']
+                    per frame and pixel
     '''
     if np.ndim(data) != 4:
         _logger.error('Input data is not a 4D array.')
@@ -373,35 +374,7 @@ def get_bad_slopes(data: np.ndarray,
     _logger.info('Calculating bad slopes')
     slopes = parallel_funcs.apply_slope_fit_along_frames(data)
     _logger.debug(f'Shape of slopes: {slopes.shape}')
-    #fit pixelwise slopes to a gaussian
-    slope_dict = {'pos': None,
-                   'data': None,
-                   'fit': None}
-    positions_list = []
-    data_list = []
-    fit_parameters_list = []
-    for row in range(slopes.shape[1]):
-        for col in range(slopes.shape[2]):
-            slopes_pixelwise = slopes[:,row,col]
-            fit_pixelwise = fitting.fit_gauss_to_hist(slopes_pixelwise.flatten())
-            lower_bound = fit_pixelwise[1] - thres_bad_slopes*np.abs(fit_pixelwise[2])
-            upper_bound = fit_pixelwise[1] + thres_bad_slopes*np.abs(fit_pixelwise[2])
-            bad_slopes_mask = (slopes_pixelwise < lower_bound) | (slopes_pixelwise > upper_bound)
-            frame = np.where(bad_slopes_mask)[0]
-            row_array = np.full(frame.shape, row)
-            col_array = np.full(frame.shape, col)
-            actual_frame = frame + frames_already_processed
-            positions_list.append(np.array([actual_frame, row_array, col_array]).T)
-            data_list.append(data[actual_frame,row,:,col])
-            fit_parameters_list.append(fit_pixelwise)
-    #get indices of frames with bad slopes
-    slope_dict['pos'] = np.vstack(positions_list)
-    slope_dict['data'] = np.vstack(data_list)
-    slope_dict['fit'] = np.vstack(fit_parameters_list)
-    _logger.info(f"Found {len(slope_dict['pos'])} bad Slopes")
-    _logger.debug(f"Shape of bad slopes data: { slope_dict['data'].shape}")
-    _logger.debug(f"Shape of fit pos: { slope_dict['fit'].shape}")
-    return slope_dict
+    return slopes
 
 def set_bad_pixellist_to_nan(data: np.ndarray, 
                              bad_pixels: list[tuple[int, int]]) -> None:
