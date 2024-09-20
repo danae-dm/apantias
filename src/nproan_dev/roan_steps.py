@@ -6,10 +6,11 @@ from datetime import datetime
 import numpy as np
 
 from . import logger
-from . import analysis_funcs as af
+from . import numba_funcs as af
 from . import analysis as an
 from . import params as pm
 from . import fitting as fit
+from . import parallel_funcs as pf
 
 class RoanSteps():
     _logger = logger.Logger('nproan-preprocess', 'debug').get_logger()
@@ -93,8 +94,8 @@ class RoanSteps():
     def calc_offnoi_step(self) -> None:
         self.step_dir = self.offnoi_dir
         #create the working directory for the offnoi step
-        os.makedirs(self.offnoi_dir, exist_ok=True)
-        self._logger.info(f'Created working directory for offnoi step: {self.offnoi_dir}')
+        os.makedirs(self.step_dir, exist_ok=True)
+        self._logger.info(f'Created working directory for offnoi step: {self.step_dir}')
         estimated_ram_usage = af.get_ram_usage_in_gb(
             self.offnoi_nframes, self.column_size, self.offnoi_nreps, self.row_size)*2.3
         self._logger.info(f'RAM available: {self.ram_available:.1f} GB')
@@ -141,7 +142,6 @@ class RoanSteps():
             #Calculate offset_raw on the raw data and update file
             avg_over_frames = af.get_avg_over_frames(data)
             self._update_offset_raw('offnoi_offset_raw.npy', avg_over_frames)
-            self.total_frames_processed += self.final_frames_per_step
             #offset the data and correct for common mode if necessary
             data -= avg_over_frames[np.newaxis,:,:,:]
             if self.offnoi_comm_mode is True:
@@ -149,26 +149,34 @@ class RoanSteps():
             #calculate rndr signals and update file
             avg_over_nreps = af.get_avg_over_nreps(data)
             self._update_npy_file('offnoi_rndr_signals.npy', avg_over_nreps)
-            #TODO: rewrite slopes to get treshold from pixelwise fit
             #calculate bad slopes and update file
             if self.offnoi_thres_bad_slopes != 0:
-                slopes_0, slopes_1, slopes_2 = an.get_bad_slopes(data, 
-                                                                self.offnoi_thres_bad_slopes)
-                self._update_npy_file('offnoi_bad_slopes_pos.npy', slopes_0)
-                self._update_npy_file('offnoi_bad_slopes_data.npy', slopes_1)
-                self._update_npy_file('offnoi_bad_slopes_value.npy', slopes_2)
+                slopes = an.get_bad_slopes(data, 
+                                           self.offnoi_thres_bad_slopes,
+                                           self.total_frames_processed)
+                self._update_npy_file('offnoi_bad_slopes_pos.npy', slopes['pos'])
+                self._update_npy_file('offnoi_bad_slopes_data.npy', slopes['data'])
+                self._update_npy_file('offnoi_bad_slopes_value.npy', slopes['fit'])
             self._logger.info(f'Finished step {step+1} of {steps_needed} total Steps')
+            
+            self.total_frames_processed += self.final_frames_per_step
         
-        #TODO: Exclude bad slopes from fit
+        avg_over_nreps_final = np.load(os.path.join(self.step_dir, 
+                                                    'offnoi_rndr_signals.npy'))
+        bad_slopes_pos = np.load(os.path.join(self.step_dir, 'offnoi_bad_slopes_pos.npy'),
+                                 allow_pickle=True)
+        avg_over_nreps_slopes_removed = pf.set_values_to_nan(avg_over_nreps_final, bad_slopes_pos)
         self._logger.info('Fitting pixelwise for offset and noise')
         fitted = fit.get_fit_gauss(avg_over_nreps)
-        np.save(os.path.join(self.offnoi_dir, 'offnoi_fit.npy'), fitted)
+        fitted_slopes_removed = fit.get_fit_gauss(avg_over_nreps_slopes_removed)
+        np.save(os.path.join(self.step_dir, 'offnoi_fit.npy'), fitted)
+        np.save(os.path.join(self.step_dir, 'offnoi_fit_slopes_removed.npy'), fitted_slopes_removed)
 
     def calc_filter_step(self) -> None:
         self.step_dir = self.filter_dir
         #create the working directory for the filter step
-        os.makedirs(self.filter_dir, exist_ok=True)
-        self._logger.info(f'Created working directory for filter step: {self.filter_dir}')
+        os.makedirs(self.step_dir, exist_ok=True)
+        self._logger.info(f'Created working directory for filter step: {self.step_dir}')
         estimated_ram_usage = af.get_ram_usage_in_gb(
             self.filter_nframes, self.column_size, self.filter_nreps, self.row_size)*2.3
         self._logger.info(f'RAM available: {self.ram_available:.1f} GB')
@@ -225,20 +233,33 @@ class RoanSteps():
             self._update_npy_file('filter_rndr_signals.npy', avg_over_nreps)
             #calculate bad slopes and update file
             if self.filter_thres_bad_slopes != 0:
-                pos, data, value = an.get_bad_slopes(data, 
-                                                     self.filter_thres_bad_slopes)
-                self._update_npy_file('filter_bad_slopes_pos.npy', pos)
-                self._update_npy_file('filter_bad_slopes_data.npy', data)
-                self._update_npy_file('filter_bad_slopes_value.npy', value)
+                slopes = an.get_bad_slopes(data, 
+                                           self.filter_thres_bad_slopes,
+                                           self.total_frames_processed)
+                self._update_npy_file('filter_bad_slopes_pos.npy', slopes['pos'])
+                self._update_npy_file('filter_bad_slopes_data.npy', slopes['data'])
+                self._update_npy_file('filter_bad_slopes_value.npy', slopes['fit'])
             self._logger.info(f'Finished step {step+1} of {steps_needed} total Steps')
+            self.total_frames_processed += self.final_frames_per_step
         
-        final_avg_over_nreps = np.load(os.path.join(self.filter_dir, 'filter_rndr_signals.npy'))
+        avg_over_nreps_final = np.load(os.path.join(self.step_dir, 'filter_rndr_signals.npy'))
+        bad_slopes_pos = np.load(os.path.join(self.step_dir, 'filter_bad_slopes_pos.npy'),
+                                 allow_pickle=True)
+        avg_over_nreps_slopes_removed = pf.set_values_to_nan(avg_over_nreps_final, bad_slopes_pos)
         fitted_noise = np.load(os.path.join(self.offnoi_dir, 'offnoi_fit.npy'))[2]
-        event_map = an.calc_event_map(final_avg_over_nreps,
+        event_map = an.calc_event_map(avg_over_nreps_final,
                                       fitted_noise, 
                                       self.filter_thres_event)
-        np.save(os.path.join(self.filter_dir, 'event_map.npy'), event_map)
-        np.save(os.path.join(self.filter_dir, 'sum_of_event_signals.npy'),
+        np.save(os.path.join(self.step_dir, 'event_map.npy'), event_map)
+        np.save(os.path.join(self.step_dir, 'sum_of_event_signals.npy'),
                 an.get_sum_of_event_signals(event_map, self.row_size, self.column_size))
-        np.save(os.path.join(self.filter_dir, 'sum_of_event_counts.npy'),
+        np.save(os.path.join(self.step_dir, 'sum_of_event_counts.npy'),
                 an.get_sum_of_event_counts(event_map, self.row_size, self.column_size))
+        event_map_slopes_removed = an.calc_event_map(avg_over_nreps_slopes_removed,
+                                                        fitted_noise,
+                                                        self.filter_thres_event)
+        np.save(os.path.join(self.step_dir, 'event_map_slopes_removed.npy'), event_map_slopes_removed)
+        np.save(os.path.join(self.step_dir, 'sum_of_event_signals_slopes_removed.npy'),
+                an.get_sum_of_event_signals(event_map_slopes_removed, self.row_size, self.column_size))
+        np.save(os.path.join(self.step_dir, 'sum_of_event_counts_slopes_removed.npy'),
+                an.get_sum_of_event_counts(event_map_slopes_removed, self.row_size, self.column_size))
