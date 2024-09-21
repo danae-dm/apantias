@@ -32,7 +32,7 @@ class RoanSteps():
         self.bad_pixels = self.params_dict['common_bad_pixels']
 
         #offnoi parameters
-        self.offnoi_bin_file = self.params_dict['offnoi_bin_file']
+        self.offnoi_bin_file_list = self.params_dict['offnoi_bin_file']
         self.offnoi_nreps = self.params_dict['offnoi_nreps']
         self.offnoi_nframes = self.params_dict['offnoi_nframes']
         self.offnoi_nreps_eval = self.params_dict['offnoi_nreps_eval']
@@ -42,7 +42,7 @@ class RoanSteps():
         self.offnoi_thres_bad_slopes = self.params_dict['offnoi_thres_bad_slopes']
 
         #filter parameters
-        self.filter_bin_file = self.params_dict['filter_bin_file']
+        self.filter_bin_file_list = self.params_dict['filter_bin_file']
         self.filter_nreps = self.params_dict['filter_nreps']
         self.filter_nframes = self.params_dict['filter_nframes']
         self.filter_nreps_eval = self.params_dict['filter_nreps_eval']
@@ -62,7 +62,7 @@ class RoanSteps():
         #directories
         timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
         #TODO: think of a better file name
-        filename = os.path.basename(self.filter_bin_file[0])[:-4]
+        filename = os.path.basename(self.filter_bin_file_list[0])[:-4]
         self.common_dir = os.path.join(
             self.results_dir, timestamp + '_' + filename)
         #current step directory (is set in calc())
@@ -91,6 +91,10 @@ class RoanSteps():
             output = new_data
         np.save(file_path, output)
 
+    '''
+    Right now, sel.nframes is the number of frames that are processed per bin file.
+    '''
+
     def calc_offnoi_step(self) -> None:
         self.step_dir = self.offnoi_dir
         #create the working directory for the offnoi step
@@ -102,61 +106,62 @@ class RoanSteps():
         self._logger.info(f'Estimated RAM usage: {estimated_ram_usage:.1f} GB')
         steps_needed = int(estimated_ram_usage / self.ram_available) + 1
         self._logger.info(f'Steps needed: {steps_needed}')
-
-        #set class variables
-        #the initial offset for reading the bin file, first 8 bytes are header
-        self.current_offset = 8
-        #total processed frames over all steps
-        self.total_frames_processed = 0
+        
         #(planned) frames per step, so that ram usage is below the available ram
         self.frames_per_step = int(self.offnoi_nframes / steps_needed)
+        #total processed frames over all steps
+        self.total_frames_processed = 0
         #final frames per step, this is the actual number of frames processed 
         #in a step (after deleting bad frames)
         self.final_frames_per_step = 0
+        
+        for bin_file in self.offnoi_bin_file_list:
+            self._logger.info(f'Start processing bin file: {bin_file}')
+            #the initial offset for reading the bin file, first 8 bytes are header
+            self.current_offset = 8
+            for step in range(steps_needed):
+                self._logger.info(f'Performing step {step+1} of {steps_needed} total Steps')
+                #load data from bin file sequentially
+                data, self.current_offset = an.get_data(bin_file, 
+                                            self.column_size, 
+                                            self.row_size, 
+                                            self.key_ints, 
+                                            self.offnoi_nreps, 
+                                            self.frames_per_step, 
+                                            self.current_offset)
+                
+                #exclude nreps_eval from data
+                if self.offnoi_nreps_eval:
+                    data = an.exclude_nreps_eval(data, self.offnoi_nreps_eval)
+                    self._logger.debug(f'Shape of data: {data.shape}')
+                #set values of all frames and nreps of bad pixels to nan
+                if self.bad_pixels:
+                    data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
+                #delete bad frames from data
+                if self.offnoi_thres_bad_frames != 0 or self.offnoi_thres_mips != 0:
+                    data = an.exclude_mips_and_bad_frames(data, self.offnoi_thres_mips, 
+                                                        self.offnoi_thres_bad_frames)
+                    self._logger.debug(f'Shape of data: {data.shape}')
 
-        for step in range(steps_needed):
-            self._logger.info(f'Performing step {step+1} of {steps_needed} total Steps')
-            #load data from bin file sequentially
-            data, self.current_offset = an.get_data_2(self.offnoi_bin_file[0], 
-                                         self.column_size, 
-                                         self.row_size, 
-                                         self.key_ints, 
-                                         self.offnoi_nreps, 
-                                         self.frames_per_step, 
-                                         self.current_offset)
-            
-            #exclude nreps_eval from data
-            if self.offnoi_nreps_eval:
-                data = an.exclude_nreps_eval(data, self.offnoi_nreps_eval)
-                self._logger.debug(f'Shape of data: {data.shape}')
-            #set values of all frames and nreps of bad pixels to nan
-            if self.bad_pixels:
-                data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
-            #delete bad frames from data
-            if self.offnoi_thres_bad_frames != 0 or self.offnoi_thres_mips != 0:
-                data = an.exclude_mips_and_bad_frames(data, self.offnoi_thres_mips, 
-                                                      self.offnoi_thres_bad_frames)
-                self._logger.debug(f'Shape of data: {data.shape}')
-
-            self.final_frames_per_step = data.shape[0]
-            #Calculate offset_raw on the raw data and update file
-            avg_over_frames = af.get_avg_over_frames(data)
-            self._update_offset_raw('offnoi_offset_raw.npy', avg_over_frames)
-            #offset the data and correct for common mode if necessary
-            data -= avg_over_frames[np.newaxis,:,:,:]
-            if self.offnoi_comm_mode is True:
-                an.correct_common_mode(data)
-            #calculate rndr signals and update file
-            avg_over_nreps = af.get_avg_over_nreps(data)
-            self._update_npy_file('offnoi_rndr_signals.npy', avg_over_nreps)
-            #calculate bad slopes and update file
-            if self.offnoi_thres_bad_slopes != 0:
-                slopes = an.get_bad_slopes(data, 
-                                           self.offnoi_thres_bad_slopes,
-                                           self.total_frames_processed)
-                self._update_npy_file('offnoi_bad_slopes_slopes.npy', slopes)
-            self.total_frames_processed += self.final_frames_per_step
-            self._logger.info(f'Finished step {step+1} of {steps_needed} total Steps')
+                self.final_frames_per_step = data.shape[0]
+                #Calculate offset_raw on the raw data and update file
+                avg_over_frames = af.get_avg_over_frames(data)
+                self._update_offset_raw('offnoi_offset_raw.npy', avg_over_frames)
+                #offset the data and correct for common mode if necessary
+                data -= avg_over_frames[np.newaxis,:,:,:]
+                if self.offnoi_comm_mode is True:
+                    an.correct_common_mode(data)
+                #calculate rndr signals and update file
+                avg_over_nreps = af.get_avg_over_nreps(data)
+                self._update_npy_file('offnoi_rndr_signals.npy', avg_over_nreps)
+                #calculate bad slopes and update file
+                if self.offnoi_thres_bad_slopes != 0:
+                    slopes = an.get_bad_slopes(data, 
+                                            self.offnoi_thres_bad_slopes,
+                                            self.total_frames_processed)
+                    self._update_npy_file('offnoi_bad_slopes_slopes.npy', slopes)
+                self.total_frames_processed += self.final_frames_per_step
+                self._logger.info(f'Finished step {step+1} of {steps_needed} total Steps')
             
         slopes = np.load(os.path.join(self.step_dir, 'offnoi_bad_slopes_slopes.npy'))
         pos_list = []
@@ -201,61 +206,62 @@ class RoanSteps():
         steps_needed = int(estimated_ram_usage / self.ram_available) + 1
         self._logger.info(f'Steps needed: {steps_needed}')
 
-        #set class variables
-        #the initial offset for reading the bin file, first 8 bytes are header
-        self.current_offset = 8
-        #total processed frames over all steps
-        self.total_frames_processed = 0
         #(planned) frames per step, so that ram usage is below the available ram
         self.frames_per_step = int(self.filter_nframes / steps_needed)
+        #total processed frames over all steps
+        self.total_frames_processed = 0
         #final frames per step, this is the actual number of frames processed 
         #in a step (after deleting bad frames)
         self.final_frames_per_step = 0
 
-        for step in range(steps_needed):
-            self._logger.info(f'Performing step {step+1} of {steps_needed} total Steps')
-            data, self.current_offset = an.get_data_2(self.filter_bin_file[0], 
-                                         self.column_size, 
-                                         self.row_size, 
-                                         self.key_ints, 
-                                         self.filter_nreps, 
-                                         self.frames_per_step, 
-                                         self.current_offset)
-            
-            #exclude nreps_eval from data
-            if self.filter_nreps_eval:
-                data = an.exclude_nreps_eval(data, self.filter_nreps_eval)
-                self._logger.debug(f'Shape of data: {data.shape}')
-            #set values of all frames and nreps of bad pixels to nan
-            if self.bad_pixels:
-                data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
-            #delete bad frames from data
-            if self.filter_thres_bad_frames != 0 or self.filter_thres_mips != 0:
-                data = an.exclude_mips_and_bad_frames(data, self.filter_thres_mips,
-                                                        self.filter_thres_bad_frames)
-                self._logger.debug(f'Shape of data: {data.shape}')
-            
-            self.final_frames_per_step = data.shape[0]
-            #Get offset_raw from offnoi step
-            avg_over_frames = np.load(os.path.join(self.offnoi_dir, 'offnoi_offset_raw.npy'))
-            #offset the data and correct for common mode if necessary
-            data -= avg_over_frames[np.newaxis,:,:,:]
-            if self.filter_comm_mode is True:
-                an.correct_common_mode(data)
-            #calculate rndr signals and update file
-            avg_over_nreps = af.get_avg_over_nreps(data)
-            # subtract fitted offset from data
-            fitted_offset = np.load(os.path.join(self.offnoi_dir, 'offnoi_fit.npy'))[1]
-            avg_over_nreps -= fitted_offset
-            self._update_npy_file('filter_rndr_signals.npy', avg_over_nreps)
-            #calculate bad slopes and update file
-            if self.filter_thres_bad_slopes != 0:
-                slopes = an.get_bad_slopes(data, 
-                                           self.filter_thres_bad_slopes,
-                                           self.total_frames_processed)
-                self._update_npy_file('filter_bad_slopes_slopes.npy', slopes)
-            self._logger.info(f'Finished step {step+1} of {steps_needed} total Steps')
-            self.total_frames_processed += self.final_frames_per_step
+        for bin_file in self.filter_bin_file_list:
+            self._logger.info(f'Start processing bin file: {bin_file}')
+            #the initial offset for reading the bin file, first 8 bytes are header
+            self.current_offset = 8
+            for step in range(steps_needed):
+                self._logger.info(f'Performing step {step+1} of {steps_needed} total Steps')
+                data, self.current_offset = an.get_data(bin_file, 
+                                            self.column_size, 
+                                            self.row_size, 
+                                            self.key_ints, 
+                                            self.filter_nreps, 
+                                            self.frames_per_step, 
+                                            self.current_offset)
+                
+                #exclude nreps_eval from data
+                if self.filter_nreps_eval:
+                    data = an.exclude_nreps_eval(data, self.filter_nreps_eval)
+                    self._logger.debug(f'Shape of data: {data.shape}')
+                #set values of all frames and nreps of bad pixels to nan
+                if self.bad_pixels:
+                    data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
+                #delete bad frames from data
+                if self.filter_thres_bad_frames != 0 or self.filter_thres_mips != 0:
+                    data = an.exclude_mips_and_bad_frames(data, self.filter_thres_mips,
+                                                            self.filter_thres_bad_frames)
+                    self._logger.debug(f'Shape of data: {data.shape}')
+                
+                self.final_frames_per_step = data.shape[0]
+                #Get offset_raw from offnoi step
+                avg_over_frames = np.load(os.path.join(self.offnoi_dir, 'offnoi_offset_raw.npy'))
+                #offset the data and correct for common mode if necessary
+                data -= avg_over_frames[np.newaxis,:,:,:]
+                if self.filter_comm_mode is True:
+                    an.correct_common_mode(data)
+                #calculate rndr signals and update file
+                avg_over_nreps = af.get_avg_over_nreps(data)
+                # subtract fitted offset from data
+                fitted_offset = np.load(os.path.join(self.offnoi_dir, 'offnoi_fit.npy'))[1]
+                avg_over_nreps -= fitted_offset
+                self._update_npy_file('filter_rndr_signals.npy', avg_over_nreps)
+                #calculate bad slopes and update file
+                if self.filter_thres_bad_slopes != 0:
+                    slopes = an.get_bad_slopes(data, 
+                                            self.filter_thres_bad_slopes,
+                                            self.total_frames_processed)
+                    self._update_npy_file('filter_bad_slopes_slopes.npy', slopes)
+                self._logger.info(f'Finished step {step+1} of {steps_needed} total Steps')
+                self.total_frames_processed += self.final_frames_per_step
 
         slopes = np.load(os.path.join(self.step_dir, 'filter_bad_slopes_slopes.npy'))
         pos_list = []
