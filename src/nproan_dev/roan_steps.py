@@ -154,17 +154,30 @@ class RoanSteps():
                 slopes = an.get_bad_slopes(data, 
                                            self.offnoi_thres_bad_slopes,
                                            self.total_frames_processed)
-                self._update_npy_file('offnoi_bad_slopes.npy', slopes)
+                self._update_npy_file('offnoi_bad_slopes_slopes.npy', slopes)
             self.total_frames_processed += self.final_frames_per_step
             self._logger.info(f'Finished step {step+1} of {steps_needed} total Steps')
             
-            '''
-            TODO:
-            Hab get_slopes umgeschrieben, sodass es nur den linearen fit zurückgibt.
-            fitting muss nach den ganzen steps implementiert werden, vorher war das nur
-            pro step über die frames gefitted. das war nicht ideal.
-            '''
-        
+        slopes = np.load(os.path.join(self.step_dir, 'offnoi_bad_slopes_slopes.npy'))
+        pos_list = []
+        fit_params_list = []
+        for row in range(slopes.shape[1]):
+            for col in range(slopes.shape[2]):
+                slopes_pixelwise = slopes[:,row,col]
+                fit_pixelwise = fit.fit_gauss_to_hist(slopes_pixelwise.flatten())
+                lower_bound = fit_pixelwise[1] - self.offnoi_thres_bad_slopes*np.abs(fit_pixelwise[2])
+                upper_bound = fit_pixelwise[1] + self.offnoi_thres_bad_slopes*np.abs(fit_pixelwise[2])
+                bad_slopes_mask = (slopes_pixelwise < lower_bound) | (slopes_pixelwise > upper_bound)
+                frame = np.where(bad_slopes_mask)[0]
+                row_array = np.full(frame.shape, row)
+                col_array = np.full(frame.shape, col)
+                pos_list.append(np.array([frame, row_array, col_array]).T)
+                fit_params_list.append(fit_pixelwise)
+        bad_slopes_pos = np.vstack(pos_list)
+        bad_slopes_fit = np.vstack(fit_params_list)
+        np.save(os.path.join(self.step_dir, 'offnoi_bad_slopes_pos.npy'), bad_slopes_pos)
+        np.save(os.path.join(self.step_dir, 'offnoi_bad_slopes_fit.npy'), bad_slopes_fit)
+
         avg_over_nreps_final = np.load(os.path.join(self.step_dir, 
                                                     'offnoi_rndr_signals.npy'))
         bad_slopes_pos = np.load(os.path.join(self.step_dir, 'offnoi_bad_slopes_pos.npy'),
@@ -240,11 +253,29 @@ class RoanSteps():
                 slopes = an.get_bad_slopes(data, 
                                            self.filter_thres_bad_slopes,
                                            self.total_frames_processed)
-                self._update_npy_file('filter_bad_slopes_pos.npy', slopes['pos'])
-                self._update_npy_file('filter_bad_slopes_fit.npy', slopes['fit'])
-                self._update_npy_file('filter_bad_slopes_slopes.npy', slopes['slopes'])
+                self._update_npy_file('filter_bad_slopes_slopes.npy', slopes)
             self._logger.info(f'Finished step {step+1} of {steps_needed} total Steps')
             self.total_frames_processed += self.final_frames_per_step
+
+        slopes = np.load(os.path.join(self.step_dir, 'filter_bad_slopes_slopes.npy'))
+        pos_list = []
+        fit_params_list = []
+        for row in range(slopes.shape[1]):
+            for col in range(slopes.shape[2]):
+                slopes_pixelwise = slopes[:,row,col]
+                fit_pixelwise = fit.fit_gauss_to_hist(slopes_pixelwise.flatten())
+                lower_bound = fit_pixelwise[1] - self.offnoi_thres_bad_slopes*np.abs(fit_pixelwise[2])
+                upper_bound = fit_pixelwise[1] + self.offnoi_thres_bad_slopes*np.abs(fit_pixelwise[2])
+                bad_slopes_mask = (slopes_pixelwise < lower_bound) | (slopes_pixelwise > upper_bound)
+                frame = np.where(bad_slopes_mask)[0]
+                row_array = np.full(frame.shape, row)
+                col_array = np.full(frame.shape, col)
+                pos_list.append(np.array([frame, row_array, col_array]).T)
+                fit_params_list.append(fit_pixelwise)
+        bad_slopes_pos = np.vstack(pos_list)
+        bad_slopes_fit = np.vstack(fit_params_list)
+        np.save(os.path.join(self.step_dir, 'filter_bad_slopes_pos.npy'), bad_slopes_pos)
+        np.save(os.path.join(self.step_dir, 'filter_bad_slopes_fit.npy'), bad_slopes_fit)
         
         avg_over_nreps_final = np.load(os.path.join(self.step_dir, 'filter_rndr_signals.npy'))
         bad_slopes_pos = np.load(os.path.join(self.step_dir, 'filter_bad_slopes_pos.npy'),
