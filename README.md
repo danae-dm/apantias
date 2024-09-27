@@ -59,14 +59,13 @@ This is NOT exposed to the user when importing nproan. It takes a long time to
 load and should be only loaded when neccesary.
 
 TODO:
+- create boolean map for badslopes (frame,row,col)
 - use dictionaries in .npy files
 - add additional info to .npz file output
-- bad slopes should be ignored in the fitting in the offnoi step
-- add infos to plots
 - check documentation of functions
 - wiki schreiben
 - add type hints and write nice documentation (almost done)
-- consider combining analysis and analysis_funcs
+- consider combining analysis and analysis_funcs (rethink module naming)
 
 
 COL vs ROW Convention:
