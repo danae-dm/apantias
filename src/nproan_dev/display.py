@@ -8,7 +8,7 @@ from . import fitting
 _logger = logger.Logger(__name__, 'info').get_logger()
 
 def draw_hist(data: np.ndarray, file_name: str = "histogram", 
-              save_to: str = None, **kwargs) -> None:
+              save_to: str = None, log: bool = True, **kwargs) -> None:
     '''
     Draw a histogram of the data.
     Args:
@@ -19,6 +19,8 @@ def draw_hist(data: np.ndarray, file_name: str = "histogram",
     '''
     plt.clf()
     plt.hist(data.ravel(), **kwargs)
+    if log:
+        plt.yscale('log')
     if save_to is not None:
         plt.savefig(save_to + file_name + '.png')
         plt.close()
