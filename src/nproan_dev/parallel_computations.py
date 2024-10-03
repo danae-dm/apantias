@@ -6,14 +6,6 @@ from . import fitting
 
 _logger = logger.Logger(__name__, 'info').get_logger()
 
-'''
-Add parallized versions here.
-Add nanmedian and nanmean for now.
-Test if its good to always use parallel functions.
-Write them only for keepdims=false and use np.newaxis if neccesary.
-move to analysis funcs when they work.
-'''
-
 @njit
 def set_values_to_nan(data: np.ndarray, 
                       values: np.ndarray) -> np.ndarray:

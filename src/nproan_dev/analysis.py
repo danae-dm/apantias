@@ -6,7 +6,7 @@ from scipy.optimize import curve_fit
 from . import logger
 from . import fitting
 from . import display
-from . import parallel_funcs
+from . import parallel_computations
 
 _logger = logger.Logger(__name__, 'info').get_logger()
 
@@ -193,18 +193,18 @@ def exclude_mips_and_bad_frames(data: np.ndarray, thres_mips: int, thres_bad_fra
         raise ValueError('Input data is not a 4D array.')
     _logger.info(f'Excluding bad frames due to MIPS, threshold: {thres_mips}')
     _logger.info(f'Excluding bad frames, threshold: {thres_bad_frames}')
-    median = parallel_funcs.nanmedian(data, axis=3)
-    median = parallel_funcs.nanmedian(median, axis=2)
-    median = parallel_funcs.nanmedian(median, axis=1)
+    median = parallel_computations.nanmedian(data, axis=3)
+    median = parallel_computations.nanmedian(median, axis=2)
+    median = parallel_computations.nanmedian(median, axis=1)
     #calculate mips mask
     mips_mask = (data > median[:,np.newaxis,np.newaxis,np.newaxis] + thres_mips) | (data < median[:,np.newaxis,np.newaxis,np.newaxis] - thres_mips)
     mips_mask = np.any(mips_mask, axis = (1,2,3))
     _logger.info(f'Excluded {np.sum(mips_mask)} frames due to mips')
     _logger.debug(f'Indices: {np.where(mips_mask)[0]}')
     #calculate bad frames mask
-    mean = parallel_funcs.nanmean(data, axis=3)
-    mean = parallel_funcs.nanmean(mean, axis=2)
-    mean = parallel_funcs.nanmean(mean, axis=1)
+    mean = parallel_computations.nanmean(data, axis=3)
+    mean = parallel_computations.nanmean(mean, axis=2)
+    mean = parallel_computations.nanmean(mean, axis=1)
     fit = fitting.fit_gauss_to_hist(mean)
     lower_bound = fit[1] - thres_bad_frames*np.abs(fit[2])
     upper_bound = fit[1] + thres_bad_frames*np.abs(fit[2])
@@ -292,7 +292,7 @@ def get_bad_slopes(data: np.ndarray,
         _logger.error('Input data is not a 4D array.')
         raise ValueError('Input data is not a 4D array.')
     _logger.info('Calculating bad slopes')
-    slopes = parallel_funcs.apply_slope_fit_along_frames(data)
+    slopes = parallel_computations.apply_slope_fit_along_frames(data)
     _logger.debug(f'Shape of slopes: {slopes.shape}')
     return slopes
 
@@ -335,7 +335,7 @@ def correct_common_mode(data: np.ndarray) -> None:
     # Calculate the median for one frame
     #median_common = analysis_funcs.parallel_nanmedian_4d_axis3(data)
     # Subtract the median from the frame in-place
-    median_common = parallel_funcs.nanmedian(data, axis=3, keepdims=True)
+    median_common = parallel_computations.nanmedian(data, axis=3, keepdims=True)
     data -= median_common
     _logger.info('Data is corrected for common mode.')
 

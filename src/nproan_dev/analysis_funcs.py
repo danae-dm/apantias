@@ -3,7 +3,7 @@ import os
 
 import numpy as np
 
-from . import parallel_funcs
+from . import parallel_computations
 from . import logger
 
 _logger = logger.Logger(__name__, 'info').get_logger()
@@ -20,7 +20,7 @@ def get_avg_over_frames(data: np.ndarray) -> np.ndarray:
     if np.ndim(data) != 4:
         _logger.error('Input data is not a 4D array.')
         raise ValueError('Input data is not a 4D array.')
-    return parallel_funcs.nanmean(data, axis=0)
+    return parallel_computations.nanmean(data, axis=0)
 
 def get_avg_over_nreps(data: np.ndarray) -> np.ndarray:
     '''
@@ -33,7 +33,7 @@ def get_avg_over_nreps(data: np.ndarray) -> np.ndarray:
     if np.ndim(data) != 4:
         _logger.error('Input data is not a 4D array.')
         raise ValueError('Input data is not a 4D array.')
-    return parallel_funcs.nanmean(data, axis=2)
+    return parallel_computations.nanmean(data, axis=2)
 
 def get_avg_over_frames_and_nreps(data : np.ndarray,
                                   avg_over_frames: np.ndarray = None,
@@ -54,27 +54,27 @@ def get_avg_over_frames_and_nreps(data : np.ndarray,
         raise ValueError('Input data is not a 4D array.')
     
     if avg_over_frames is None and avg_over_nreps is None:
-        return parallel_funcs.nanmean(parallel_funcs.nanmean(data, axis=0), axis = 2)
+        return parallel_computations.nanmean(parallel_computations.nanmean(data, axis=0), axis = 2)
     
     if avg_over_frames is not None and avg_over_nreps is not None:
         if np.ndim(avg_over_frames) != 3 or np.ndim(avg_over_nreps) != 3:
             _logger.error('Input avg_over_frames or avg_over_nreps is not a 3D array.')
             raise ValueError('Input avg_over_frames or avg_over_nreps is not a 3D array.')
         if avg_over_frames.shape[1] < avg_over_nreps.shape[0]:
-            return parallel_funcs.nanmean(avg_over_frames, axis=1)
+            return parallel_computations.nanmean(avg_over_frames, axis=1)
         else:
-            return parallel_funcs.nanmean(avg_over_nreps, axis=0)
+            return parallel_computations.nanmean(avg_over_nreps, axis=0)
     else: 
         if avg_over_nreps is not None:
             if np.ndim(avg_over_nreps) != 3:
                 _logger.error('Input avg_over_nreps is not a 3D array.')
                 raise ValueError('Input avg_over_nreps is not a 3D array.')
-            return parallel_funcs.nanmean(avg_over_nreps, axis=0)
+            return parallel_computations.nanmean(avg_over_nreps, axis=0)
         else:
             if np.ndim(avg_over_frames) != 3:
                 _logger.error('Input avg_over_frames is not a 3D array.')
                 raise ValueError('Input avg_over_frames is not a 3D array.')
-            return parallel_funcs.nanmean(avg_over_frames, axis=1)
+            return parallel_computations.nanmean(avg_over_frames, axis=1)
 
 def get_rolling_average(data: np.ndarray, window_size: int) -> np.ndarray:
     '''

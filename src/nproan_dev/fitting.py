@@ -112,7 +112,6 @@ def two_gaussians(x: float, a1: float, mu1: float, sigma1: float,
     return (a1 * np.exp(-(x - mu1)**2 / (2 * sigma1**2) +
             a2 * np.exp(-(x - mu2)**2 / (2 * sigma2**2))))
 
-
 @njit(parallel=False)
 def linear_fit(data: np.ndarray) -> np.ndarray:
     x = np.arange(data.size)
