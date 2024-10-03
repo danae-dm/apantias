@@ -176,10 +176,13 @@ class RoanSteps:
                     f"Finished step {step+1} of {steps_needed} total Steps"
                 )
 
-        slopes = np.load(os.path.join(self.step_dir, "offnoi_bad_slopes_slopes.npy"))
-        pos_list = []
-        fit_params_list = []
         # TODO: paralellize this
+        slopes = np.load(os.path.join(self.step_dir, "offnoi_bad_slopes_slopes.npy"))
+        bad_slopes_pos = np.full(
+            (self.offnoi_nframes, self.column_size, self.row_size), False, dtype=bool
+        )
+        fit_params_list = []
+
         for row in range(slopes.shape[1]):
             for col in range(slopes.shape[2]):
                 slopes_pixelwise = slopes[:, row, col]
@@ -194,11 +197,8 @@ class RoanSteps:
                     slopes_pixelwise > upper_bound
                 )
                 frame = np.where(bad_slopes_mask)[0]
-                row_array = np.full(frame.shape, row)
-                col_array = np.full(frame.shape, col)
-                pos_list.append(np.array([frame, row_array, col_array]).T)
+                bad_slopes_pos[frame, row, col] = True
                 fit_params_list.append(fit_pixelwise)
-        bad_slopes_pos = np.vstack(pos_list)
         bad_slopes_fit = np.vstack(fit_params_list)
         np.save(
             os.path.join(self.step_dir, "offnoi_bad_slopes_pos.npy"), bad_slopes_pos
