@@ -59,9 +59,9 @@ This is NOT exposed to the user when importing nproan. It takes a long time to
 load and should be only loaded when neccesary.
 
 TODO:
-- create boolean map for badslopes (frame,row,col)
-- use dictionaries in .npy files
-- add additional info to .npz file output
+- use dictionaries in .npy files?
+- use .h5 files to store data?
+- Test cleanup branch
 - check documentation of functions
 - wiki schreiben
 - add type hints and write nice documentation (almost done)
