@@ -85,7 +85,7 @@ def read_data_chunk_from_bin(
     return inp_data, offset
 
 
-def read_from_bins(
+def create_data_h5_from_bins(
     bin_files: List[str],
     output_folder: str,
     output_filename: str,
@@ -125,6 +125,7 @@ def read_from_bins(
         dataset.attrs["column_size"] = column_size
         dataset.attrs["row_size"] = row_size
         dataset.attrs["nreps"] = nreps
+        dataset.attrs["total_frames"] = 0
         if compression:
             dataset.attrs["compression"] = compression
         else:
@@ -174,3 +175,79 @@ def read_from_bins(
                     _logger.info(
                         f"progress: {frames_loaded}/{estimated_frames:.0f} frames loaded ({frames_loaded/estimated_frames:.2%})"
                     )
+        dataset.attrs["total_frames"] = dataset.shape[0]
+
+
+def display_h5_structure(file_path: str) -> None:
+    """
+    Displays the structure of an HDF5 file.
+
+    Args:
+        file_path (str): Path to the HDF5 file.
+    """
+
+    def print_structure(name, obj):
+        indent = "  " * (name.count("/") - 1)
+        if isinstance(obj, h5py.Group):
+            print(f"{indent}Group: {name}")
+        elif isinstance(obj, h5py.Dataset):
+            print(f"{indent}Dataset: {name}, shape: {obj.shape}, dtype: {obj.dtype}")
+
+        # Print attributes
+        for key, value in obj.attrs.items():
+            print(f"{indent}  Attribute: {key} = {value}")
+
+    with h5py.File(file_path, "r") as file:
+        file.visititems(print_structure)
+
+
+def get_params_from_data_h5(file_path: str) -> Tuple[int, int, int]:
+    """
+    Get the parameters from the data h5 file.
+
+    Args:
+        file_path (str): Path to the HDF5 file.
+    Returns:
+        column_size, row_size, nreps: Tuple[int, int, int]
+    """
+    with h5py.File(file_path, "r") as file:
+        total_frames = file["data"].attrs["total_frames"]
+        column_size = file["data"].attrs["column_size"]
+        row_size = file["data"].attrs["row_size"]
+        nreps = file["data"].attrs["nreps"]
+    return total_frames, column_size, row_size, nreps
+
+
+def create_analysis_h5(output_folder, output_filename):
+    """
+    Create an analysis h5 file with the correct structure.
+    """
+    output_file = os.path.join(output_folder, output_filename)
+    # check if h5 file already exists
+    if os.path.exists(output_file):
+        raise Exception(f"File {output_file} already exists. Please delete")
+    # create the hdf5 file
+    with h5py.File(output_file, "w") as f:
+        f.attrs["description"] = "This file contains the results of the analysis."
+        f.create_group("offnoi")
+        f.create_group("filter")
+        f.create_group("gain")
+        _logger.info(f"Initialized empty file: {output_file}")
+
+
+def get_data_from_h5(
+    file_path: str, dataset_name: str, frames: Tuple[int], nreps: Tuple[int]
+) -> np.ndarray:
+    """
+    Get the data from the HDF5 file.
+
+    Args:
+        file_path (str): Path to the HDF5 file.
+        dataset_name (str): Name of the dataset.
+    Returns:
+        data: np.ndarray
+    """
+    with h5py.File(file_path, "r") as file:
+        data = file[dataset_name][frames[0] : frames[1], :, nreps[0] : nreps[1], :]
+        data = data.astype(np.float64)
+    return data

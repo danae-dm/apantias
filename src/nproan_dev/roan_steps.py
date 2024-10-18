@@ -11,6 +11,7 @@ from . import analysis as an
 from . import params as pm
 from . import fitting as fit
 from . import parallel_computations as pf
+from . import file_io as io
 
 
 class RoanSteps:
@@ -25,16 +26,12 @@ class RoanSteps:
         self.params = pm.Params(prm_file)
         self.params_dict = self.params.get_dict()
 
-        # common parameters
+        # common parameters from params file
         self.results_dir = self.params_dict["common_results_dir"]
-        self.column_size = self.params_dict["common_column_size"]
-        self.row_size = self.params_dict["common_row_size"]
-        self.key_ints = self.params_dict["common_key_ints"]
         self.bad_pixels = self.params_dict["common_bad_pixels"]
 
-        # offnoi parameters
-        self.offnoi_bin_file_list = self.params_dict["offnoi_bin_file"]
-        self.offnoi_nreps = self.params_dict["offnoi_nreps"]
+        # offnoi parameters from params file
+        self.offnoi_data_file = self.params_dict["offnoi_data_file"]
         self.offnoi_nframes = self.params_dict["offnoi_nframes"]
         self.offnoi_nreps_eval = self.params_dict["offnoi_nreps_eval"]
         self.offnoi_comm_mode = self.params_dict["offnoi_comm_mode"]
@@ -42,9 +39,8 @@ class RoanSteps:
         self.offnoi_thres_bad_frames = self.params_dict["offnoi_thres_bad_frames"]
         self.offnoi_thres_bad_slopes = self.params_dict["offnoi_thres_bad_slopes"]
 
-        # filter parameters
-        self.filter_bin_file_list = self.params_dict["filter_bin_file"]
-        self.filter_nreps = self.params_dict["filter_nreps"]
+        # filter parameters from params file
+        self.filter_data_file = self.params_dict["filter_data_file"]
         self.filter_nframes = self.params_dict["filter_nframes"]
         self.filter_nreps_eval = self.params_dict["filter_nreps_eval"]
         self.filter_comm_mode = self.params_dict["filter_comm_mode"]
@@ -54,54 +50,41 @@ class RoanSteps:
         self.filter_thres_bad_frames = self.params_dict["filter_thres_bad_frames"]
         self.filter_thres_bad_slopes = self.params_dict["filter_thres_bad_slopes"]
 
-        # class variables for tracking of preprocessing steps
-        self.current_offset = 0
-        self.total_frames_processed = 0
-        self.frames_per_step = 0
-        self.final_frames_per_step = 0
+        # parameters from data_h5 files
+        total_frames_offnoi, column_size_offnoi, row_size_offnoi, nreps_offnoi = (
+            io.get_params_from_data_h5(self.offnoi_data_file)
+        )
+        total_frames_filter, column_size_filter, row_size_filter, nreps_filter = (
+            io.get_params_from_data_h5(self.filter_data_file)
+        )
+        if (
+            column_size_offnoi != column_size_filter
+            or row_size_offnoi != row_size_filter
+        ):
+            raise ValueError(
+                "Column size or row size of offnoi and filter data files are not equal."
+            )
+        self.column_size = column_size_offnoi
+        self.row_size = row_size_offnoi
+        self.offnoi_nreps = nreps_offnoi
+        self.offnoi_total_frames = total_frames_offnoi
+        self.filter_nreps = nreps_filter
+        self.filter_total_frames = total_frames_filter
 
-        # directories
+        # create analysis h5 file
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        # TODO: think of a better file name
-        filename = os.path.basename(self.filter_bin_file_list[0])[:-4]
-        self.common_dir = os.path.join(self.results_dir, timestamp + "_" + filename)
-        # current step directory (is set in calc())
-        self.step_dir = None
-        self.offnoi_dir = os.path.join(self.common_dir, "offnoi")
-        self.filter_dir = os.path.join(self.common_dir, "filter")
+        self.analysis_file_name = f"{timestamp}_{self.filter_data_file}.h5"
+        io.create_analysis_h5(self.results_dir, self.analysis_file_name)
+        self._logger.info(
+            f"Created analysis h5 file: {self.results_dir}/{self.analysis_file_name}"
+        )
         self._logger.info(f"Parameters loaded:")
         self.params.print_contents()
 
-    def _update_offset_raw(self, file_name: str, new_data: np.ndarray) -> None:
-        file_path = os.path.join(self.offnoi_dir, file_name)
-        if os.path.exists(file_path):
-            old_data = np.load(file_path)
-            output = (
-                old_data * self.total_frames_processed
-                + new_data * self.final_frames_per_step
-            ) / (self.total_frames_processed + self.final_frames_per_step)
-        else:
-            output = new_data
-        np.save(file_path, output)
-
-    def _update_npy_file(self, file_name: str, new_data: np.ndarray) -> None:
-        file_path = os.path.join(self.step_dir, file_name)
-        if os.path.exists(file_path):
-            old_data = np.load(file_path)
-            output = np.concatenate((old_data, new_data), axis=0)
-        else:
-            output = new_data
-        np.save(file_path, output)
-
-    """
-    Right now, sel.nframes is the number of frames that are processed per bin file.
-    """
-
+    # TODO: Continue from here. Use get data from h5 file to get the data from the h5 file
+    # TODO: only get nreps that are actually needed from data
+    # TODO: write to the new analyis h5 file
     def calc_offnoi_step(self) -> None:
-        self.step_dir = self.offnoi_dir
-        # create the working directory for the offnoi step
-        os.makedirs(self.step_dir, exist_ok=True)
-        self._logger.info(f"Created working directory for offnoi step: {self.step_dir}")
         estimated_ram_usage = (
             af.get_ram_usage_in_gb(
                 self.offnoi_nframes, self.column_size, self.offnoi_nreps, self.row_size
@@ -121,60 +104,34 @@ class RoanSteps:
         # in a step (after deleting bad frames)
         self.final_frames_per_step = 0
 
-        for bin_file in self.offnoi_bin_file_list:
-            self._logger.info(f"Start processing bin file: {bin_file}")
-            # the initial offset for reading the bin file, first 8 bytes are header
-            self.current_offset = 8
-            for step in range(steps_needed):
-                self._logger.info(
-                    f"Performing step {step+1} of {steps_needed} total Steps"
-                )
-                # load data from bin file sequentially
-                data, self.current_offset = an.get_data(
-                    bin_file,
-                    self.column_size,
-                    self.row_size,
-                    self.key_ints,
-                    self.offnoi_nreps,
-                    self.frames_per_step,
-                    self.current_offset,
-                )
-
-                # exclude nreps_eval from data
-                if self.offnoi_nreps_eval:
-                    data = an.exclude_nreps_eval(data, self.offnoi_nreps_eval)
-                    self._logger.debug(f"Shape of data: {data.shape}")
-                # set values of all frames and nreps of bad pixels to nan
-                if self.bad_pixels:
-                    data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
-                # delete bad frames from data
-                if self.offnoi_thres_bad_frames != 0 or self.offnoi_thres_mips != 0:
-                    data = an.exclude_mips_and_bad_frames(
-                        data, self.offnoi_thres_mips, self.offnoi_thres_bad_frames
-                    )
-                    self._logger.debug(f"Shape of data: {data.shape}")
-
-                self.final_frames_per_step = data.shape[0]
-                # Calculate offset_raw on the raw data and update file
-                avg_over_frames = af.get_avg_over_frames(data)
-                self._update_offset_raw("offnoi_offset_raw.npy", avg_over_frames)
-                # offset the data and correct for common mode if necessary
-                data -= avg_over_frames[np.newaxis, :, :, :]
-                if self.offnoi_comm_mode is True:
-                    an.correct_common_mode(data)
-                # calculate rndr signals and update file
-                avg_over_nreps = af.get_avg_over_nreps(data)
-                self._update_npy_file("offnoi_rndr_signals.npy", avg_over_nreps)
-                # calculate bad slopes and update file
-                if self.offnoi_thres_bad_slopes != 0:
-                    slopes = an.get_bad_slopes(
-                        data, self.offnoi_thres_bad_slopes, self.total_frames_processed
-                    )
-                    self._update_npy_file("offnoi_bad_slopes_slopes.npy", slopes)
-                self.total_frames_processed += self.final_frames_per_step
-                self._logger.info(
-                    f"Finished step {step+1} of {steps_needed} total Steps"
-                )
+        # set values of all frames and nreps of bad pixels to nan
+        if self.bad_pixels:
+            data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
+        # delete bad frames from data
+        if self.offnoi_thres_bad_frames != 0 or self.offnoi_thres_mips != 0:
+            data = an.exclude_mips_and_bad_frames(
+                data, self.offnoi_thres_mips, self.offnoi_thres_bad_frames
+            )
+            self._logger.debug(f"Shape of data: {data.shape}")
+        self.final_frames_per_step = data.shape[0]
+        # Calculate offset_raw on the raw data and update file
+        avg_over_frames = af.get_avg_over_frames(data)
+        self._update_offset_raw("offnoi_offset_raw.npy", avg_over_frames)
+        # offset the data and correct for common mode if necessary
+        data -= avg_over_frames[np.newaxis, :, :, :]
+        if self.offnoi_comm_mode is True:
+            an.correct_common_mode(data)
+        # calculate rndr signals and update file
+        avg_over_nreps = af.get_avg_over_nreps(data)
+        self._update_npy_file("offnoi_rndr_signals.npy", avg_over_nreps)
+        # calculate bad slopes and update file
+        if self.offnoi_thres_bad_slopes != 0:
+            slopes = an.get_bad_slopes(
+                data, self.offnoi_thres_bad_slopes, self.total_frames_processed
+            )
+            self._update_npy_file("offnoi_bad_slopes_slopes.npy", slopes)
+        self.total_frames_processed += self.final_frames_per_step
+        self._logger.info(f"Finished step {step+1} of {steps_needed} total Steps")
 
         # TODO: paralellize this
         slopes = np.load(os.path.join(self.step_dir, "offnoi_bad_slopes_slopes.npy"))

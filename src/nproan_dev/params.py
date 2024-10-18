@@ -15,14 +15,10 @@ class Params:
     """
     common_params = {
         "common_results_dir": "",  # str
-        "common_column_size": 64,  # int
-        "common_row_size": 64,  # int
-        "common_key_ints": 3,  # int
         "common_bad_pixels": [],  # list of tuples
     }
     offnoi_params = {
-        "offnoi_bin_file": [],  # list of str
-        "offnoi_nreps": 200,  # int
+        "offnoi_data_file": "",  # list of str
         "offnoi_nframes": 100,  # int
         "offnoi_nreps_eval": [0, -1, 1],  # list of ints
         "offnoi_comm_mode": True,  # bool
@@ -31,8 +27,7 @@ class Params:
         "offnoi_thres_bad_slopes": 5,  # float
     }
     filter_params = {
-        "filter_bin_file": [],  # list of str
-        "filter_nreps": 200,  # int
+        "filter_data_file": "",  # list of str
         "filter_nframes": 100,  # int
         "filter_nreps_eval": [0, -1, 1],  # list of ints
         "filter_comm_mode": True,  # bool
@@ -47,20 +42,15 @@ class Params:
     # types are checked when they are read
     params_types = {
         "common_results_dir": str,
-        "common_column_size": int,
-        "common_row_size": int,
-        "common_key_ints": int,
         "common_bad_pixels": list,  # actually, list of tuples
-        "offnoi_bin_file": list,
-        "offnoi_nreps": int,
+        "offnoi_data_file": str,
         "offnoi_nframes": int,
         "offnoi_nreps_eval": list,
         "offnoi_comm_mode": bool,
         "offnoi_thres_mips": (int, float),
         "offnoi_thres_bad_frames": (int, float),
         "offnoi_thres_bad_slopes": (int, float),
-        "filter_bin_file": list,
-        "filter_nreps": int,
+        "filter_data_file": str,
         "filter_nframes": int,
         "filter_nreps_eval": list,
         "filter_comm_mode": bool,
