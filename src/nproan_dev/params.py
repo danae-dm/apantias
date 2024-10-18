@@ -19,7 +19,7 @@ class Params:
     }
     offnoi_params = {
         "offnoi_data_file": "",  # list of str
-        "offnoi_nframes": 100,  # int
+        "offnoi_nframes_eval": [0, 100],  # list of ints
         "offnoi_nreps_eval": [0, -1, 1],  # list of ints
         "offnoi_comm_mode": True,  # bool
         "offnoi_thres_mips": 1000,  # float
@@ -28,7 +28,7 @@ class Params:
     }
     filter_params = {
         "filter_data_file": "",  # list of str
-        "filter_nframes": 100,  # int
+        "filter_nframes_eval": [0, 100],  # list int
         "filter_nreps_eval": [0, -1, 1],  # list of ints
         "filter_comm_mode": True,  # bool
         "filter_thres_mips": 1000,  # float
@@ -44,14 +44,14 @@ class Params:
         "common_results_dir": str,
         "common_bad_pixels": list,  # actually, list of tuples
         "offnoi_data_file": str,
-        "offnoi_nframes": int,
+        "offnoi_nframes_eval": list,
         "offnoi_nreps_eval": list,
         "offnoi_comm_mode": bool,
         "offnoi_thres_mips": (int, float),
         "offnoi_thres_bad_frames": (int, float),
         "offnoi_thres_bad_slopes": (int, float),
         "filter_data_file": str,
-        "filter_nframes": int,
+        "filter_nframes_eval": list,
         "filter_nreps_eval": list,
         "filter_comm_mode": bool,
         "filter_thres_mips": (int, float),
