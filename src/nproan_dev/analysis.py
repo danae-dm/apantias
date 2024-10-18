@@ -256,7 +256,7 @@ def exclude_mips_and_bad_frames(
     return data[~mask]
 
 
-def get_bad_slopes(data: np.ndarray) -> np.ndarray:
+def get_slopes(data: np.ndarray) -> np.ndarray:
     """
     Calculates the slope over nreps for every pixel and frame.
     It then fits a gaussian to the histogram of the slopes, and determines
