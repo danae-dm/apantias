@@ -1,6 +1,6 @@
 import h5py
 import numpy as np
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import os
 
 from . import logger
@@ -85,7 +85,7 @@ def read_data_chunk_from_bin(
     return inp_data, offset
 
 
-def create_data_h5_from_bins(
+def create_data_file_from_bins(
     bin_files: List[str],
     output_folder: str,
     output_filename: str,
@@ -178,7 +178,7 @@ def create_data_h5_from_bins(
         dataset.attrs["total_frames"] = dataset.shape[0]
 
 
-def display_h5_structure(file_path: str) -> None:
+def display_file_structure(file_path: str) -> None:
     """
     Displays the structure of an HDF5 file.
 
@@ -201,7 +201,7 @@ def display_h5_structure(file_path: str) -> None:
         file.visititems(print_structure)
 
 
-def get_params_from_data_h5(file_path: str) -> Tuple[int, int, int]:
+def get_params_from_data_file(file_path: str) -> Tuple[int, int, int]:
     """
     Get the parameters from the data h5 file.
 
@@ -218,44 +218,53 @@ def get_params_from_data_h5(file_path: str) -> Tuple[int, int, int]:
     return total_frames, column_size, row_size, nreps
 
 
-def create_analysis_h5(
+def create_analysis_file(
     output_folder, output_filename, offnoi_data_file, filter_data_file
-):
+) -> None:
     """
     Create an analysis h5 file with the correct structure.
     This must be provided with an existing data file.
     """
     output_file = os.path.join(output_folder, output_filename)
-    data_folder, data_file_name = os.path.split(data_file)
-    # check if h5 file already exists
     if os.path.exists(output_file):
         raise Exception(f"File {output_file} already exists. Please delete")
+    # raise excption when data files dont exist
+    if os.path.exists(offnoi_data_file) == False:
+        raise Exception(f"File {offnoi_data_file} does not exist.")
+    if os.path.exists(filter_data_file) == False:
+        raise Exception(f"File {filter_data_file} does not exist.")
     # create the hdf5 file
     with h5py.File(output_file, "w") as f:
         f.attrs["description"] = "This file contains the results of the analysis."
-        f["data"] = h5py.ExternalLink(data_folder, data_file_name)
+
         f.create_group("offnoi")
+        f["offnoi"].attrs["data"] = offnoi_data_file
         f["offnoi"].attrs[
             "description"
         ] = "This group contains the results of the offset noise analysis."
-        f["offnoi"].attrs["bin_files"] = offnoi_data_file["data"].attrs["bin_files"]
-        f["offnoi"].attrs["column_size"] = offnoi_data_file["data"].attrs["column_size"]
-        f["offnoi"].attrs["row_size"] = offnoi_data_file["data"].attrs["row_size"]
-        f["offnoi"].attrs["nreps"] = offnoi_data_file["data"].attrs["nreps"]
-        f["offnoi"].attrs["total_frames"] = offnoi_data_file["data"].attrs[
-            "total_frames"
-        ]
+        with h5py.File(offnoi_data_file, "r") as offnoi_data_file:
+            f["offnoi"].attrs["bin_files"] = offnoi_data_file["data"].attrs["bin_files"]
+            f["offnoi"].attrs["column_size"] = offnoi_data_file["data"].attrs[
+                "column_size"
+            ]
+            f["offnoi"].attrs["row_size"] = offnoi_data_file["data"].attrs["row_size"]
+            f["offnoi"].attrs["nreps"] = offnoi_data_file["data"].attrs["nreps"]
+            f["offnoi"].attrs["total_frames"] = offnoi_data_file["data"].shape[0]
+
         f.create_group("filter")
+        f["filter"].attrs["data"] = filter_data_file
         f["filter"].attrs[
             "description"
         ] = "This group contains the results of the filter analysis."
-        f["filter"].attrs["bin_files"] = filter_data_file["data"].attrs["bin_files"]
-        f["filter"].attrs["column_size"] = filter_data_file["data"].attrs["column_size"]
-        f["filter"].attrs["row_size"] = filter_data_file["data"].attrs["row_size"]
-        f["filter"].attrs["nreps"] = filter_data_file["data"].attrs["nreps"]
-        f["filter"].attrs["total_frames"] = filter_data_file["data"].attrs[
-            "total_frames"
-        ]
+        with h5py.File(filter_data_file, "r") as filter_data_file:
+            f["filter"].attrs["bin_files"] = filter_data_file["data"].attrs["bin_files"]
+            f["filter"].attrs["column_size"] = filter_data_file["data"].attrs[
+                "column_size"
+            ]
+            f["filter"].attrs["row_size"] = filter_data_file["data"].attrs["row_size"]
+            f["filter"].attrs["nreps"] = filter_data_file["data"].attrs["nreps"]
+            f["filter"].attrs["total_frames"] = filter_data_file["data"].shape[0]
+
         f.create_group("gain")
         f["gain"].attrs[
             "description"
@@ -263,8 +272,11 @@ def create_analysis_h5(
         _logger.info(f"Initialized empty file: {output_file}")
 
 
-def get_data_from_h5(
-    file_path: str, dataset_name: str, frames: Tuple[int], nreps: Tuple[int]
+def get_data_from_file(
+    file_path: str,
+    group_name: str,
+    dataset_name: str,
+    slicing: str = None,
 ) -> np.ndarray:
     """
     Get the data from the HDF5 file.
@@ -272,21 +284,28 @@ def get_data_from_h5(
     Args:
         file_path (str): Path to the HDF5 file.
         dataset_name (str): Name of the dataset.
+        slicing (str): Numpy slicing string (e.g., "[0:10, :, 50:100, :]").
     Returns:
         data: np.ndarray
     """
     with h5py.File(file_path, "r") as file:
-        data = file[dataset_name][frames[0] : frames[1], :, nreps[0] : nreps[1], :]
+        dataset = file[f"{group_name}/{dataset_name}"]
+        if slicing is not None:
+            print(_parse_numpy_slicing(slicing))
+            data = dataset[_parse_numpy_slicing(slicing)]
+        else:
+            data = dataset[:]
+
         data = data.astype(np.float64)
     return data
 
 
-def create_dataset_in_group_h5(
+def create_dataset_in_group(
     file_path: str,
     group_name: str,
     dataset_name: str,
     data: np.ndarray,
-    maxshape: Tuple[int] = None,
+    shape: Tuple[int] = None,
     attributes: dict = None,
     compression: str = None,
 ) -> None:
@@ -298,7 +317,7 @@ def create_dataset_in_group_h5(
         group_name (str): Name of the group.
         dataset_name (str): Name of the dataset.
         data (np.ndarray): Data to save.
-        maxshape (tuple): Maximum shape of the dataset, set this if you want to append data later.
+        shape (tuple): Maximum shape of the dataset, this must be set if data is appended to the dataset.
         attributes (dict): Attributes to save.
         compression (str): Compression to use.
     """
@@ -312,13 +331,21 @@ def create_dataset_in_group_h5(
             raise Exception(
                 f"Dataset {dataset_name} already exists in the group {group_name}."
             )
-        if not maxshape:
+        if not shape:
             dataset = group.create_dataset(
                 dataset_name, data=data, compression=compression
             )
         else:
+            maxshape = (None,) + shape[1:]
+            print(maxshape)
+            chunks = (1,) + shape[1:]
+            print(chunks)
             dataset = group.create_dataset(
-                dataset_name, data=data, maxshape=maxshape, compression=compression
+                dataset_name,
+                data=data,
+                maxshape=maxshape,
+                chunks=chunks,
+                compression=compression,
             )
 
         if attributes:
@@ -326,7 +353,36 @@ def create_dataset_in_group_h5(
                 dataset.attrs[key] = value
 
 
-def add_to_dataset_h5(file_path: str, dataset_name: str, data: np.ndarray) -> None:
+def _parse_numpy_slicing(slicing_str: str) -> Tuple[slice, ...]:
+    """
+    Parse a numpy slicing string and convert it to a tuple of slice objects.
+
+    Args:
+        slicing_str (str): Numpy slicing string (e.g., "0:10, :, 50:100, :").
+
+    Returns:
+        Tuple[slice, ...]: A tuple of slice objects.
+    """
+    output = []
+    slicing_str = slicing_str.replace(" ", "")
+    slicing_str = slicing_str.replace("[", "")
+    slicing_str = slicing_str.replace("]", "")
+    slice_parts = slicing_str.split(",")
+    for item in slice_parts:
+        if item == ":":
+            output.append(slice(None))
+            continue
+        if ":" in item:
+            item = item.split(":")
+            output.append(slice(int(item[0]), int(item[1])))
+        else:
+            output.append(int(item))
+    return tuple(output)
+
+
+def add_data_to_dataset(
+    file_path: str, groupt_name: str, dataset_name: str, data: np.ndarray
+) -> None:
     """
     Add data to a dataset in an HDF5 file.
 
@@ -338,8 +394,9 @@ def add_to_dataset_h5(file_path: str, dataset_name: str, data: np.ndarray) -> No
         compression (str): Compression to use.
     """
     with h5py.File(file_path, "a") as file:
-        if dataset_name not in file:
-            raise Exception(f"Dataset {dataset_name} does not exist in the file.")
-        dataset = file[dataset_name]
+        full_dataset_path = f"{groupt_name}/{dataset_name}"
+        if full_dataset_path not in file:
+            raise Exception(f"Dataset {full_dataset_path} does not exist in the file.")
+        dataset = file[full_dataset_path]
         dataset.resize(dataset.shape[0] + data.shape[0], axis=0)
         dataset[-data.shape[0] :] = data
