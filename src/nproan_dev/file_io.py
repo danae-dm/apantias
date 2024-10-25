@@ -211,7 +211,7 @@ def get_params_from_data_file(file_path: str) -> Tuple[int, int, int]:
         column_size, row_size, nreps: Tuple[int, int, int]
     """
     with h5py.File(file_path, "r") as file:
-        total_frames = file["data"].attrs["total_frames"]
+        total_frames = file["data"].shape[0]
         column_size = file["data"].attrs["column_size"]
         row_size = file["data"].attrs["row_size"]
         nreps = file["data"].attrs["nreps"]
@@ -276,7 +276,7 @@ def get_data_from_file(
     file_path: str,
     group_name: str,
     dataset_name: str,
-    slicing: str = None,
+    slices: List[slice] = None,
 ) -> np.ndarray:
     """
     Get the data from the HDF5 file.
@@ -284,15 +284,19 @@ def get_data_from_file(
     Args:
         file_path (str): Path to the HDF5 file.
         dataset_name (str): Name of the dataset.
-        slicing (str): Numpy slicing string (e.g., "[0:10, :, 50:100, :]").
+        slicing (list): List of slices to apply to the dataset.
     Returns:
         data: np.ndarray
     """
     with h5py.File(file_path, "r") as file:
         dataset = file[f"{group_name}/{dataset_name}"]
-        if slicing is not None:
-            print(_parse_numpy_slicing(slicing))
-            data = dataset[_parse_numpy_slicing(slicing)]
+        if slices is not None:
+            if dataset.ndim != len(slices):
+                raise Exception(
+                    f"Dataset has {dataset.ndim} dimensions, but {len(slices)} slices were provided."
+                )
+            else:
+                data = dataset[*slices]
         else:
             data = dataset[:]
 
@@ -300,103 +304,53 @@ def get_data_from_file(
     return data
 
 
-def create_dataset_in_group(
+def add_array(
     file_path: str,
     group_name: str,
     dataset_name: str,
     data: np.ndarray,
-    shape: Tuple[int] = None,
-    attributes: dict = None,
     compression: str = None,
 ) -> None:
     """
-    Create a dataset in a specific group within an HDF5 file.
+    Adds an array to a Dataset. If the dataset exists, the array is appended.
+    Dataset and group is created if not already present.
 
     Args:
         file_path (str): Path to the HDF5 file.
         group_name (str): Name of the group.
         dataset_name (str): Name of the dataset.
         data (np.ndarray): Data to save.
-        shape (tuple): Maximum shape of the dataset, this must be set if data is appended to the dataset.
         attributes (dict): Attributes to save.
         compression (str): Compression to use.
     """
     with h5py.File(file_path, "a") as file:
         if group_name not in file:
-            raise Exception(f"Group {group_name} does not exist in the file.")
+            file.create_group(group_name)
+            _logger.info(f"Created group {group_name}")
 
         group = file[group_name]
 
-        if dataset_name in group:
-            raise Exception(
-                f"Dataset {dataset_name} already exists in the group {group_name}."
-            )
-        if not shape:
-            dataset = group.create_dataset(
-                dataset_name, data=data, compression=compression
-            )
-        else:
-            maxshape = (None,) + shape[1:]
-            print(maxshape)
-            chunks = (1,) + shape[1:]
-            print(chunks)
-            dataset = group.create_dataset(
+        if dataset_name not in group:
+            group.create_dataset(
                 dataset_name,
                 data=data,
-                maxshape=maxshape,
-                chunks=chunks,
+                maxshape=(None, *data.shape[1:]),
+                chunks=(1, *data.shape[1:]),
                 compression=compression,
             )
-
-        if attributes:
-            for key, value in attributes.items():
-                dataset.attrs[key] = value
-
-
-def _parse_numpy_slicing(slicing_str: str) -> Tuple[slice, ...]:
-    """
-    Parse a numpy slicing string and convert it to a tuple of slice objects.
-
-    Args:
-        slicing_str (str): Numpy slicing string (e.g., "0:10, :, 50:100, :").
-
-    Returns:
-        Tuple[slice, ...]: A tuple of slice objects.
-    """
-    output = []
-    slicing_str = slicing_str.replace(" ", "")
-    slicing_str = slicing_str.replace("[", "")
-    slicing_str = slicing_str.replace("]", "")
-    slice_parts = slicing_str.split(",")
-    for item in slice_parts:
-        if item == ":":
-            output.append(slice(None))
-            continue
-        if ":" in item:
-            item = item.split(":")
-            output.append(slice(int(item[0]), int(item[1])))
+            dataset = group[dataset_name]
+            _logger.info(
+                f"Added dataset {dataset_name} to group {group_name} and added data of shape {dataset.shape}"
+            )
         else:
-            output.append(int(item))
-    return tuple(output)
-
-
-def add_data_to_dataset(
-    file_path: str, groupt_name: str, dataset_name: str, data: np.ndarray
-) -> None:
-    """
-    Add data to a dataset in an HDF5 file.
-
-    Args:
-        file_path (str): Path to the HDF5 file.
-        dataset_name (str): Name of the dataset.
-        data (np.ndarray): Data to save.
-        attributes (dict): Attributes to save.
-        compression (str): Compression to use.
-    """
-    with h5py.File(file_path, "a") as file:
-        full_dataset_path = f"{groupt_name}/{dataset_name}"
-        if full_dataset_path not in file:
-            raise Exception(f"Dataset {full_dataset_path} does not exist in the file.")
-        dataset = file[full_dataset_path]
-        dataset.resize(dataset.shape[0] + data.shape[0], axis=0)
-        dataset[-data.shape[0] :] = data
+            if group[dataset_name].shape[1:] != data.shape[1:]:
+                raise Exception(
+                    f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({group[dataset_name].shape[1:]})"
+                )
+            else:
+                dataset = group[dataset_name]
+                dataset.resize(dataset.shape[0] + data.shape[0], axis=0)
+                dataset[-data.shape[0] :] = data
+                _logger.info(
+                    f"Appended data to dataset {dataset_name} in group {group_name}. Shape is now {dataset.shape}"
+                )

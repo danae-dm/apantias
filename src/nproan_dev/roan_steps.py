@@ -32,7 +32,7 @@ class RoanSteps:
 
         # offnoi parameters from params file
         self.offnoi_data_file = self.params_dict["offnoi_data_file"]
-        self.offnoi_nframes = self.params_dict["offnoi_nframes"]
+        self.offnoi_nframes_eval = self.params_dict["offnoi_nframes_eval"]
         self.offnoi_nreps_eval = self.params_dict["offnoi_nreps_eval"]
         self.offnoi_comm_mode = self.params_dict["offnoi_comm_mode"]
         self.offnoi_thres_mips = self.params_dict["offnoi_thres_mips"]
@@ -41,7 +41,7 @@ class RoanSteps:
 
         # filter parameters from params file
         self.filter_data_file = self.params_dict["filter_data_file"]
-        self.filter_nframes = self.params_dict["filter_nframes"]
+        self.filter_nframes_eval = self.params_dict["filter_nframes_eval"]
         self.filter_nreps_eval = self.params_dict["filter_nreps_eval"]
         self.filter_comm_mode = self.params_dict["filter_comm_mode"]
         self.filter_thres_mips = self.params_dict["filter_thres_mips"]
@@ -52,10 +52,10 @@ class RoanSteps:
 
         # parameters from data_h5 files
         total_frames_offnoi, column_size_offnoi, row_size_offnoi, nreps_offnoi = (
-            io.get_params_from_data_h5(self.offnoi_data_file)
+            io.get_params_from_data_file(self.offnoi_data_file)
         )
         total_frames_filter, column_size_filter, row_size_filter, nreps_filter = (
-            io.get_params_from_data_h5(self.filter_data_file)
+            io.get_params_from_data_file(self.filter_data_file)
         )
         if (
             column_size_offnoi != column_size_filter
@@ -66,15 +66,50 @@ class RoanSteps:
             )
         self.column_size = column_size_offnoi
         self.row_size = row_size_offnoi
-        self.offnoi_nreps = nreps_offnoi
+        self.offnoi_total_nreps = nreps_offnoi
         self.offnoi_total_frames = total_frames_offnoi
-        self.filter_nreps = nreps_filter
+        self.filter_total_nreps = nreps_filter
         self.filter_total_frames = total_frames_filter
+
+        if self.offnoi_nframes_eval[1] == -1:
+            self.offnoi_nframes_eval[1] = self.offnoi_total_frames
+        if self.offnoi_nreps_eval[1] == -1:
+            self.offnoi_nreps_eval[1] = self.offnoi_total_nreps
+
+        # create slices
+        self.offnoi_nreps_slice = slice(*self.offnoi_nreps_eval)
+        self.offnoi_nframes_slice = slice(*self.offnoi_nframes_eval)
+        self.filter_nreps_slice = slice(*self.filter_nreps_eval)
+        self.filter_nframes_slice = slice(*self.filter_nframes_eval)
+
+        # set variables to number of nreps_eval and nframes_eval
+        self.offnoi_nreps_eval = int(
+            (self.offnoi_nreps_eval[1] - self.offnoi_nreps_eval[0])
+            / self.offnoi_nreps_eval[2]
+        )
+        self.offnoi_nframes_eval = int(
+            (self.offnoi_nframes_eval[1] - self.offnoi_nframes_eval[0])
+            / self.offnoi_nframes_eval[2]
+        )
+        self.filter_nreps_eval = int(
+            (self.filter_nreps_eval[1] - self.filter_nreps_eval[0])
+            / self.filter_nreps_eval[2]
+        )
+        self.filter_nframes_eval = int(
+            (self.filter_nframes_eval[1] - self.filter_nframes_eval[0])
+            / self.filter_nframes_eval[2]
+        )
 
         # create analysis h5 file
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.analysis_file_name = f"{timestamp}_{self.filter_data_file}.h5"
-        io.create_analysis_h5(self.results_dir, self.analysis_file_name)
+        self.analysis_file_name = f"{timestamp}_{self.filter_nframes_eval}_frames_{self.filter_nreps_eval}_nreps.h5"
+        self.analysis_file = os.path.join(self.results_dir, self.analysis_file_name)
+        io.create_analysis_file(
+            self.results_dir,
+            self.analysis_file_name,
+            self.offnoi_data_file,
+            self.filter_data_file,
+        )
         self._logger.info(
             f"Created analysis h5 file: {self.results_dir}/{self.analysis_file_name}"
         )
@@ -85,11 +120,15 @@ class RoanSteps:
     # TODO: only get nreps that are actually needed from data
     # TODO: write to the new analyis h5 file
     def calc_offnoi_step(self) -> None:
+
         estimated_ram_usage = (
             af.get_ram_usage_in_gb(
-                self.offnoi_nframes, self.column_size, self.offnoi_nreps, self.row_size
+                self.offnoi_nframes_eval,
+                self.column_size,
+                self.offnoi_nreps_eval,
+                self.row_size,
             )
-            * 2.5
+            * 2.5  # this is estimated, better safe than sorry
         )
         self._logger.info(f"RAM available: {self.ram_available:.1f} GB")
         self._logger.info(f"Estimated RAM usage: {estimated_ram_usage:.1f} GB")
@@ -97,47 +136,55 @@ class RoanSteps:
         self._logger.info(f"Steps needed: {steps_needed}")
 
         # (planned) frames per step, so that ram usage is below the available ram
-        self.frames_per_step = int(self.offnoi_nframes / steps_needed)
-        # total processed frames over all steps
-        self.total_frames_processed = 0
-        # final frames per step, this is the actual number of frames processed
-        # in a step (after deleting bad frames)
-        self.final_frames_per_step = 0
+        frames_per_step = int(self.offnoi_nframes_eval / steps_needed)
 
-        # set values of all frames and nreps of bad pixels to nan
-        if self.bad_pixels:
-            data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
-        # delete bad frames from data
-        if self.offnoi_thres_bad_frames != 0 or self.offnoi_thres_mips != 0:
-            data = an.exclude_mips_and_bad_frames(
-                data, self.offnoi_thres_mips, self.offnoi_thres_bad_frames
+        # total processed frames over all steps
+        total_frames_processed = 0
+
+        for step in range(steps_needed):
+            self._logger.info(f"Start processing step {step+1} of {steps_needed}")
+            current_frame_slice = slice(
+                total_frames_processed,
+                total_frames_processed + frames_per_step,
             )
-            self._logger.debug(f"Shape of data: {data.shape}")
-        self.final_frames_per_step = data.shape[0]
-        # Calculate offset_raw on the raw data and update file
-        avg_over_frames = af.get_avg_over_frames(data)
-        self._update_offset_raw("offnoi_offset_raw.npy", avg_over_frames)
-        # offset the data and correct for common mode if necessary
-        data -= avg_over_frames[np.newaxis, :, :, :]
-        if self.offnoi_comm_mode is True:
-            an.correct_common_mode(data)
-        # calculate rndr signals and update file
-        avg_over_nreps = af.get_avg_over_nreps(data)
-        self._update_npy_file("offnoi_rndr_signals.npy", avg_over_nreps)
-        # calculate bad slopes and update file
-        if self.offnoi_thres_bad_slopes != 0:
-            slopes = an.get_bad_slopes(
-                data, self.offnoi_thres_bad_slopes, self.total_frames_processed
-            )
-            self._update_npy_file("offnoi_bad_slopes_slopes.npy", slopes)
-        self.total_frames_processed += self.final_frames_per_step
-        self._logger.info(f"Finished step {step+1} of {steps_needed} total Steps")
+            slices = [
+                current_frame_slice,
+                slice(None),
+                self.offnoi_nreps_slice,
+                slice(None),
+            ]
+            data = io.get_data_from_file(self.offnoi_data_file, "", "data", slices)
+            self._logger.info(f"Data loaded: {data.shape}")
+            # set values of all frames and nreps of bad pixels to nan
+            if self.bad_pixels:
+                data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
+            # delete bad frames from data
+            if self.offnoi_thres_bad_frames != 0 or self.offnoi_thres_mips != 0:
+                data = an.exclude_mips_and_bad_frames(
+                    data, self.offnoi_thres_mips, self.offnoi_thres_bad_frames
+                )
+                self._logger.debug(f"Shape of data: {data.shape}")
+            # Calculate offset_raw on the raw data and update file
+            avg_over_frames = af.get_avg_over_frames(data)
+            io.add_array(self.analysis_file, "offnoi", "offset_raw", avg_over_frames)
+            # offset the data and correct for common mode if necessary
+            data -= avg_over_frames[np.newaxis, :, :, :]
+            if self.offnoi_comm_mode is True:
+                an.correct_common_mode(data)
+            # calculate rndr signals and update file
+            avg_over_nreps = af.get_avg_over_nreps(data)
+            io.add_array(self.analysis_file, "offnoi", "rndr_signals", avg_over_nreps)
+            # calculate bad slopes and update file
+            if self.offnoi_thres_bad_slopes != 0:
+                slopes = an.get_slopes(data)
+                io.add_array(self.analysis_file, "offnoi", "slopes", slopes)
+            total_frames_processed += frames_per_step
+            self._logger.info(f"Finished step {step+1} of {steps_needed} total Steps")
 
         # TODO: paralellize this
-        slopes = np.load(os.path.join(self.step_dir, "offnoi_bad_slopes_slopes.npy"))
-        bad_slopes_pos = np.full(
-            (self.offnoi_nframes, self.column_size, self.row_size), False, dtype=bool
-        )
+        slopes = io.get_data_from_file(self.analysis_file, "offnoi", "slopes")
+        print(f"!!!! Slopes shape: {slopes.shape}")
+        bad_slopes_pos = np.full(slopes.shape, False, dtype=bool)
         fit_params_list = []
 
         for row in range(slopes.shape[1]):
@@ -157,30 +204,27 @@ class RoanSteps:
                 bad_slopes_pos[frame, row, col] = True
                 fit_params_list.append(fit_pixelwise)
         bad_slopes_fit = np.vstack(fit_params_list)
-        np.save(
-            os.path.join(self.step_dir, "offnoi_bad_slopes_pos.npy"), bad_slopes_pos
+
+        io.add_array(self.analysis_file, "offnoi", "bad_slopes_pos", bad_slopes_pos)
+        io.add_array(self.analysis_file, "offnoi", "bad_slopes_fit", bad_slopes_fit)
+
+        avg_over_nreps = io.get_data_from_file(
+            self.analysis_file, "offnoi", "rndr_signals"
         )
-        np.save(
-            os.path.join(self.step_dir, "offnoi_bad_slopes_fit.npy"), bad_slopes_fit
+        avg_over_nreps_slopes_removed = avg_over_nreps.copy()
+        avg_over_nreps_slopes_removed[bad_slopes_pos] = np.nan
+        io.add_array(
+            self.analysis_file,
+            "offnoi",
+            "rndr_signals_slopes_removed",
+            avg_over_nreps_slopes_removed,
         )
 
-        avg_over_nreps_final = np.load(
-            os.path.join(self.step_dir, "offnoi_rndr_signals.npy")
-        )
-        bad_slopes_pos = np.load(
-            os.path.join(self.step_dir, "offnoi_bad_slopes_pos.npy"), allow_pickle=True
-        )
-        avg_over_nreps_slopes_removed = pf.set_values_to_nan(
-            avg_over_nreps_final, bad_slopes_pos
-        )
         self._logger.info("Fitting pixelwise for offset and noise")
         fitted = fit.get_fit_gauss(avg_over_nreps)
-        fitted_slopes_removed = fit.get_fit_gauss(avg_over_nreps_slopes_removed)
-        np.save(os.path.join(self.step_dir, "offnoi_fit.npy"), fitted)
-        np.save(
-            os.path.join(self.step_dir, "offnoi_fit_slopes_removed.npy"),
-            fitted_slopes_removed,
-        )
+        io.add_array(self.analysis_file, "offnoi", "fit", fitted)
+        fitted = fit.get_fit_gauss(avg_over_nreps_slopes_removed)
+        io.add_array(self.analysis_file, "offnoi", "fit_slopes_removed", fitted)
 
     def calc_filter_step(self) -> None:
         self.step_dir = self.filter_dir

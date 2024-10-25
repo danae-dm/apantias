@@ -59,9 +59,7 @@ This is NOT exposed to the user when importing nproan. It takes a long time to
 load and should be only loaded when neccesary.
 
 TODO:
-- use dictionaries in .npy files?
-- use .h5 files to store data?
-- Test cleanup branch
+- implement tracking of ignored frames
 - check documentation of functions
 - wiki schreiben
 - add type hints and write nice documentation (almost done)

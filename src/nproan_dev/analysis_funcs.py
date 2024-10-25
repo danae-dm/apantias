@@ -149,6 +149,7 @@ def get_ram_usage_in_gb(
 ) -> int:
     """
     Calculates the RAM usage in GB for a 4D array of the given dimensions.
+    Assuming float64. (8 bytes per element)
     Args:
         frames: int
         column_size: int

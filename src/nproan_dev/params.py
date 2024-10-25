@@ -19,7 +19,7 @@ class Params:
     }
     offnoi_params = {
         "offnoi_data_file": "",  # list of str
-        "offnoi_nframes_eval": [0, 100],  # list of ints
+        "offnoi_nframes_eval": [0, -1, 1],  # list of ints
         "offnoi_nreps_eval": [0, -1, 1],  # list of ints
         "offnoi_comm_mode": True,  # bool
         "offnoi_thres_mips": 1000,  # float
@@ -28,7 +28,7 @@ class Params:
     }
     filter_params = {
         "filter_data_file": "",  # list of str
-        "filter_nframes_eval": [0, 100],  # list int
+        "filter_nframes_eval": [0, -1, 1],  # list of ints
         "filter_nreps_eval": [0, -1, 1],  # list of ints
         "filter_comm_mode": True,  # bool
         "filter_thres_mips": 1000,  # float
