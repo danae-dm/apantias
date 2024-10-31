@@ -283,6 +283,7 @@ def get_data_from_file(
 
     Args:
         file_path (str): Path to the HDF5 file.
+        group_name (str): Name of the group.
         dataset_name (str): Name of the dataset.
         slicing (list): List of slices to apply to the dataset.
     Returns:
@@ -347,6 +348,14 @@ def add_array(
                 raise Exception(
                     f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({group[dataset_name].shape[1:]})"
                 )
+            if dataset_name == "offset_raw":
+                # the data here should not be stacked but averaged
+                dataset = group[dataset_name]
+                dataset = (dataset + data) / 2
+                _logger.info(
+                    f"Appended data to dataset {dataset_name} in group {group_name}. Shape is now {dataset.shape}"
+                )
+
             else:
                 dataset = group[dataset_name]
                 dataset.resize(dataset.shape[0] + data.shape[0], axis=0)
