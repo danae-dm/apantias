@@ -100,50 +100,6 @@ def get_rolling_average(data: np.ndarray, window_size: int) -> np.ndarray:
     return np.convolve(data, weights, mode="valid")
 
 
-def load_npy_files(folder: str) -> dict:
-    """
-    Looks for .npy arrays in folder and returns them all as a
-    dictionary with numpy arrays as values
-    Args:
-        folder: folder path
-    Returns:
-        dictionary of np.arrays
-    """
-    # Get a list of all .npy files in the folder
-    files = [f for f in os.listdir(folder) if f.endswith(".npy")]
-    if len(files) == 0:
-        print(f"No .npy files found in folder {folder}")
-        return None
-    # Load each file into a numpy array and store it in a dictionary
-    arrays = {}
-    for file in files:
-        # Remove the .npy extension from the filename
-        name = os.path.splitext(file)[0]
-        # Load the file and store it in the dictionary
-        arrays[name] = np.load(os.path.join(folder, file), allow_pickle=True)
-    return arrays
-
-
-def sort_with_indices(arr: np.ndarray) -> np.ndarray:
-    """
-    Sorts array in descending order and returns the indices.
-    Args:
-        arr: 1D np.array
-    Returns:
-        1D np.array
-    """
-    if np.ndim(arr) != 1:
-        _logger.error("Input data is not a 1D array.")
-        raise ValueError("Input data is not a 1D array.")
-    indexed_arr = np.column_stack((np.arange(len(arr)), arr))
-    sorted_indices = indexed_arr[np.argsort(indexed_arr[:, 1])[::-1]][:, 0]
-    return sorted_indices.astype(int)
-
-
-def get_array_from_file(folder: str, filename: str) -> np.ndarray:
-    return np.load(os.path.join(folder, filename), allow_pickle=True)
-
-
 def get_ram_usage_in_gb(
     frames: int, column_size: int, nreps: int, row_size: int
 ) -> int:

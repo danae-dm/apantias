@@ -7,22 +7,6 @@ from . import fitting
 _logger = logger.Logger(__name__, "info").get_logger()
 
 
-@njit
-def set_values_to_nan(data: np.ndarray, values: np.ndarray) -> np.ndarray:
-    """
-    Sets the values in data to np.nan.
-    Args:
-        data: np.array
-        values: np.array
-    Returns:
-        np.array
-    """
-    output = data.copy()
-    for value in values:
-        data[value[0], value[1], value[2]] = np.nan
-    return output
-
-
 @njit(parallel=True)
 def apply_slope_fit_along_frames(data):
     """
