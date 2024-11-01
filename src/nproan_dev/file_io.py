@@ -1,5 +1,6 @@
 import h5py
 import numpy as np
+import json
 from typing import List, Tuple, Optional
 import os
 
@@ -219,12 +220,32 @@ def get_params_from_data_file(file_path: str) -> Tuple[int, int, int]:
 
 
 def create_analysis_file(
-    output_folder, output_filename, offnoi_data_file, filter_data_file
+    output_folder,
+    output_filename,
+    offnoi_data_file,
+    filter_data_file,
+    parameter_file_contents,
 ) -> None:
     """
     Create an analysis h5 file with the correct structure.
     This must be provided with an existing data file.
     """
+
+    # needed to store the parameter file as a string in the h5 file
+    def convert_numpy_types(obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return obj
+
+    parameter_file_contents = {
+        k: convert_numpy_types(v) for k, v in parameter_file_contents.items()
+    }
+
     output_file = os.path.join(output_folder, output_filename)
     if os.path.exists(output_file):
         raise Exception(f"File {output_file} already exists. Please delete")
@@ -269,6 +290,16 @@ def create_analysis_file(
         f["gain"].attrs[
             "description"
         ] = "This group contains the results of the gain analysis."
+        f.create_group("parameter_json")
+
+        f["parameter_json"].attrs[
+            "description"
+        ] = "This group contains the parameter file used for the analysis."
+        f.create_dataset(
+            "parameter_json/parameter_file",
+            data=repr(parameter_file_contents),
+            dtype=h5py.special_dtype(vlen=str),
+        )
         _logger.info(f"Initialized empty file: {output_file}")
 
 

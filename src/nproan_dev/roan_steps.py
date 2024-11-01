@@ -60,6 +60,7 @@ class RoanSteps:
         total_frames_filter, column_size_filter, row_size_filter, nreps_filter = (
             io.get_params_from_data_file(self.filter_data_file)
         )
+        # check if sensor size is equal
         if (
             column_size_offnoi != column_size_filter
             or row_size_offnoi != row_size_filter
@@ -70,11 +71,13 @@ class RoanSteps:
 
         self.column_size = column_size_offnoi
         self.row_size = row_size_offnoi
+        # set total number of frames and nreps from the data file
         self.offnoi_total_nreps = nreps_offnoi
         self.offnoi_total_frames = total_frames_offnoi
         self.filter_total_nreps = nreps_filter
         self.filter_total_frames = total_frames_filter
 
+        # nreps_eval and nframes_eval is [start,stop,step], if stop is -1 it goes to the end
         if self.offnoi_nframes_eval[1] == -1:
             self.offnoi_nframes_eval[1] = self.offnoi_total_frames
         if self.offnoi_nreps_eval[1] == -1:
@@ -84,13 +87,13 @@ class RoanSteps:
         if self.filter_nreps_eval[1] == -1:
             self.filter_nreps_eval[1] = self.filter_total_nreps
 
-        # create slices
+        # create slices, these are used to get the data from the data files
         self.offnoi_nreps_slice = slice(*self.offnoi_nreps_eval)
         self.offnoi_nframes_slice = slice(*self.offnoi_nframes_eval)
         self.filter_nreps_slice = slice(*self.filter_nreps_eval)
         self.filter_nframes_slice = slice(*self.filter_nframes_eval)
 
-        # set variables to number of nreps_eval and nframes_eval
+        # set variables to number of nreps_eval and nframes_eval to be evaluated (int)
         self.offnoi_nreps_eval = int(
             (self.offnoi_nreps_eval[1] - self.offnoi_nreps_eval[0])
             / self.offnoi_nreps_eval[2]
@@ -108,6 +111,8 @@ class RoanSteps:
             / self.filter_nframes_eval[2]
         )
 
+        # check, if offnoi_nreps_eval is greater or equal than filter_nreps_eval
+        # this is necessary, because the filter step needs the offset_raw from the offnoi step
         if self.offnoi_nreps_eval < self.filter_nreps_eval:
             raise ValueError(
                 "offnoi_nreps_eval must be greater or equal than filter_nreps_eval"
@@ -118,11 +123,13 @@ class RoanSteps:
         bin_filename = os.path.basename(self.offnoi_data_file)[:-3]
         self.analysis_file_name = f"{timestamp}_{bin_filename}.h5"
         self.analysis_file = os.path.join(self.results_dir, self.analysis_file_name)
+        print(self.params_dict)
         io.create_analysis_file(
             self.results_dir,
             self.analysis_file_name,
             self.offnoi_data_file,
             self.filter_data_file,
+            self.params_dict,
         )
         self._logger.info(
             f"Created analysis h5 file: {self.results_dir}/{self.analysis_file_name}"
