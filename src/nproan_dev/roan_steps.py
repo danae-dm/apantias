@@ -6,16 +6,15 @@ from datetime import datetime
 import numpy as np
 
 from . import logger
-from . import analysis_funcs as af
+from . import utils
 from . import analysis as an
-from . import params as pm
+from . import params
 from . import fitting as fit
-from . import parallel_computations as pf
 from . import file_io as io
 
 
 class RoanSteps:
-    _logger = logger.Logger("nproan-RoanSteps", "debug").get_logger()
+    _logger = logger.Logger("nproan-RoanSteps", "info").get_logger()
 
     def __init__(self, prm_file: str, ram: int) -> None:
         self.ram_available = ram
@@ -23,7 +22,7 @@ class RoanSteps:
 
     def load(self, prm_file: str) -> None:
         # load parameter file
-        self.params = pm.Params(prm_file)
+        self.params = params.Params(prm_file)
         self.params_dict = self.params.get_dict()
 
         # polarity is from the old code, im not quite sure why it is -1
@@ -123,7 +122,6 @@ class RoanSteps:
         bin_filename = os.path.basename(self.offnoi_data_file)[:-3]
         self.analysis_file_name = f"{timestamp}_{bin_filename}.h5"
         self.analysis_file = os.path.join(self.results_dir, self.analysis_file_name)
-        print(self.params_dict)
         io.create_analysis_file(
             self.results_dir,
             self.analysis_file_name,
@@ -140,7 +138,7 @@ class RoanSteps:
     def calc_offnoi_step(self) -> None:
 
         estimated_ram_usage = (
-            af.get_ram_usage_in_gb(
+            utils.get_ram_usage_in_gb(
                 self.offnoi_nframes_eval,
                 self.column_size,
                 self.offnoi_nreps_eval,
@@ -186,14 +184,14 @@ class RoanSteps:
                 )
                 self._logger.debug(f"Shape of data: {data.shape}")
             # Calculate offset_raw on the raw data and update file
-            avg_over_frames = af.get_avg_over_frames(data)
+            avg_over_frames = utils.get_avg_over_frames(data)
             io.add_array(self.analysis_file, "offnoi", "offset_raw", avg_over_frames)
             # offset the data and correct for common mode if necessary
             data -= avg_over_frames[np.newaxis, :, :, :]
             if self.offnoi_comm_mode is True:
                 an.correct_common_mode(data)
             # calculate rndr signals and update file
-            avg_over_nreps = af.get_avg_over_nreps(data)
+            avg_over_nreps = utils.get_avg_over_nreps(data)
             io.add_array(self.analysis_file, "offnoi", "rndr_signals", avg_over_nreps)
             # calculate bad slopes and update file
             if self.offnoi_thres_bad_slopes != 0:
@@ -249,7 +247,7 @@ class RoanSteps:
     # TODO: continue here
     def calc_filter_step(self) -> None:
         estimated_ram_usage = (
-            af.get_ram_usage_in_gb(
+            utils.get_ram_usage_in_gb(
                 self.filter_nframes_eval,
                 self.column_size,
                 self.filter_nreps_eval,
@@ -305,7 +303,7 @@ class RoanSteps:
             if self.filter_comm_mode is True:
                 an.correct_common_mode(data)
             # calculate rndr signals and update file
-            avg_over_nreps = af.get_avg_over_nreps(data)
+            avg_over_nreps = utils.get_avg_over_nreps(data)
             # subtract fitted offset from data
             fitted_offset = io.get_data_from_file(self.analysis_file, "offnoi", "fit")[
                 1

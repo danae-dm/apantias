@@ -12,16 +12,17 @@ def draw_hist(
     data: np.ndarray,
     file_name: str = "histogram",
     save_to: str = None,
-    log: bool = True,
+    log: bool = False,
     **kwargs,
 ) -> None:
     """
-    Draw a histogram of the data.
+    Draw a histogram of the data. If a folder is provided, the plot is saved.
     Args:
-        np.array in any shape
-        file_name: str
-        save_to: str
-        **kwargs: passed to plt.hist
+        data: np.array in any shape
+        file_name: str (optional) default is "histogram"
+        save_to: str (optional) default is None
+        log: bool (optional) default
+        **kwargs: (optional) passed to plt.hist
     """
     plt.clf()
     plt.hist(data.ravel(), **kwargs)
@@ -38,12 +39,12 @@ def draw_heatmap(
     data: np.ndarray, file_name: str = "heatmap", save_to: str = None, **kwargs
 ) -> None:
     """
-    Draw a heatmap of the data
+    Draw a heatmap of the data. If a folder is provided, the plot is saved.
     Args:
-        np.array
-        file_name: str
-        save_to: str (optional)
-        **kwargs: passed to sns.heatmap
+        data: np.array in 2 dimensions
+        file_name
+        save_to
+        **kwargs: is passed to plt.hist
     """
     if data.ndim != 2:
         _logger.error("Input data is not a 2D array.")
@@ -62,12 +63,7 @@ def draw_graph(
     data: np.ndarray, file_name: str = "graph", save_to: str = None, **kwargs
 ) -> None:
     """
-    Draw a graph of the data
-    Args:
-        np.array in any shape
-        file_name: str
-        save_to: str (optional)
-        **kwargs: passed to plt.plot
+    Draw a graph of the data. If a folder is provided, the plot is saved.
     """
     plt.clf()
     plt.plot(data.ravel(), **kwargs)
@@ -89,15 +85,6 @@ def draw_hist_and_gauss_fit(
 ) -> None:
     """
     Draw a histogram of the data and a gaussian fit
-    Args:
-        np.array
-        bins: int
-        amplitude: float
-        mean: float
-        sigma: float
-        title: str
-        file_name: str
-        save_to: str (optional)
     """
     plt.clf()
     hist, hist_bins = np.histogram(

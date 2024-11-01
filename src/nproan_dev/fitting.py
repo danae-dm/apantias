@@ -12,9 +12,10 @@ _logger = logger.Logger(__name__, "info").get_logger()
 
 def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
     """
-    fits a gaussian to a histogram of data_to_fit
+    fits a gaussian to a histogram using the scipy curve_fit method
+
     Args:
-        1D np.array
+        data_to_fit: np.array in 1 dimension
     Returns:
         np.array[amplitude, mean, sigma, error_amplitude, error_mean, error_sigma]
     """
@@ -45,10 +46,12 @@ def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
 
 def get_fit_gauss(data: np.ndarray) -> np.ndarray:
     """
-    fits a gaussian to a histogram of data_to_fit
-    using the scipy curve_fit method
+    fits a gaussian for every pixel. The fitting is done over the
+    histogram of the pixel values from all frames using the scipy
+    curve_fit method.
+
     Args:
-        np.array in shape (nframes, column_size, row_size)
+        data: in shape (nframes, column_size, row_size)
     Returns:
         np.array in shape (6, rows, columns)
         index 0: amplitude
@@ -81,6 +84,9 @@ def two_gaussians(
 
 @njit(parallel=False)
 def linear_fit(data: np.ndarray) -> np.ndarray:
+    """
+    Fits a linear function to the data using the least squares method.
+    """
     x = np.arange(data.size)
     n = data.size
 

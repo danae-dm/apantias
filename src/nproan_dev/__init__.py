@@ -5,7 +5,7 @@ __credits__ = "HEPHY Vienna"
 from . import analysis
 from . import display
 from . import roan_steps
-from . import analysis_funcs
+from . import utils
 from . import file_io
 
 print(

@@ -6,7 +6,7 @@ from scipy.optimize import curve_fit
 from . import logger
 from . import fitting
 from . import display
-from . import parallel_computations
+from . import utils
 
 _logger = logger.Logger(__name__, "info").get_logger()
 
@@ -34,11 +34,13 @@ def get_data(
     between the frame keys is calculated to find incomplete frames. The data
     is then reshaped into frames -> (#ofFrames,64,67). The data is then
     reshaped into the final shape -> (#ofFrames,64,nreps,64).
+
+    This function is not used anymore! It is kept for reference.
     Args:
         bin_file: path to the binary file
         column_size: number of columns in the data
         row_size: number of rows in the data
-        key_ints: number of key ints in the data
+        key_ints number of key ints in the data
         nreps: number of repetitions in the data
         nframes: number of frames to read from the data
         offset: offset in bytes to start reading from the file
@@ -116,96 +118,6 @@ def get_data(
         gc.collect()
 
 
-def get_dummy_data(
-    column_size: int, row_size: int, nreps: int, nframes: int
-) -> np.ndarray:
-    """
-    Returns random values for tests.
-    Args:
-        column_size: number of columns in the data
-        row_size: number of rows in the data
-        key_ints: number of key ints in the data
-        nreps: number of repetitions in the data
-        nframes: number of frames to read from the data
-
-    Returns:
-        np.array in shape (nframes, column_size, nreps, row_size)
-    """
-    return np.random.rand(nframes, row_size, nreps, column_size)
-
-
-def exclude_nreps_eval(data: np.ndarray, nreps_eval: list) -> np.ndarray:
-    """
-    Deletes nreps from data that are not in the list nreps_eval.
-    nreps_eval is a list of 3 integers: [lower, upper, step]
-    Args:
-        data: np.array (nframes, column_size, nreps, row_size)
-        nreps_eval: list of 3 ints
-    Returns:
-        np.array View(!) (nframes, column_size, nreps-X, row_size)
-    """
-    # TODO: optimize this
-    if np.ndim(data) != 4:
-        _logger.error("Data has wrong dimensions")
-        return None
-    if len(nreps_eval) != 3:
-        _logger.error("nreps_eval must be a list of 3 integers")
-        raise ValueError("nreps_eval must be a list of 3 integers")
-    lower = nreps_eval[0]
-    upper = nreps_eval[1]
-    step = nreps_eval[2]
-    if upper == -1:
-        upper = data.shape[2]
-    if lower < 0:
-        raise ValueError("Lower limit must be greater or equal 0")
-    if upper > data.shape[2]:
-        raise ValueError("Upper limit is greater than the number of nreps")
-    if upper < lower:
-        raise ValueError("Upper limit must be greater than lower limit")
-    _logger.info("Excluding nreps")
-    mask = np.zeros(data.shape[2])
-    mask[lower:upper:step] = 1
-    mask = mask.astype(bool)
-    _logger.info(f"Excluded {np.sum(~mask)} nreps")
-    return data[:, :, mask, :]
-
-
-def exclude_nreps_eval_offset_raw(data: np.ndarray, nreps_eval: list) -> np.ndarray:
-    """
-    Deletes nreps from offset_raw that are not in the list nreps_eval.
-    nreps_eval is a list of 3 integers: [lower, upper, step]
-    Args:
-        data: np.array (nframes, column_size, nreps, row_size)
-        nreps_eval: list of 3 ints
-    Returns:
-        np.array View(!) (nframes, column_size, nreps-X, row_size)
-    """
-    # TODO: optimize this
-    if np.ndim(data) != 3:
-        _logger.error("Data has wrong dimensions")
-        return None
-    if len(nreps_eval) != 3:
-        _logger.error("nreps_eval must be a list of 3 integers")
-        raise ValueError("nreps_eval must be a list of 3 integers")
-    lower = nreps_eval[0]
-    upper = nreps_eval[1]
-    step = nreps_eval[2]
-    if upper == -1:
-        upper = data.shape[1]
-    if lower < 0:
-        raise ValueError("Lower limit must be greater or equal 0")
-    if upper > data.shape[1]:
-        raise ValueError("Upper limit is greater than the number of nreps")
-    if upper < lower:
-        raise ValueError("Upper limit must be greater than lower limit")
-    _logger.info("Excluding nreps")
-    mask = np.zeros(data.shape[1])
-    mask[lower:upper:step] = 1
-    mask = mask.astype(bool)
-    _logger.info(f"Excluded {np.sum(~mask)} nreps")
-    return data[:, mask, :]
-
-
 def exclude_mips_and_bad_frames(
     data: np.ndarray, thres_mips: int, thres_bad_frames: int
 ) -> np.ndarray:
@@ -219,11 +131,11 @@ def exclude_mips_and_bad_frames(
     Calculates the average of each frame and excludes frames that are
     above or below the fitted mean by a certain threshold.
     Args:
-        data: np.array (nframes, column_size, nreps, row_size)
+        data: shape (nframes, column_size, nreps, row_size)
         thres_mips: absolute threshold in adu
         thres_bad_frames: used with the fitted sigma do exclude frames
     Returns:
-        np.array (nframes-X, column_size, nreps, row_size)
+        np.array in shape (nframes-X, column_size, nreps, row_size)
     """
     # TODO: rethink this. Its quite expensive to calculate the median/mean twice.
     # maybe just keep the more restrictive of the two?
@@ -232,9 +144,9 @@ def exclude_mips_and_bad_frames(
         raise ValueError("Input data is not a 4D array.")
     _logger.info(f"Excluding bad frames due to MIPS, threshold: {thres_mips}")
     _logger.info(f"Excluding bad frames, threshold: {thres_bad_frames}")
-    median = parallel_computations.nanmedian(data, axis=3)
-    median = parallel_computations.nanmedian(median, axis=2)
-    median = parallel_computations.nanmedian(median, axis=1)
+    median = utils.nanmedian(data, axis=3)
+    median = utils.nanmedian(median, axis=2)
+    median = utils.nanmedian(median, axis=1)
     # calculate mips mask
     mips_mask = (data > median[:, np.newaxis, np.newaxis, np.newaxis] + thres_mips) | (
         data < median[:, np.newaxis, np.newaxis, np.newaxis] - thres_mips
@@ -243,9 +155,9 @@ def exclude_mips_and_bad_frames(
     _logger.info(f"Excluded {np.sum(mips_mask)} frames due to mips")
     _logger.debug(f"Indices: {np.where(mips_mask)[0]}")
     # calculate bad frames mask
-    mean = parallel_computations.nanmean(data, axis=3)
-    mean = parallel_computations.nanmean(mean, axis=2)
-    mean = parallel_computations.nanmean(mean, axis=1)
+    mean = utils.nanmean(data, axis=3)
+    mean = utils.nanmean(mean, axis=2)
+    mean = utils.nanmean(mean, axis=1)
     fit = fitting.fit_gauss_to_hist(mean)
     lower_bound = fit[1] - thres_bad_frames * np.abs(fit[2])
     upper_bound = fit[1] + thres_bad_frames * np.abs(fit[2])
@@ -259,18 +171,17 @@ def exclude_mips_and_bad_frames(
 def get_slopes(data: np.ndarray) -> np.ndarray:
     """
     Calculates the slope over nreps for every pixel and frame.
-    It then fits a gaussian to the histogram of the slopes, and determines
-    the bad slopes by a threshold.
     Args:
-        data: np.array (nframes, column_size, nreps, row_size)
+        data: np.array in shape (nframes, column_size, nreps, row_size)
     Returns:
         slopes: np.array (nframes, column_size, row_size) with the slope values
     """
     if np.ndim(data) != 4:
         _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
-    _logger.info("Calculating bad slopes")
-    slopes = parallel_computations.apply_slope_fit_along_frames(data)
+    _logger.info("Calculating slope values")
+    slopes = utils.apply_slope_fit_along_frames(data)
+    _logger.info("Finished calculating slope values")
     _logger.debug(f"Shape of slopes: {slopes.shape}")
     return slopes
 
@@ -282,10 +193,10 @@ def set_bad_pixellist_to_nan(
     Sets all ignored Pixels in data to NaN. List of pixels is from the
     parameter file. [(row,col), (row,col), ...]
     Args:
-        data: np.array (nframes, column_size, nreps, row_size)
+        data: np.array in shape (nframes, column_size, nreps, row_size)
         bad_pixels: list of tuples (row,col)
     Returns:
-        np.array (nframes, column_size, nreps, row_size)
+        np.array in shape (nframes, column_size, nreps, row_size)
     """
     if np.ndim(data) != 4:
         _logger.error("Data is not a 4D array")
@@ -316,9 +227,14 @@ def correct_common_mode(data: np.ndarray) -> None:
     # Calculate the median for one frame
     # median_common = analysis_funcs.parallel_nanmedian_4d_axis3(data)
     # Subtract the median from the frame in-place
-    median_common = parallel_computations.nanmedian(data, axis=3, keepdims=True)
+    median_common = utils.nanmedian(data, axis=3, keepdims=True)
     data -= median_common
     _logger.info("Data is corrected for common mode.")
+
+
+# TODO: Rewrite EventMap and GainFit:
+# - EventMap: Current structure cannot be written to h5 file
+# - GainFit: Find some parameters to find "good" pixels first
 
 
 def calc_event_map(
