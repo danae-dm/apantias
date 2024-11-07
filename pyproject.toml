@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nproan"
-version = "0.0.3"
+version = "0.0.4"
 authors = [
   { name="Florian Heinrich", email="florianheinrich@gmx.at" },
 ]
