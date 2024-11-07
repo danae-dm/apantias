@@ -1,15 +1,8 @@
 TODO:
 - write wiki
 
-new features:
-- rewrite filtering of "bad" Frames: MIPS and bad Frames.
-    The idea is to read each frame from the data.h5 and determine if its bad or not. 
-    Then, read only the good frames from the data.h5
-- implement tracking of ignored frames (deleted because of mips or bad frames)
-- check if raw_offset is really needed
-- implement new event-map
-- implement a gain step
-- create some pictures as output
+new features/bugs/requests:
+https://github.com/shakamaran/nproan/issues
 
 COL vs ROW Convention:
 

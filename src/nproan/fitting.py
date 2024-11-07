@@ -10,6 +10,7 @@ from . import logger
 _logger = logger.Logger(__name__, "info").get_logger()
 
 
+# TODO: Optimize this by not computing the guesses (calculate them beforehand und save them to a file)
 def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
     """
     fits a gaussian to a histogram using the scipy curve_fit method
