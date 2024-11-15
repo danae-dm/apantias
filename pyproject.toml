@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "apantias"
-version = "0.0.4"
+version = "1.0.0"
 authors = [
   { name="Florian Heinrich", email="florianheinrich@gmx.at" },
 ]
@@ -21,3 +21,11 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/shakamaran/apantias"
 Issues = "https://github.com/shakamaran/apantias/issues"
+
+[project.dependencies]
+numpy = "^1.26.0"
+matplotlib = "^3.8.3"
+scipy = "^1.12.0"
+seaborn = "^0.13.2"
+h5py = "^3.11.0"
+numba = "^0.58.0"

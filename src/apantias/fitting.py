@@ -2,7 +2,6 @@ import gc
 
 from scipy.optimize import curve_fit
 import numpy as np
-from iminuit import cost, Minuit
 from numba import njit, prange
 
 from . import logger
