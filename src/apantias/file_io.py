@@ -321,7 +321,7 @@ def get_data_from_file(
                     f"Dataset has {dataset.ndim} dimensions, but {len(slices)} slices were provided."
                 )
             else:
-                data = dataset[*slices]
+                data = dataset[tuple(slices)]
         else:
             data = dataset[:]
 
