@@ -2,7 +2,7 @@ TODO:
 - write wiki
 
 new features/bugs/requests:
-https://github.com/shakamaran/nproan/issues
+https://github.com/shakamaran/apantias/issues
 
 COL vs ROW Convention:
 
