@@ -1,7 +1,8 @@
-import gc
-
 import numpy as np
 from scipy.optimize import curve_fit
+
+from typing import List, Tuple
+import gc
 
 from . import logger
 from . import fitting
@@ -80,7 +81,7 @@ def get_slopes(data: np.ndarray) -> np.ndarray:
 
 
 def set_bad_pixellist_to_nan(
-    data: np.ndarray, bad_pixels: list[tuple[int, int]]
+    data: np.ndarray, bad_pixels: List[Tuple[int, int]]
 ) -> None:
     """
     Sets all ignored Pixels in data to NaN. List of pixels is from the
@@ -212,7 +213,7 @@ def get_sum_of_event_counts(
 
 def get_gain_fit(
     event_map: np.ndarray, row_size: int, column_size: int, min_signals: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Fits a gaussian to the histogram of the signals in the event_map. When
     there are fewer signals than min_signals, or the fit is not
