@@ -28,11 +28,6 @@ def read_data_chunk_from_bin(
     Returns:
         data, offset: Tuple[np.ndarray, int]
     """
-    raw_row_size = row_size + key_ints
-    raw_frame_size = column_size * raw_row_size * nreps
-    rows_per_frame = column_size * nreps
-    chunk_size = raw_frame_size * frames_to_read
-
     # test if nreps make sense
     if offset == 8:
         test_data = np.fromfile(
@@ -48,8 +43,14 @@ def read_data_chunk_from_bin(
         median_diff = np.median(diff)
         estimated_nreps = int(median_diff / column_size)
         if nreps != estimated_nreps:
-            _logger.error(f"Estimated nreps: {estimated_nreps}, given nreps: {nreps}")
-            raise Exception(f"Estimated nreps: {estimated_nreps}, given nreps: {nreps}")
+            _logger.warning(f"Estimated nreps: {estimated_nreps}, given nreps: {nreps}")
+            _logger.warning("Proceeding using estimated nreps")
+            nreps = estimated_nreps
+
+    raw_row_size = row_size + key_ints
+    raw_frame_size = column_size * raw_row_size * nreps
+    rows_per_frame = column_size * nreps
+    chunk_size = raw_frame_size * frames_to_read
 
     inp_data = np.fromfile(bin_file, dtype="uint16", count=chunk_size, offset=offset)
     offset += chunk_size * 2  # offset is in bytes, uint16 = 16 bit = 2 bytes
