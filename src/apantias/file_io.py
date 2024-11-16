@@ -28,6 +28,7 @@ def read_data_chunk_from_bin(
     Returns:
         data, offset: Tuple[np.ndarray, int]
     """
+    raw_row_size = row_size + key_ints
     # test if nreps make sense
     if offset == 8:
         test_data = np.fromfile(
@@ -43,11 +44,9 @@ def read_data_chunk_from_bin(
         median_diff = np.median(diff)
         estimated_nreps = int(median_diff / column_size)
         if nreps != estimated_nreps:
-            _logger.warning(f"Estimated nreps: {estimated_nreps}, given nreps: {nreps}")
-            _logger.warning("Proceeding using estimated nreps")
-            nreps = estimated_nreps
+            _logger.error(f"Estimated nreps: {estimated_nreps}, given nreps: {nreps}")
+            raise Exception(f"Estimated nreps: {estimated_nreps}, given nreps: {nreps}")
 
-    raw_row_size = row_size + key_ints
     raw_frame_size = column_size * raw_row_size * nreps
     rows_per_frame = column_size * nreps
     chunk_size = raw_frame_size * frames_to_read
@@ -187,6 +186,7 @@ def create_data_file_from_bins(
                         f"progress: {frames_loaded}/{estimated_frames:.0f} frames loaded ({frames_loaded/estimated_frames:.2%})"
                     )
         dataset.attrs["total_frames"] = dataset.shape[0]
+        _logger.info(f"Finished loading data from bin files to {output_file}")
 
 
 def display_file_structure(file_path: str) -> None:
