@@ -44,7 +44,6 @@ def read_data_chunk_from_bin(
         median_diff = np.median(diff)
         estimated_nreps = int(median_diff / column_size)
         if nreps != estimated_nreps:
-            _logger.error(f"Estimated nreps: {estimated_nreps}, given nreps: {nreps}")
             raise Exception(f"Estimated nreps: {estimated_nreps}, given nreps: {nreps}")
 
     raw_frame_size = column_size * raw_row_size * nreps
@@ -65,8 +64,8 @@ def read_data_chunk_from_bin(
     diff = np.diff(frames, axis=0)
     valid_frames_position = np.nonzero(diff == rows_per_frame)[1]
     if len(valid_frames_position) == 0:
-        _logger.error("No valid frames found in chunk, wrong nreps?")
-        raise Exception("No valid frames found in chunk, wrong nreps?")
+        _logger.warning("No valid frames found in chunk!")
+        return None, offset
     valid_frames = frames.T[valid_frames_position]
     frame_start_indices = valid_frames[:, 0]
     frame_end_indices = valid_frames[:, 1]
