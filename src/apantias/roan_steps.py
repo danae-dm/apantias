@@ -193,18 +193,30 @@ class RoanSteps:
                 an.correct_common_mode(data)
             # calculate rndr signals and update file
             avg_over_nreps = utils.get_avg_over_nreps(data)
-            io.add_array(self.analysis_file, "offnoi/rndr_signals", avg_over_nreps)
+            io.add_array(
+                self.analysis_file, "offnoi/rndr_signals/all_frames", avg_over_nreps
+            )
+            io.add_array(
+                self.analysis_file,
+                "offnoi/rndr_signals/average",
+                np.nanmean(avg_over_nreps, axis=0),
+            )
             # calculate bad slopes and update file
             if self.offnoi_thres_bad_slopes != 0:
                 slopes = an.get_slopes(data)
-                io.add_array(self.analysis_file, "offnoi/slopes", slopes)
+                io.add_array(self.analysis_file, "offnoi/slopes/all_frames", slopes)
+                io.add_array(
+                    self.analysis_file,
+                    "offnoi/slopes/average",
+                    np.nanmean(slopes, axis=0),
+                )
             total_frames_processed += frames_per_step
             self._logger.info(f"Finished step {step+1} of {steps_needed} total Steps")
 
         # TODO: paralellize this
-        slopes = io.get_data_from_file(self.analysis_file, "offnoi/slopes")
+        slopes = io.get_data_from_file(self.analysis_file, "offnoi/slopes/all_frames")
         bad_slopes_pos = np.full(slopes.shape, False, dtype=bool)
-        fit_params_list = []
+        bad_slopes_fit = np.zeros((6, self.column_size, self.row_size))
 
         for row in range(slopes.shape[1]):
             for col in range(slopes.shape[2]):
@@ -221,32 +233,34 @@ class RoanSteps:
                 )
                 frame = np.where(bad_slopes_mask)[0]
                 bad_slopes_pos[frame, row, col] = True
-                fit_params_list.append(fit_pixelwise)
-        bad_slopes_fit = np.vstack(fit_params_list)
+                bad_slopes_fit[:, row, col] = fit_pixelwise
 
-        io.add_array(self.analysis_file, "offnoi/bad_slopes_pos", bad_slopes_pos)
-        io.add_array(self.analysis_file, "offnoi/bad_slopes_fit", bad_slopes_fit)
+        io.add_array(self.analysis_file, "offnoi/slopes/bad_slopes_pos", bad_slopes_pos)
+        io.add_array(
+            self.analysis_file,
+            "offnoi/slopes/bad_slopes_count",
+            np.sum(bad_slopes_pos, axis=0),
+        )
+        io.add_array(self.analysis_file, "offnoi/slopes/bad_slopes_fit", bad_slopes_fit)
 
         avg_over_nreps = io.get_data_from_file(
-            self.analysis_file, "offnoi/rndr_signals"
+            self.analysis_file, "offnoi/rndr_signals/all_frames"
         )
         avg_over_nreps_slopes_removed = avg_over_nreps.copy()
         avg_over_nreps_slopes_removed[bad_slopes_pos] = np.nan
         io.add_array(
             self.analysis_file,
-            "offnoi/rndr_signals_slopes_removed",
+            "offnoi/rndr_signals/all_frames_slopes_removed",
             avg_over_nreps_slopes_removed,
+        )
+        io.add_array(
+            self.analysis_file,
+            "offnoi/rndr_signals/average_slopes_removed",
+            np.nanmean(avg_over_nreps_slopes_removed, axis=0),
         )
 
         self._logger.info("Fitting pixelwise for offset and noise")
         fitted = fit.get_fit_gauss(avg_over_nreps)
-        print(fitted.shape)
-        print(fitted[0, :, :].shape)
-        print(fitted[1, :, :].shape)
-        print(fitted[2, :, :].shape)
-        print(fitted[3, :, :].shape)
-        print(fitted[4, :, :].shape)
-        print(fitted[5, :, :].shape)
         io.add_array(self.analysis_file, "offnoi/fit/amplitude", fitted[0, :, :])
         io.add_array(self.analysis_file, "offnoi/fit/mean", fitted[1, :, :])
         io.add_array(self.analysis_file, "offnoi/fit/sigma", fitted[2, :, :])
@@ -254,13 +268,6 @@ class RoanSteps:
         io.add_array(self.analysis_file, "offnoi/fit/error_mean", fitted[4, :, :])
         io.add_array(self.analysis_file, "offnoi/fit/error_sigma", fitted[5, :, :])
         fitted = fit.get_fit_gauss(avg_over_nreps_slopes_removed)
-        print(fitted.shape)
-        print(fitted[0, :, :].shape)
-        print(fitted[1, :, :].shape)
-        print(fitted[2, :, :].shape)
-        print(fitted[3, :, :].shape)
-        print(fitted[4, :, :].shape)
-        print(fitted[5, :, :].shape)
         io.add_array(
             self.analysis_file,
             "offnoi/fit_slopes_removed/amplitude",
@@ -350,20 +357,25 @@ class RoanSteps:
             avg_over_nreps = utils.get_avg_over_nreps(data)
             # subtract fitted offset from data
             fitted_offset = io.get_data_from_file(self.analysis_file, "offnoi/fit/mean")
-            print(avg_over_nreps.shape)
-            print(fitted_offset.shape)
             avg_over_nreps -= fitted_offset
-            io.add_array(self.analysis_file, "filter/rndr_signals", avg_over_nreps)
+            io.add_array(
+                self.analysis_file, "filter/rndr_signals/all_frames", avg_over_nreps
+            )
+            io.add_array(
+                self.analysis_file,
+                "filter/rndr_signals/average",
+                np.nanmean(avg_over_nreps, axis=0),
+            )
             # calculate bad slopes and update file
             if self.filter_thres_bad_slopes != 0:
                 slopes = an.get_slopes(data)
-                io.add_array(self.analysis_file, "filter/slopes", slopes)
+                io.add_array(self.analysis_file, "filter/slopes/all_frames", slopes)
             self._logger.info(f"Finished step {step+1} of {steps_needed} total Steps")
             total_frames_processed += frames_per_step
 
-        slopes = io.get_data_from_file(self.analysis_file, "filter/slopes")
+        slopes = io.get_data_from_file(self.analysis_file, "filter/slopes/all_frames")
         bad_slopes_pos = np.full(slopes.shape, False, dtype=bool)
-        fit_params_list = []
+        bad_slopes_fit = np.zeros((6, self.column_size, self.row_size))
 
         for row in range(slopes.shape[1]):
             for col in range(slopes.shape[2]):
@@ -380,23 +392,43 @@ class RoanSteps:
                 )
                 frame = np.where(bad_slopes_mask)[0]
                 bad_slopes_pos[frame, row, col] = True
-                fit_params_list.append(fit_pixelwise)
-        bad_slopes_fit = np.vstack(fit_params_list)
-        io.add_array(self.analysis_file, "filter/bad_slopes_pos", bad_slopes_pos)
-        io.add_array(self.analysis_file, "filter/bad_slopes_fit", bad_slopes_fit)
+                bad_slopes_fit[:, row, col] = fit_pixelwise
+
+        io.add_array(self.analysis_file, "filter/slopes/bad_slopes_pos", bad_slopes_pos)
+        io.add_array(
+            self.analysis_file,
+            "filter/slopes/bad_slopes_count",
+            np.sum(bad_slopes_pos, axis=0),
+        )
+        io.add_array(self.analysis_file, "filter/slopes/bad_slopes_fit", bad_slopes_fit)
 
         avg_over_nreps_final = io.get_data_from_file(
-            self.analysis_file, "filter/rndr_signals"
+            self.analysis_file, "filter/rndr_signals/all_frames"
         )
         avg_over_nreps_slopes_removed = avg_over_nreps_final.copy()
         avg_over_nreps_slopes_removed[bad_slopes_pos] = np.nan
+        noise_map = io.get_data_from_file(self.analysis_file, "offnoi/fit/sigma")
         io.add_array(
             self.analysis_file,
-            "filter/rndr_signals_slopes_removed",
+            "filter/rndr_signals/all_frames_slopes_removed",
             avg_over_nreps_slopes_removed,
         )
+        io.add_array(
+            self.analysis_file,
+            "filter/rndr_signals/average_slopes_removed",
+            np.nanmean(avg_over_nreps_slopes_removed, axis=0),
+        )
+        structure = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
         event_array = an.group_pixels(
             avg_over_nreps_slopes_removed,
             self.filter_thres_event_prim,
             self.filter_thres_event_sec,
+            noise_map,
+            structure,
+        )
+        io.add_array(self.analysis_file, "filter/events/event_array", event_array)
+        io.add_array(
+            self.analysis_file,
+            "filter/events/event_count",
+            np.sum(event_array != 0, axis=0),
         )

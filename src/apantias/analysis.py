@@ -133,9 +133,7 @@ def correct_common_mode(data: np.ndarray) -> None:
 
 
 @njit(parallel=True)
-def group_pixels(
-    data, primary_threshold, secondary_threshold, noise_map, structure=None
-):
+def group_pixels(data, primary_threshold, secondary_threshold, noise_map, structure):
     """
     Uses the two pass labelling to group events.
     Pixels over the primary threshold are connected to pixels above the
@@ -163,9 +161,6 @@ def group_pixels(
         mask_primary[:, -1] = 0
         mask_secondary[:, 0] = 0
         mask_secondary[:, -1] = 0
-
-        if structure is None:
-            structure = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
 
         labeled_primary, num_features_primary = utils.two_pass_labeling(
             mask_primary, structure=structure
