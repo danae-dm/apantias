@@ -47,7 +47,8 @@ class RoanSteps:
         self.filter_nreps_eval = self.params_dict["filter_nreps_eval"]
         self.filter_comm_mode = self.params_dict["filter_comm_mode"]
         self.filter_thres_mips = self.params_dict["filter_thres_mips"]
-        self.filter_thres_event = self.params_dict["filter_thres_event"]
+        self.filter_thres_event_prim = self.params_dict["filter_thres_event_prim"]
+        self.filter_thres_event_sec = self.params_dict["filter_thres_event_sec"]
         self.filter_use_fitted_offset = self.params_dict["filter_use_fitted_offset"]
         self.filter_thres_bad_frames = self.params_dict["filter_thres_bad_frames"]
         self.filter_thres_bad_slopes = self.params_dict["filter_thres_bad_slopes"]
@@ -170,7 +171,7 @@ class RoanSteps:
                 slice(None),
             ]
             data = (
-                io.get_data_from_file(self.offnoi_data_file, "", "data", slices)
+                io.get_data_from_file(self.offnoi_data_file, "data", slices)
                 * self.polarity
             )
             self._logger.info(f"Data loaded: {data.shape}")
@@ -185,23 +186,23 @@ class RoanSteps:
                 self._logger.debug(f"Shape of data: {data.shape}")
             # Calculate offset_raw on the raw data and update file
             avg_over_frames = utils.get_avg_over_frames(data)
-            io.add_array(self.analysis_file, "offnoi", "offset_raw", avg_over_frames)
+            io.add_array(self.analysis_file, "offnoi/offset_raw", avg_over_frames)
             # offset the data and correct for common mode if necessary
             data -= avg_over_frames[np.newaxis, :, :, :]
             if self.offnoi_comm_mode is True:
                 an.correct_common_mode(data)
             # calculate rndr signals and update file
             avg_over_nreps = utils.get_avg_over_nreps(data)
-            io.add_array(self.analysis_file, "offnoi", "rndr_signals", avg_over_nreps)
+            io.add_array(self.analysis_file, "offnoi/rndr_signals", avg_over_nreps)
             # calculate bad slopes and update file
             if self.offnoi_thres_bad_slopes != 0:
                 slopes = an.get_slopes(data)
-                io.add_array(self.analysis_file, "offnoi", "slopes", slopes)
+                io.add_array(self.analysis_file, "offnoi/slopes", slopes)
             total_frames_processed += frames_per_step
             self._logger.info(f"Finished step {step+1} of {steps_needed} total Steps")
 
         # TODO: paralellize this
-        slopes = io.get_data_from_file(self.analysis_file, "offnoi", "slopes")
+        slopes = io.get_data_from_file(self.analysis_file, "offnoi/slopes")
         bad_slopes_pos = np.full(slopes.shape, False, dtype=bool)
         fit_params_list = []
 
@@ -223,26 +224,25 @@ class RoanSteps:
                 fit_params_list.append(fit_pixelwise)
         bad_slopes_fit = np.vstack(fit_params_list)
 
-        io.add_array(self.analysis_file, "offnoi", "bad_slopes_pos", bad_slopes_pos)
-        io.add_array(self.analysis_file, "offnoi", "bad_slopes_fit", bad_slopes_fit)
+        io.add_array(self.analysis_file, "offnoi/bad_slopes_pos", bad_slopes_pos)
+        io.add_array(self.analysis_file, "offnoi/bad_slopes_fit", bad_slopes_fit)
 
         avg_over_nreps = io.get_data_from_file(
-            self.analysis_file, "offnoi", "rndr_signals"
+            self.analysis_file, "offnoi/rndr_signals"
         )
         avg_over_nreps_slopes_removed = avg_over_nreps.copy()
         avg_over_nreps_slopes_removed[bad_slopes_pos] = np.nan
         io.add_array(
             self.analysis_file,
-            "offnoi",
-            "rndr_signals_slopes_removed",
+            "offnoi/rndr_signals_slopes_removed",
             avg_over_nreps_slopes_removed,
         )
 
         self._logger.info("Fitting pixelwise for offset and noise")
         fitted = fit.get_fit_gauss(avg_over_nreps)
-        io.add_array(self.analysis_file, "offnoi", "fit", fitted)
+        io.add_array(self.analysis_file, "offnoi/fit", fitted)
         fitted = fit.get_fit_gauss(avg_over_nreps_slopes_removed)
-        io.add_array(self.analysis_file, "offnoi", "fit_slopes_removed", fitted)
+        io.add_array(self.analysis_file, "offnoi/fit_slopes_removed", fitted)
 
     # TODO: continue here
     def calc_filter_step(self) -> None:
@@ -279,7 +279,7 @@ class RoanSteps:
                 slice(None),
             ]
             data = (
-                io.get_data_from_file(self.filter_data_file, "", "data", slices)
+                io.get_data_from_file(self.filter_data_file, "data", slices)
                 * self.polarity
             )
             self._logger.info(f"Data loaded: {data.shape}")
@@ -296,7 +296,7 @@ class RoanSteps:
             self.final_frames_per_step = data.shape[0]
             # Get offset_raw from offnoi step
             avg_over_frames_offnoi = io.get_data_from_file(
-                self.analysis_file, "offnoi", "offset_raw"
+                self.analysis_file, "offnoi/offset_raw"
             )
             # offset the data and correct for common mode if necessary
             data -= avg_over_frames_offnoi[np.newaxis, :, : self.filter_nreps_eval, :]
@@ -305,19 +305,17 @@ class RoanSteps:
             # calculate rndr signals and update file
             avg_over_nreps = utils.get_avg_over_nreps(data)
             # subtract fitted offset from data
-            fitted_offset = io.get_data_from_file(self.analysis_file, "offnoi", "fit")[
-                1
-            ]
+            fitted_offset = io.get_data_from_file(self.analysis_file, "offnoi/fit")[1]
             avg_over_nreps -= fitted_offset
-            io.add_array(self.analysis_file, "filter", "rndr_signals", avg_over_nreps)
+            io.add_array(self.analysis_file, "filter/rndr_signals", avg_over_nreps)
             # calculate bad slopes and update file
             if self.filter_thres_bad_slopes != 0:
                 slopes = an.get_slopes(data)
-                io.add_array(self.analysis_file, "filter", "slopes", slopes)
+                io.add_array(self.analysis_file, "filter/slopes", slopes)
             self._logger.info(f"Finished step {step+1} of {steps_needed} total Steps")
             total_frames_processed += frames_per_step
 
-        slopes = io.get_data_from_file(self.analysis_file, "filter", "slopes")
+        slopes = io.get_data_from_file(self.analysis_file, "filter/slopes")
         bad_slopes_pos = np.full(slopes.shape, False, dtype=bool)
         fit_params_list = []
 
@@ -338,17 +336,16 @@ class RoanSteps:
                 bad_slopes_pos[frame, row, col] = True
                 fit_params_list.append(fit_pixelwise)
         bad_slopes_fit = np.vstack(fit_params_list)
-        io.add_array(self.analysis_file, "filter", "bad_slopes_pos", bad_slopes_pos)
-        io.add_array(self.analysis_file, "filter", "bad_slopes_fit", bad_slopes_fit)
+        io.add_array(self.analysis_file, "filter/bad_slopes_pos", bad_slopes_pos)
+        io.add_array(self.analysis_file, "filter/bad_slopes_fit", bad_slopes_fit)
 
         avg_over_nreps_final = io.get_data_from_file(
-            self.analysis_file, "filter", "rndr_signals"
+            self.analysis_file, "filter/rndr_signals"
         )
         avg_over_nreps_slopes_removed = avg_over_nreps_final.copy()
         avg_over_nreps_slopes_removed[bad_slopes_pos] = np.nan
         io.add_array(
             self.analysis_file,
-            "filter",
-            "rndr_signals_slopes_removed",
+            "filter/rndr_signals_slopes_removed",
             avg_over_nreps_slopes_removed,
         )

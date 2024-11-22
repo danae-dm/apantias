@@ -653,3 +653,76 @@ def _nanmean_2d_axis1(data: np.ndarray) -> np.ndarray:
         median = np.nanmean(data[i, :])
         output[i] = median
     return output
+
+
+@njit
+def _find_root(label, parent):
+    while parent[label] != label:
+        label = parent[label]
+    return label
+
+
+@njit
+def _union(label1, label2, parent):
+    root1 = _find_root(label1, parent)
+    root2 = _find_root(label2, parent)
+    if root1 != root2:
+        parent[root2] = root1
+
+
+@njit
+def two_pass_labeling(data, structure):
+    """
+    Implementation of the two pass labelling algortihm. The function take a 2d boolean array
+    and groups the true values according to the structure element.
+    0 in the output means no group, so the first group has index 1!
+    """
+    rows, cols = data.shape
+    labels = np.zeros((rows, cols), dtype=np.int32)
+    parent = np.arange(rows * cols, dtype=np.int32)
+    next_label = 1
+
+    # First pass
+    for i in range(rows):
+        for j in range(cols):
+            if data[i, j] == 0:
+                continue
+
+            neighbors = []
+            for di in range(-1, 2):
+                for dj in range(-1, 2):
+                    ni, nj = i + di, j + dj
+                    if 0 <= ni < rows and 0 <= nj < cols:
+                        if structure[di + 1, dj + 1] == 1 and labels[ni, nj] != 0:
+                            neighbors.append(labels[ni, nj])
+
+            if not neighbors:
+                labels[i, j] = next_label
+                next_label += 1
+            else:
+                min_label = min(neighbors)
+                labels[i, j] = min_label
+                for neighbor in neighbors:
+                    if neighbor != min_label:
+                        _union(min_label, neighbor, parent)
+
+    # Second pass
+    for i in range(rows):
+        for j in range(cols):
+            if labels[i, j] != 0:
+                labels[i, j] = _find_root(labels[i, j], parent)
+
+    # Relabel to ensure labels are contiguous
+    unique_labels = np.unique(labels)
+    label_map = np.zeros(unique_labels.max() + 1, dtype=np.int32)
+    for new_label, old_label in enumerate(unique_labels):
+        label_map[old_label] = new_label
+    for i in range(rows):
+        for j in range(cols):
+            if labels[i, j] != 0:
+                labels[i, j] = label_map[labels[i, j]]
+    num_features = (
+        len(unique_labels) - 1
+    )  # Subtract 1 to exclude the background label (0)
+
+    return labels, num_features

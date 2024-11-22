@@ -32,7 +32,8 @@ class Params:
         "filter_nreps_eval": [0, -1, 1],  # list of ints
         "filter_comm_mode": True,  # bool
         "filter_thres_mips": 1000,  # float
-        "filter_thres_event": 5,  # float
+        "filter_thres_event_prim": 5,  # float
+        "filter_thres_event_sec": 5,  # float
         "filter_use_fitted_offset": False,  # bool
         "filter_thres_bad_frames": 5,  # float
         "filter_thres_bad_slopes": 5,  # float
@@ -55,7 +56,8 @@ class Params:
         "filter_nreps_eval": list,
         "filter_comm_mode": bool,
         "filter_thres_mips": (int, float),
-        "filter_thres_event": (int, float),
+        "filter_thres_event_prim": (int, float),
+        "filter_thres_event_sec": (int, float),
         "filter_use_fitted_offset": bool,
         "filter_thres_bad_frames": (int, float),
         "filter_thres_bad_slopes": (int, float),
@@ -107,7 +109,7 @@ class Params:
         # check consistency of the input dict with the default dict
         for key, value in self.inp_dict.items():
             if key not in self.default_dict:
-                self._logger.error(f"{key} is not a valid parameter.")
+                raise KeyError(f"{key} is not a valid parameter.")
             else:
                 self.param_dict[key] = value
         # check for missing parameters, using default if not required

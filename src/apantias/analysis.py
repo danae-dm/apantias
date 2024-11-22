@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.optimize import curve_fit
+from numba import njit, prange
 
 from typing import List, Tuple
 import gc
@@ -131,143 +132,61 @@ def correct_common_mode(data: np.ndarray) -> None:
 # - GainFit: Find some parameters to find "good" pixels first
 
 
-def calc_event_map(
-    avg_over_nreps: np.ndarray, noise_fitted: np.ndarray, thres_event: int
-) -> np.ndarray:
+@njit(parallel=True)
+def group_pixels(
+    data, primary_threshold, secondary_threshold, noise_map, structure=None
+):
     """
-    Finds events in the data by comparing the average over nreps with the
-    noise fitted map.
-    Args:
-        avg_over_nreps: np.array (nframes, column_size, row_size)
-        noise_fitted: np.array (column_size, row_size)
-        thres_event: threshold for the events
-    Returns:
-        np.array (column_size, row_size) with lists of signals
+    Uses the two pass labelling to group events.
+    Pixels over the primary threshold are connected to pixels above the
+    secondary threshold according to a structure element.
+    Input is of shape (frame,row,col), calulation over the frames is
+    parallized using numba's prange.
+    The output is a numpy array of shape (frame,row,col) with zeroes if there
+    is no event above the primary threshold. Clustered events are labeled with
+    integers beginning at 1.
     """
-    if avg_over_nreps.ndim != 3:
-        _logger.error("avg_over_nreps is not a 3D array")
-        raise ValueError("avg_over_nreps is not a 3D array")
-    if noise_fitted.ndim != 2:
-        _logger.error("noise_fitted is not a 2D array")
-        raise ValueError("noise_fitted is not a 2D array")
-    _logger.info("Finding events")
-    threshold_map = noise_fitted * thres_event
-    events = avg_over_nreps > threshold_map[np.newaxis, :, :]
-    signals = np.full(avg_over_nreps.shape, np.nan)
-    signals[events] = avg_over_nreps[events]
-    mask = ~np.isnan(signals)
-    indices = np.argwhere(mask)
-    values = signals[mask]
-    _logger.info(f"{indices.shape[0]} events found")
-    event_map = np.zeros((64, 64), dtype=object)
-    for i in range(event_map.shape[0]):
-        for j in range(event_map.shape[1]):
-            event_map[i, j] = {"frame": [], "signal": []}
-    for index, entry in enumerate(indices):
-        frame = int(entry[0])
-        row = int(entry[1])
-        column = int(entry[2])
-        signal = values[index]
-        event_map[row][column]["frame"].append(frame)
-        event_map[row][column]["signal"].append(signal)
-    return event_map
+    output = np.zeros(data.shape, dtype=np.uint16)
+    for frame_index in prange(data.shape[0]):
+        mask_primary = data[frame_index] > primary_threshold * noise_map[frame_index]
+        mask_secondary = (
+            data[frame_index] > secondary_threshold * noise_map[frame_index]
+        )
+        # Set the first and last rows to zero
+        mask_primary[0, :] = 0
+        mask_primary[-1, :] = 0
+        mask_secondary[0, :] = 0
+        mask_secondary[-1, :] = 0
 
+        # Set the first and last columns to zero
+        mask_primary[:, 0] = 0
+        mask_primary[:, -1] = 0
+        mask_secondary[:, 0] = 0
+        mask_secondary[:, -1] = 0
 
-def get_sum_of_event_signals(
-    event_map: np.ndarray, row_size: int, column_size: int
-) -> np.ndarray:
-    """
-    Adds the signal values of the events in the event_map
-    Args:
-        event_map: np.array (column_size, row_size)
-        row_size: number of rows in the data
-        column_size: number of columns in the data
-    Returns:
-        np.array (column_size, row_size) with the sum of the signals
-    """
-    sum_of_events = np.zeros((row_size, column_size))
-    for row in range(row_size):
-        for column in range(column_size):
-            sum_of_events[row][column] = sum(event_map[row][column]["signal"])
-    return sum_of_events
+        if structure is None:
+            structure = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
 
+        labeled_primary, num_features_primary = utils.two_pass_labeling(
+            mask_primary, structure=structure
+        )
 
-def get_sum_of_event_counts(
-    event_map: np.ndarray, row_size: int, column_size: int
-) -> np.ndarray:
-    """
-    Sums up the number of events in the event_map
-    Args:
-        event_map: np.array (column_size, row_size)
-        row_size: number of rows in the data
-        column_size: number of columns in the data
-    Returns:
-        np.array (column_size, row_size) with the count of the events
-    """
-    sum_of_events = np.zeros((row_size, column_size))
-    for row in range(row_size):
-        for column in range(column_size):
-            sum_of_events[row][column] = len(event_map[row][column]["signal"])
-    return sum_of_events
+        # Iterate over each feature in the primary mask
+        for feature_num in range(1, num_features_primary + 1):
+            # Create a mask for the current feature
+            feature_mask = labeled_primary == feature_num
 
+            # Expand the feature mask to include secondary threshold pixels
+            expanded_mask = mask_secondary & feature_mask
 
-def get_gain_fit(
-    event_map: np.ndarray, row_size: int, column_size: int, min_signals: int
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Fits a gaussian to the histogram of the signals in the event_map. When
-    there are fewer signals than min_signals, or the fit is not
-    successfull, the values are set to np.nan.
-    Args:
-        event_map: np.array (column_size, row_size) with lists of signals
-        row_size: number of rows in the data
-        column_size: number of columns in the data
-        min_signals: minimum number of signals for a fit
-    Returns:
-        np.array (column_size, row_size) with the mean of the gaussian
-        np.array (column_size, row_size) with the sigma of the gaussian
-        np.array (column_size, row_size) with the error of the mean
-        np.array (column_size, row_size) with the error of the sigma
-    """
-    # TODO: optimize this
-    mean = np.full((row_size, column_size), np.nan)
-    sigma = np.full((row_size, column_size), np.nan)
-    mean_error = np.full((row_size, column_size), np.nan)
-    sigma_error = np.full((row_size, column_size), np.nan)
-
-    def fit_hist(data):
-
-        def gaussian(x, a1, mu1, sigma1):
-            return a1 * np.exp(-((x - mu1) ** 2) / (2 * sigma1**2))
-
-        try:
-            hist, bins = np.histogram(
-                data, bins=10, range=(np.nanmin(data), np.nanmax(data)), density=True
+            # Label the expanded mask
+            labeled_expanded, _ = utils.two_pass_labeling(
+                expanded_mask, structure=structure
             )
-            bin_centers = (bins[:-1] + bins[1:]) / 2
-            params, covar = curve_fit(
-                gaussian, bin_centers, hist, p0=[1, bins[np.argmax(hist)], 1]
-            )
-            return (
-                params[1],
-                abs(params[2]),
-                np.sqrt(np.diag(covar))[1],
-                np.sqrt(np.diag(covar))[2],
-            )
-        except:
-            return (np.nan, np.nan, np.nan, np.nan)
 
-    count_too_few = 0
-    for i in range(event_map.shape[0]):
-        for j in range(event_map.shape[1]):
-            signals = event_map[i, j]["signal"]
-            if len(signals) >= min_signals:
-                params = fit_hist(signals)
-                mean[i, j] = params[0]
-                sigma[i, j] = params[1]
-                mean_error[i, j] = params[2]
-                sigma_error[i, j] = params[3]
-            else:
-                count_too_few += 1
-    _logger.info(f"{count_too_few} pixels have less than {min_signals} signals")
-    return mean, sigma, mean_error, sigma_error
+            # Get the indices where labeled_expanded > 0
+            indices = np.where(labeled_expanded > 0)
+            for i in range(len(indices[0])):
+                output[frame_index, indices[0][i], indices[1][i]] = feature_num
+
+    return output
