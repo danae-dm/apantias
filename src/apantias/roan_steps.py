@@ -240,9 +240,53 @@ class RoanSteps:
 
         self._logger.info("Fitting pixelwise for offset and noise")
         fitted = fit.get_fit_gauss(avg_over_nreps)
-        io.add_array(self.analysis_file, "offnoi/fit", fitted)
+        print(fitted.shape)
+        print(fitted[0, :, :].shape)
+        print(fitted[1, :, :].shape)
+        print(fitted[2, :, :].shape)
+        print(fitted[3, :, :].shape)
+        print(fitted[4, :, :].shape)
+        print(fitted[5, :, :].shape)
+        io.add_array(self.analysis_file, "offnoi/fit/amplitude", fitted[0, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/mean", fitted[1, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/sigma", fitted[2, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/error_amplitude", fitted[3, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/error_mean", fitted[4, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/error_sigma", fitted[5, :, :])
         fitted = fit.get_fit_gauss(avg_over_nreps_slopes_removed)
-        io.add_array(self.analysis_file, "offnoi/fit_slopes_removed", fitted)
+        print(fitted.shape)
+        print(fitted[0, :, :].shape)
+        print(fitted[1, :, :].shape)
+        print(fitted[2, :, :].shape)
+        print(fitted[3, :, :].shape)
+        print(fitted[4, :, :].shape)
+        print(fitted[5, :, :].shape)
+        io.add_array(
+            self.analysis_file,
+            "offnoi/fit_slopes_removed/amplitude",
+            fitted[0, :, :],
+        )
+        io.add_array(
+            self.analysis_file, "offnoi/fit_slopes_removed/mean", fitted[1, :, :]
+        )
+        io.add_array(
+            self.analysis_file, "offnoi/fit_slopes_removed/sigma", fitted[2, :, :]
+        )
+        io.add_array(
+            self.analysis_file,
+            "offnoi/fit_slopes_removed/error_amplitude",
+            fitted[3, :, :],
+        )
+        io.add_array(
+            self.analysis_file,
+            "offnoi/fit_slopes_removed/error_mean",
+            fitted[4, :, :],
+        )
+        io.add_array(
+            self.analysis_file,
+            "offnoi/fit_slopes_removed/error_sigma",
+            fitted[5, :, :],
+        )
 
     # TODO: continue here
     def calc_filter_step(self) -> None:
@@ -305,7 +349,9 @@ class RoanSteps:
             # calculate rndr signals and update file
             avg_over_nreps = utils.get_avg_over_nreps(data)
             # subtract fitted offset from data
-            fitted_offset = io.get_data_from_file(self.analysis_file, "offnoi/fit")[1]
+            fitted_offset = io.get_data_from_file(self.analysis_file, "offnoi/fit/mean")
+            print(avg_over_nreps.shape)
+            print(fitted_offset.shape)
             avg_over_nreps -= fitted_offset
             io.add_array(self.analysis_file, "filter/rndr_signals", avg_over_nreps)
             # calculate bad slopes and update file
@@ -348,4 +394,9 @@ class RoanSteps:
             self.analysis_file,
             "filter/rndr_signals_slopes_removed",
             avg_over_nreps_slopes_removed,
+        )
+        event_array = an.group_pixels(
+            avg_over_nreps_slopes_removed,
+            self.filter_thres_event_prim,
+            self.filter_thres_event_sec,
         )
