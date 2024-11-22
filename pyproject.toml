@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "apantias"
-version = "1.0.2"
+version = "1.0.3"
 authors = [
   { name="Florian Heinrich", email="florianheinrich@gmx.at" },
 ]

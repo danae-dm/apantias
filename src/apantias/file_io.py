@@ -28,6 +28,7 @@ def read_data_chunk_from_bin(
     Returns:
         data, offset: Tuple[np.ndarray, int]
     """
+    raw_row_size = row_size + key_ints
     # test if nreps make sense
     if offset == 8:
         test_data = np.fromfile(
@@ -43,11 +44,8 @@ def read_data_chunk_from_bin(
         median_diff = np.median(diff)
         estimated_nreps = int(median_diff / column_size)
         if nreps != estimated_nreps:
-            _logger.warning(f"Estimated nreps: {estimated_nreps}, given nreps: {nreps}")
-            _logger.warning("Proceeding using estimated nreps")
-            nreps = estimated_nreps
+            raise Exception(f"Estimated nreps: {estimated_nreps}, given nreps: {nreps}")
 
-    raw_row_size = row_size + key_ints
     raw_frame_size = column_size * raw_row_size * nreps
     rows_per_frame = column_size * nreps
     chunk_size = raw_frame_size * frames_to_read
@@ -66,8 +64,8 @@ def read_data_chunk_from_bin(
     diff = np.diff(frames, axis=0)
     valid_frames_position = np.nonzero(diff == rows_per_frame)[1]
     if len(valid_frames_position) == 0:
-        _logger.error("No valid frames found in chunk, wrong nreps?")
-        raise Exception("No valid frames found in chunk, wrong nreps?")
+        _logger.warning("No valid frames found in chunk!")
+        return None, offset
     valid_frames = frames.T[valid_frames_position]
     frame_start_indices = valid_frames[:, 0]
     frame_end_indices = valid_frames[:, 1]
@@ -187,6 +185,7 @@ def create_data_file_from_bins(
                         f"progress: {frames_loaded}/{estimated_frames:.0f} frames loaded ({frames_loaded/estimated_frames:.2%})"
                     )
         dataset.attrs["total_frames"] = dataset.shape[0]
+        _logger.info(f"Finished loading data from bin files to {output_file}")
 
 
 def display_file_structure(file_path: str) -> None:
@@ -295,8 +294,7 @@ def create_analysis_file(
 
 def get_data_from_file(
     file_path: str,
-    group_name: str,
-    dataset_name: str,
+    dataset_path: str,
     slices: List[slice] = None,
 ) -> np.ndarray:
     """
@@ -304,14 +302,13 @@ def get_data_from_file(
 
     Args:
         file_path: Path to the HDF5 file.
-        group_name: Name of the group.
-        dataset_name: Name of the dataset.
+        dataset_path: Path to the data set in the HDF5 file.
         slices: List of slices to apply to the dataset. If None, the whole dataset is returned.
     Returns:
         data: np.ndarray
     """
     with h5py.File(file_path, "r") as file:
-        dataset = file[f"{group_name}/{dataset_name}"]
+        dataset = file[dataset_path]
         if slices is not None:
             if dataset.ndim != len(slices):
                 _logger.error(
@@ -331,8 +328,7 @@ def get_data_from_file(
 
 def add_array(
     file_path: str,
-    group_name: str,
-    dataset_name: str,
+    dataset_path: str,
     data: np.ndarray,
     attributes: dict = None,
     compression: str = None,
@@ -351,54 +347,47 @@ def add_array(
         compression: Compression to use.
     """
     with h5py.File(file_path, "a") as file:
-        if group_name not in file:
-            file.create_group(group_name)
-            _logger.debug(f"Created group {group_name}")
+        # Split the dataset path into groups and dataset name
+        parts = dataset_path.split("/")
+        groups = parts[:-1]
+        dataset_name = parts[-1]
 
-        group = file[group_name]
+        # Create groups if they do not exist
+        current_group = file
+        for group in groups:
+            if group not in current_group:
+                current_group = current_group.create_group(group)
+            else:
+                current_group = current_group[group]
 
-        if dataset_name not in group:
-            group.create_dataset(
-                dataset_name,
-                data=data,
-                maxshape=(None, *data.shape[1:]),
-                chunks=(1, *data.shape[1:]),
-                compression=compression,
+        current_group.create_dataset(
+            dataset_name,
+            data=data,
+            maxshape=(None, *data.shape[1:]),
+            chunks=(1, *data.shape[1:]),
+            compression=compression,
+        )
+        current_dataset = current_group[dataset_name]
+        if attributes:
+            for key, value in attributes.items():
+                current_dataset.attrs[key] = value
+
+        if current_dataset.shape[1:] != data.shape[1:]:
+            _logger.error(
+                f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({current_dataset.shape[1:]})"
             )
-            dataset = group[dataset_name]
+            raise Exception(
+                f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({current_dataset.shape[1:]})"
+            )
+        if dataset_name == "offset_raw":
+            # the data here should not be stacked but averaged
+            current_dataset = (current_dataset + data) / 2
             if attributes:
                 for key, value in attributes.items():
-                    dataset.attrs[key] = value
-            _logger.debug(
-                f"Added dataset {dataset_name} to group {group_name} and added data of shape {dataset.shape}"
-            )
-
+                    current_dataset.attrs[key] = value
         else:
-            if group[dataset_name].shape[1:] != data.shape[1:]:
-                _logger.error(
-                    f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({group[dataset_name].shape[1:]})"
-                )
-                raise Exception(
-                    f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({group[dataset_name].shape[1:]})"
-                )
-            if dataset_name == "offset_raw":
-                # the data here should not be stacked but averaged
-                dataset = group[dataset_name]
-                dataset = (dataset + data) / 2
-                if attributes:
-                    for key, value in attributes.items():
-                        dataset.attrs[key] = value
-                _logger.debug(
-                    f"Appended data to dataset {dataset_name} in group {group_name}. Shape is now {dataset.shape}"
-                )
-
-            else:
-                dataset = group[dataset_name]
-                dataset.resize(dataset.shape[0] + data.shape[0], axis=0)
-                dataset[-data.shape[0] :] = data
-                if attributes:
-                    for key, value in attributes.items():
-                        dataset.attrs[key] = value
-                _logger.debug(
-                    f"Appended data to dataset {dataset_name} in group {group_name}. Shape is now {dataset.shape}"
-                )
+            current_dataset.resize(current_dataset.shape[0] + data.shape[0], axis=0)
+            current_dataset[-data.shape[0] :] = data
+            if attributes:
+                for key, value in attributes.items():
+                    current_dataset.attrs[key] = value
