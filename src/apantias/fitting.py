@@ -44,7 +44,65 @@ def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
         return np.array([np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
 
 
-def get_fit_gauss(data: np.ndarray) -> np.ndarray:
+def fit_2_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
+    """
+    fits a double gaussian to a histogram using the scipy curve_fit method
+
+    Args:
+        data_to_fit: np.array in 1 dimension
+    Returns:
+        np.array[amplitude1, mean1, sigma1, error_amplitude1, error_mean1, error_sigma1,
+        amplitude2, mean2, sigma2, error_amplitude2, error_mean2, error_sigma2]
+    """
+    median = np.nanmedian(data_to_fit)
+    std = np.nanstd(data_to_fit)
+    guess = [1, median, std, 1, median + 1, std]
+    try:
+        hist, bins = np.histogram(
+            data_to_fit,
+            bins=100,
+            range=(np.nanmin(data_to_fit), np.nanmax(data_to_fit)),
+            density=True,
+        )
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+        params, covar = curve_fit(two_gaussians, bin_centers, hist, p0=guess)
+        return np.array(
+            [
+                params[0],
+                params[1],
+                np.abs(params[2]),
+                np.sqrt(np.diag(covar))[0],
+                np.sqrt(np.diag(covar))[1],
+                np.sqrt(np.diag(covar))[2],
+                params[3],
+                params[4],
+                np.abs(params[5]),
+                np.sqrt(np.diag(covar))[3],
+                np.sqrt(np.diag(covar))[4],
+                np.sqrt(np.diag(covar))[5],
+            ]
+        )
+    except:
+        _logger.debug("Fitting for this histogram failed. Returning NaNs.")
+        return np.array(
+            [
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+            ]
+        )
+
+
+def get_fit_over_frames(data: np.ndarray, peaks: int) -> np.ndarray:
     """
     fits a gaussian for every pixel. The fitting is done over the
     histogram of the pixel values from all frames using the scipy
@@ -64,22 +122,26 @@ def get_fit_gauss(data: np.ndarray) -> np.ndarray:
     if data.ndim != 3:
         _logger.error("Data is not a 3D array")
         raise ValueError("Data is not a 3D array")
+    if peaks not in [1, 2]:
+        _logger.error("Peaks must be 1 or 2")
+        raise ValueError("Peaks must be 1 or 2")
+
     # apply the function to every frame
-    output = np.apply_along_axis(fit_gauss_to_hist, axis=0, arr=data)
+    if peaks == 1:
+        output = np.apply_along_axis(fit_gauss_to_hist, axis=0, arr=data)
+    if peaks == 2:
+        output = np.apply_along_axis(fit_2_gauss_to_hist, axis=0, arr=data)
     return output
 
 
-def gaussian(x: float, a1: float, mu1: float, sigma1: float) -> float:
-    return a1 * np.exp(-((x - mu1) ** 2) / (2 * sigma1**2))
+def gaussian(x: float, a: float, mu: float, sigma: float) -> float:
+    return a * np.exp(-((x - mu) ** 2) / (2 * sigma**2))
 
 
 def two_gaussians(
     x: float, a1: float, mu1: float, sigma1: float, a2: float, mu2: float, sigma2: float
 ) -> float:
-    return a1 * np.exp(
-        -((x - mu1) ** 2) / (2 * sigma1**2)
-        + a2 * np.exp(-((x - mu2) ** 2) / (2 * sigma2**2))
-    )
+    return gaussian(x, a1, mu1, sigma1) + gaussian(x, a2, mu2, sigma2)
 
 
 @njit(parallel=False)

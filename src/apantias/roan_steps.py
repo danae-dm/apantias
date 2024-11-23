@@ -260,14 +260,14 @@ class RoanSteps:
         )
 
         self._logger.info("Fitting pixelwise for offset and noise")
-        fitted = fit.get_fit_gauss(avg_over_nreps)
+        fitted = fit.get_fit_over_frames(avg_over_nreps, peaks=1)
         io.add_array(self.analysis_file, "offnoi/fit/amplitude", fitted[0, :, :])
         io.add_array(self.analysis_file, "offnoi/fit/mean", fitted[1, :, :])
         io.add_array(self.analysis_file, "offnoi/fit/sigma", fitted[2, :, :])
         io.add_array(self.analysis_file, "offnoi/fit/error_amplitude", fitted[3, :, :])
         io.add_array(self.analysis_file, "offnoi/fit/error_mean", fitted[4, :, :])
         io.add_array(self.analysis_file, "offnoi/fit/error_sigma", fitted[5, :, :])
-        fitted = fit.get_fit_gauss(avg_over_nreps_slopes_removed)
+        fitted = fit.get_fit_over_frames(avg_over_nreps_slopes_removed, peaks=1)
         io.add_array(
             self.analysis_file,
             "offnoi/fit_slopes_removed/amplitude",
@@ -432,3 +432,16 @@ class RoanSteps:
             "filter/events/event_count",
             np.sum(event_array != 0, axis=0),
         )
+        fitted = fit.get_fit_over_frames(avg_over_nreps_slopes_removed, peaks=2)
+        io.add_array(self.analysis_file, "gain/fit/amplitude1", fitted[0, :, :])
+        io.add_array(self.analysis_file, "gain/fit/mean1", fitted[1, :, :])
+        io.add_array(self.analysis_file, "gain/fit/sigma1", fitted[2, :, :])
+        io.add_array(self.analysis_file, "gain/fit/error_amplitude1", fitted[3, :, :])
+        io.add_array(self.analysis_file, "gain/fit/error_mean1", fitted[4, :, :])
+        io.add_array(self.analysis_file, "gain/fit/error_sigma1", fitted[5, :, :])
+        io.add_array(self.analysis_file, "gain/fit/amplitude2", fitted[6, :, :])
+        io.add_array(self.analysis_file, "gain/fit/mean2", fitted[7, :, :])
+        io.add_array(self.analysis_file, "gain/fit/sigma2", fitted[8, :, :])
+        io.add_array(self.analysis_file, "gain/fit/error_amplitude2", fitted[9, :, :])
+        io.add_array(self.analysis_file, "gain/fit/error_mean2", fitted[10, :, :])
+        io.add_array(self.analysis_file, "gain/fit/error_sigma2", fitted[11, :, :])
