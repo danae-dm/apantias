@@ -15,7 +15,6 @@ class Params:
     """
     common_params = {
         "common_results_dir": "",  # str
-        "common_bad_pixels": [],  # list of tuples
     }
     offnoi_params = {
         "offnoi_data_file": "",  # list of str
@@ -43,7 +42,6 @@ class Params:
     # types are checked when they are read
     params_types = {
         "common_results_dir": str,
-        "common_bad_pixels": list,  # actually, list of tuples
         "offnoi_data_file": str,
         "offnoi_nframes_eval": list,
         "offnoi_nreps_eval": list,

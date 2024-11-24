@@ -30,7 +30,6 @@ class RoanSteps:
 
         # common parameters from params file
         self.results_dir = self.params_dict["common_results_dir"]
-        self.bad_pixels = self.params_dict["common_bad_pixels"]
 
         # offnoi parameters from params file
         self.offnoi_data_file = self.params_dict["offnoi_data_file"]
@@ -53,7 +52,7 @@ class RoanSteps:
         self.filter_thres_bad_frames = self.params_dict["filter_thres_bad_frames"]
         self.filter_thres_bad_slopes = self.params_dict["filter_thres_bad_slopes"]
 
-        # parameters from data_h5 files
+        # get parameters from data_h5 file
         total_frames_offnoi, column_size_offnoi, row_size_offnoi, nreps_offnoi = (
             io.get_params_from_data_file(self.offnoi_data_file)
         )
@@ -87,7 +86,8 @@ class RoanSteps:
         if self.filter_nreps_eval[1] == -1:
             self.filter_nreps_eval[1] = self.filter_total_nreps
 
-        # create slices, these are used to get the data from the data files
+        # create slices for retrieval of data from the data file
+        # loading from h5 doesnt work with numpy sling notation, so we have to create slices
         self.offnoi_nreps_slice = slice(*self.offnoi_nreps_eval)
         self.offnoi_nframes_slice = slice(*self.offnoi_nframes_eval)
         self.filter_nreps_slice = slice(*self.filter_nreps_eval)
@@ -147,6 +147,7 @@ class RoanSteps:
             )
             * 2.5  # this is estimated, better safe than sorry
         )
+        self._logger.info(f"---------Start offnoi step---------")
         self._logger.info(f"RAM available: {self.ram_available:.1f} GB")
         self._logger.info(f"Estimated RAM usage: {estimated_ram_usage:.1f} GB")
         steps_needed = int(estimated_ram_usage / self.ram_available) + 1
@@ -175,9 +176,7 @@ class RoanSteps:
                 * self.polarity
             )
             self._logger.info(f"Data loaded: {data.shape}")
-            # set values of all frames and nreps of bad pixels to nan
-            if self.bad_pixels:
-                data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
+
             # delete bad frames from data
             if self.offnoi_thres_bad_frames != 0 or self.offnoi_thres_mips != 0:
                 data = an.exclude_mips_and_bad_frames(
@@ -334,9 +333,6 @@ class RoanSteps:
                 * self.polarity
             )
             self._logger.info(f"Data loaded: {data.shape}")
-            # set values of all frames and nreps of bad pixels to nan
-            if self.bad_pixels:
-                data = an.set_bad_pixellist_to_nan(data, self.bad_pixels)
             # delete bad frames from data
             if self.filter_thres_bad_frames != 0 or self.filter_thres_mips != 0:
                 data = an.exclude_mips_and_bad_frames(
