@@ -182,7 +182,6 @@ class RoanSteps:
                 data = an.exclude_mips_and_bad_frames(
                     data, self.offnoi_thres_mips, self.offnoi_thres_bad_frames
                 )
-                self._logger.debug(f"Shape of data: {data.shape}")
             # Calculate offset_raw on the raw data and update file
             avg_over_frames = utils.get_avg_over_frames(data)
             io.add_array(self.analysis_file, "offnoi/offset_raw", avg_over_frames)
@@ -259,39 +258,47 @@ class RoanSteps:
         )
 
         self._logger.info("Fitting pixelwise for offset and noise")
-        fitted = fit.get_fit_over_frames(avg_over_nreps, peaks=1)
-        io.add_array(self.analysis_file, "offnoi/fit/amplitude", fitted[0, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/mean", fitted[1, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/sigma", fitted[2, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/error_amplitude", fitted[3, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/error_mean", fitted[4, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/error_sigma", fitted[5, :, :])
-        fitted = fit.get_fit_over_frames(avg_over_nreps_slopes_removed, peaks=1)
+        fitted = fit.get_fit_over_frames(avg_over_nreps, peaks=2)
+        io.add_array(self.analysis_file, "offnoi/fit/amplitude1", fitted[0, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/mean1", fitted[1, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/sigma1", fitted[2, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/error_amplitude1", fitted[3, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/error_mean1", fitted[4, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/error_sigma1", fitted[5, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/amplitude2", fitted[6, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/mean2", fitted[7, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/sigma2", fitted[8, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/error_amplitude2", fitted[9, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/error_mean2", fitted[10, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit/error_sigma2", fitted[11, :, :])
+        fitted = fit.get_fit_over_frames(avg_over_nreps_slopes_removed, peaks=2)
         io.add_array(
-            self.analysis_file,
-            "offnoi/fit_slopes_removed/amplitude",
-            fitted[0, :, :],
+            self.analysis_file, "offnoi/fit_wo_slopes/amplitude1", fitted[0, :, :]
+        )
+        io.add_array(self.analysis_file, "offnoi/fit_wo_slopes/mean1", fitted[1, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit_wo_slopes/sigma1", fitted[2, :, :])
+        io.add_array(
+            self.analysis_file, "offnoi/fit_wo_slopes/error_amplitude1", fitted[3, :, :]
         )
         io.add_array(
-            self.analysis_file, "offnoi/fit_slopes_removed/mean", fitted[1, :, :]
+            self.analysis_file, "offnoi/fit_wo_slopes/error_mean1", fitted[4, :, :]
         )
         io.add_array(
-            self.analysis_file, "offnoi/fit_slopes_removed/sigma", fitted[2, :, :]
+            self.analysis_file, "offnoi/fit_wo_slopes/error_sigma1", fitted[5, :, :]
         )
         io.add_array(
-            self.analysis_file,
-            "offnoi/fit_slopes_removed/error_amplitude",
-            fitted[3, :, :],
+            self.analysis_file, "offnoi/fit_wo_slopes/amplitude2", fitted[6, :, :]
+        )
+        io.add_array(self.analysis_file, "offnoi/fit_wo_slopes/mean2", fitted[7, :, :])
+        io.add_array(self.analysis_file, "offnoi/fit_wo_slopes/sigma2", fitted[8, :, :])
+        io.add_array(
+            self.analysis_file, "offnoi/fit_wo_slopes/error_amplitude2", fitted[9, :, :]
         )
         io.add_array(
-            self.analysis_file,
-            "offnoi/fit_slopes_removed/error_mean",
-            fitted[4, :, :],
+            self.analysis_file, "offnoi/fit_wo_slopes/error_mean2", fitted[10, :, :]
         )
         io.add_array(
-            self.analysis_file,
-            "offnoi/fit_slopes_removed/error_sigma",
-            fitted[5, :, :],
+            self.analysis_file, "offnoi/fit_wo_slopes/error_sigma2", fitted[11, :, :]
         )
 
     # TODO: continue here
@@ -305,6 +312,7 @@ class RoanSteps:
             )
             * 2.5  # this is estimated, better safe than sorry
         )
+        self._logger.info(f"---------Start filter step---------")
         self._logger.info(f"RAM available: {self.ram_available:.1f} GB")
         self._logger.info(f"Estimated RAM usage: {estimated_ram_usage:.1f} GB")
         steps_needed = int(estimated_ram_usage / self.ram_available) + 1
