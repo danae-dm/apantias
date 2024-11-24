@@ -182,22 +182,50 @@ class RoanSteps:
                 data = an.exclude_mips_and_bad_frames(
                     data, self.offnoi_thres_mips, self.offnoi_thres_bad_frames
                 )
+
+            # TODO: look if this is a good way to do things:
+
             # Calculate offset_raw on the raw data and update file
-            avg_over_frames = utils.get_avg_over_frames(data)
-            io.add_array(self.analysis_file, "offnoi/offset_raw", avg_over_frames)
+            # avg_over_frames = utils.get_avg_over_frames(data)
+            # io.add_array(self.analysis_file, "offnoi/offset_raw", avg_over_frames)
             # offset the data and correct for common mode if necessary
-            data -= avg_over_frames[np.newaxis, :, :, :]
+            # data -= avg_over_frames[np.newaxis, :, :, :]
             if self.offnoi_comm_mode is True:
                 an.correct_common_mode(data)
             # calculate rndr signals and update file
             avg_over_nreps = utils.get_avg_over_nreps(data)
             io.add_array(
-                self.analysis_file, "offnoi/rndr_signals/all_frames", avg_over_nreps
+                self.analysis_file,
+                "offnoi/rndr_signals/all_frames_after_common",
+                avg_over_nreps,
             )
             io.add_array(
                 self.analysis_file,
-                "offnoi/rndr_signals/average",
+                "offnoi/rndr_signals/average_after_common",
                 np.nanmean(avg_over_nreps, axis=0),
+            )
+            fitted = fit.get_fit_over_frames(avg_over_nreps, peaks=2)
+            io.add_array(
+                self.analysis_file, "offnoi/first_fit/amplitude1", fitted[0, :, :]
+            )
+            io.add_array(self.analysis_file, "offnoi/first_fit/mean1", fitted[1, :, :])
+            io.add_array(self.analysis_file, "offnoi/first_fit/sigma1", fitted[2, :, :])
+            io.add_array(
+                self.analysis_file, "offnoi/first_fit/error_amplitude2", fitted[6, :, :]
+            )
+            io.add_array(
+                self.analysis_file, "offnoi/first_fit/error_mean2", fitted[7, :, :]
+            )
+            io.add_array(
+                self.analysis_file, "offnoi/first_fit/error_sigma2", fitted[8, :, :]
+            )
+            # subtract fitted offset from data
+            avg_over_nreps = -fitted[1, :, :]
+            io.add_array(
+                self.analysis_file, "offnoi/rndr_signals/all_frames", avg_over_nreps
+            )
+            io.add_array(
+                self.analysis_file, "offnoi/rndr_signals/average", avg_over_nreps
             )
             # calculate bad slopes and update file
             if self.offnoi_thres_bad_slopes != 0:
