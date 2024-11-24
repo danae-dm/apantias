@@ -277,6 +277,8 @@ class RoanSteps:
             "offnoi/rndr_signals/average",
             np.nanmean(avg_over_nreps, axis=0),
         )
+        self._logger.info("Finished calculating offset by fitting pixel wise")
+        self._logger.info("Finished offnoi step")
 
     # TODO: continue here
     def calc_filter_step(self) -> None:
@@ -301,6 +303,7 @@ class RoanSteps:
         # total processed frames over all steps
         total_frames_processed = 0
 
+        # process this in steps, so that the ram usage is below the available ram
         for step in range(steps_needed):
             self._logger.info(f"Start processing step {step+1} of {steps_needed}")
             current_frame_slice = slice(
@@ -323,21 +326,20 @@ class RoanSteps:
                 data = an.exclude_mips_and_bad_frames(
                     data, self.filter_thres_mips, self.filter_thres_bad_frames
                 )
-            self._logger.debug(f"Shape of data: {data.shape}")
 
-            self.final_frames_per_step = data.shape[0]
-            # Get offset_raw from offnoi step
-            avg_over_frames_offnoi = io.get_data_from_file(
-                self.analysis_file, "offnoi/offset_raw"
-            )
-            # offset the data and correct for common mode if necessary
-            data -= avg_over_frames_offnoi[np.newaxis, :, : self.filter_nreps_eval, :]
             if self.filter_comm_mode is True:
                 an.correct_common_mode(data)
             # calculate rndr signals and update file
             avg_over_nreps = utils.get_avg_over_nreps(data)
+            io.add_array(
+                self.analysis_file,
+                "filter/precal/rndr_signals_after_common",
+                avg_over_nreps,
+            )
             # subtract fitted offset from data
-            fitted_offset = io.get_data_from_file(self.analysis_file, "offnoi/fit/mean")
+            fitted_offset = io.get_data_from_file(
+                self.analysis_file, "offnoi/fit/mean1"
+            )
             avg_over_nreps -= fitted_offset
             io.add_array(
                 self.analysis_file, "filter/rndr_signals/all_frames", avg_over_nreps
@@ -358,6 +360,9 @@ class RoanSteps:
         bad_slopes_pos = np.full(slopes.shape, False, dtype=bool)
         bad_slopes_fit = np.zeros((6, self.column_size, self.row_size))
 
+        # TODO: paralellize this
+        # Calculate the bad slopes
+        self._logger.info("Start calculating bad slopes")
         for row in range(slopes.shape[1]):
             for col in range(slopes.shape[2]):
                 slopes_pixelwise = slopes[:, row, col]
@@ -382,26 +387,28 @@ class RoanSteps:
             np.sum(bad_slopes_pos, axis=0),
         )
         io.add_array(self.analysis_file, "filter/slopes/bad_slopes_fit", bad_slopes_fit)
+        self._logger.info("Finished calculating bad slopes")
 
-        avg_over_nreps_final = io.get_data_from_file(
+        self._logger.info("Start calculating offset by fitting pixel wise")
+        # load avg_over_nreps from the loop
+        avg_over_nreps = io.get_data_from_file(
             self.analysis_file, "filter/rndr_signals/all_frames"
         )
-        avg_over_nreps_slopes_removed = avg_over_nreps_final.copy()
-        avg_over_nreps_slopes_removed[bad_slopes_pos] = np.nan
-        noise_map = io.get_data_from_file(self.analysis_file, "offnoi/fit/sigma")
+        avg_over_nreps[bad_slopes_pos] = np.nan
+        noise_map = io.get_data_from_file(self.analysis_file, "offnoi/fit/sigma1")
         io.add_array(
             self.analysis_file,
             "filter/rndr_signals/all_frames_slopes_removed",
-            avg_over_nreps_slopes_removed,
+            avg_over_nreps,
         )
         io.add_array(
             self.analysis_file,
             "filter/rndr_signals/average_slopes_removed",
-            np.nanmean(avg_over_nreps_slopes_removed, axis=0),
+            np.nanmean(avg_over_nreps, axis=0),
         )
         structure = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
         event_array = an.group_pixels(
-            avg_over_nreps_slopes_removed,
+            avg_over_nreps,
             self.filter_thres_event_prim,
             self.filter_thres_event_sec,
             noise_map,
@@ -413,7 +420,7 @@ class RoanSteps:
             "filter/events/event_count",
             np.sum(event_array != 0, axis=0),
         )
-        fitted = fit.get_fit_over_frames(avg_over_nreps_slopes_removed, peaks=2)
+        fitted = fit.get_fit_over_frames(avg_over_nreps, peaks=2)
         io.add_array(self.analysis_file, "gain/fit/amplitude1", fitted[0, :, :])
         io.add_array(self.analysis_file, "gain/fit/mean1", fitted[1, :, :])
         io.add_array(self.analysis_file, "gain/fit/sigma1", fitted[2, :, :])

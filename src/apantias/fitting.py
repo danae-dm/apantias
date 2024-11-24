@@ -20,6 +20,10 @@ def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
         np.array[amplitude, mean, sigma, error_amplitude, error_mean, error_sigma]
     """
     guess = [1, np.nanmedian(data_to_fit), np.nanstd(data_to_fit)]
+    bounds = (
+        [0, np.nanmin(data_to_fit), 0],
+        [np.inf, np.nanmax(data_to_fit), np.inf],
+    )
     try:
         hist, bins = np.histogram(
             data_to_fit,
@@ -28,7 +32,7 @@ def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
             density=True,
         )
         bin_centers = (bins[:-1] + bins[1:]) / 2
-        params, covar = curve_fit(gaussian, bin_centers, hist, p0=guess)
+        params, covar = curve_fit(gaussian, bin_centers, hist, p0=guess, bounds=bounds)
         return np.array(
             [
                 params[0],
@@ -56,7 +60,18 @@ def fit_2_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
     """
     median = np.nanmedian(data_to_fit)
     std = np.nanstd(data_to_fit)
-    guess = [1, median, std, 1, median + 1, std]
+    guess = [1, median, std, 0.5, median + 1, std]
+    bounds = (
+        [0, np.nanmin(data_to_fit), 0, 0, np.nanmin(data_to_fit), 0],
+        [
+            np.inf,
+            np.nanmax(data_to_fit),
+            np.inf,
+            np.inf,
+            np.nanmax(data_to_fit),
+            np.inf,
+        ],
+    )
     try:
         hist, bins = np.histogram(
             data_to_fit,
@@ -65,7 +80,9 @@ def fit_2_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
             density=True,
         )
         bin_centers = (bins[:-1] + bins[1:]) / 2
-        params, covar = curve_fit(two_gaussians, bin_centers, hist, p0=guess)
+        params, covar = curve_fit(
+            two_gaussians, bin_centers, hist, p0=guess, bounds=bounds
+        )
         return np.array(
             [
                 params[0],
