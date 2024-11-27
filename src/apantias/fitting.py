@@ -19,24 +19,24 @@ def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
     Returns:
         np.array[amplitude, mean, sigma, error_amplitude, error_mean, error_sigma]
     """
-    min = np.nanmin(data_to_fit)
-    max = np.nanmax(data_to_fit)
-    hist, bins = np.histogram(
-        data_to_fit,
-        bins=100,
-        range=(min, max),
-        density=True,
-    )
-    bin_centers = (bins[:-1] + bins[1:]) / 2
-    median = np.nanmedian(data_to_fit)
-    std = np.nanstd(data_to_fit)
-    ampl_guess = np.nanmax(hist)
-    guess = [ampl_guess, median, std]
-    bounds = (
-        [0, min, 0],
-        [np.inf, max, np.inf],
-    )
     try:
+        min = np.nanmin(data_to_fit)
+        max = np.nanmax(data_to_fit)
+        hist, bins = np.histogram(
+            data_to_fit,
+            bins=100,
+            range=(min, max),
+            density=True,
+        )
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+        median = np.nanmedian(data_to_fit)
+        std = np.nanstd(data_to_fit)
+        ampl_guess = np.nanmax(hist)
+        guess = [ampl_guess, median, std]
+        bounds = (
+            [0, min, 0],
+            [np.inf, max, np.inf],
+        )
         params, covar = curve_fit(gaussian, bin_centers, hist, p0=guess, bounds=bounds)
         return np.array(
             [
@@ -49,7 +49,7 @@ def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
             ]
         )
     except:
-        _logger.debug("Fitting for this histogram failed. Returning NaNs.")
+        _logger.warning("Fitting for this histogram failed. Returning NaNs.")
         return np.array([np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
 
 
@@ -63,24 +63,25 @@ def fit_2_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
         np.array[amplitude1, mean1, sigma1, error_amplitude1, error_mean1, error_sigma1,
         amplitude2, mean2, sigma2, error_amplitude2, error_mean2, error_sigma2]
     """
-    min = np.nanmin(data_to_fit)
-    max = np.nanmax(data_to_fit)
-    hist, bins = np.histogram(
-        data_to_fit,
-        bins=100,
-        range=(min, max),
-        density=True,
-    )
-    bin_centers = (bins[:-1] + bins[1:]) / 2
-    median = np.nanmedian(data_to_fit)
-    std = np.nanstd(data_to_fit)
-    ampl_guess = np.nanmax(hist)
-    guess = [ampl_guess, median, std, 0.3 * ampl_guess, median + 1, std]
-    bounds = (
-        [0, min, 0, 0, min, 0],
-        [np.inf, max, np.inf, np.inf, max, np.inf],
-    )
+
     try:
+        min = np.nanmin(data_to_fit)
+        max = np.nanmax(data_to_fit)
+        hist, bins = np.histogram(
+            data_to_fit,
+            bins=100,
+            range=(min, max),
+            density=True,
+        )
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+        median = np.nanmedian(data_to_fit)
+        std = np.nanstd(data_to_fit)
+        ampl_guess = np.nanmax(hist)
+        guess = [ampl_guess, median, std, 0.3 * ampl_guess, median + 1, std]
+        bounds = (
+            [0, min, 0, 0, min, 0],
+            [np.inf, max, np.inf, np.inf, max, np.inf],
+        )
         params, covar = curve_fit(
             two_gaussians, bin_centers, hist, p0=guess, bounds=bounds
         )
@@ -101,7 +102,7 @@ def fit_2_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
             ]
         )
     except:
-        _logger.debug("Fitting for this histogram failed. Returning NaNs.")
+        _logger.warning("Fitting for this histogram failed. Returning NaNs.")
         return np.array(
             [
                 np.nan,
