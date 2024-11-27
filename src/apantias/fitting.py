@@ -1,4 +1,5 @@
 import gc
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from scipy.optimize import curve_fit
 import numpy as np
@@ -19,6 +20,8 @@ def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
     Returns:
         np.array[amplitude, mean, sigma, error_amplitude, error_mean, error_sigma]
     """
+    if np.all(np.isnan(data_to_fit)):
+        return np.array([np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
     try:
         min = np.nanmin(data_to_fit)
         max = np.nanmax(data_to_fit)
@@ -49,7 +52,7 @@ def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
             ]
         )
     except:
-        _logger.warning("Fitting for this histogram failed. Returning NaNs.")
+        _logger.debug("Fitting for this histogram failed. Returning NaNs.")
         return np.array([np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
 
 
@@ -63,6 +66,23 @@ def fit_2_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
         np.array[amplitude1, mean1, sigma1, error_amplitude1, error_mean1, error_sigma1,
         amplitude2, mean2, sigma2, error_amplitude2, error_mean2, error_sigma2]
     """
+    if np.all(np.isnan(data_to_fit)):
+        return np.array(
+            [
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+            ]
+        )
 
     try:
         min = np.nanmin(data_to_fit)
@@ -102,7 +122,7 @@ def fit_2_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
             ]
         )
     except:
-        _logger.warning("Fitting for this histogram failed. Returning NaNs.")
+        _logger.debug("Fitting for this histogram failed. Returning NaNs.")
         return np.array(
             [
                 np.nan,
@@ -119,6 +139,66 @@ def fit_2_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
                 np.nan,
             ]
         )
+
+
+def process_row(data, row, peaks):
+    if peaks not in [1, 2]:
+        raise ValueError("Peaks must be 1 or 2")
+    if peaks == 1:
+        result = np.apply_along_axis(fit_gauss_to_hist, axis=0, arr=data)
+    if peaks == 2:
+        result = np.apply_along_axis(fit_2_gauss_to_hist, axis=0, arr=data)
+    return row, result
+
+
+def get_pixelwise_fit(data: np.ndarray, peaks: int) -> np.ndarray:
+    # apply the function to every pixel
+    if peaks not in [1, 2]:
+        raise ValueError("Peaks must be 1 or 2")
+    if peaks == 1:
+        results = np.zeros((data.shape[1], data.shape[2], 6))
+        with ProcessPoolExecutor() as executor:
+            # add futures
+            futures = []
+            for row in range(data.shape[1]):
+                row_data = np.copy(data[:, row, :])
+                futures.append(executor.submit(process_row, row_data, row, 1))
+                _logger.debug(f"Added row {row} to executor")
+            total_futures = len(futures)
+            completed_futures = 0
+            for future in as_completed(futures):
+                try:
+                    row, row_results = future.result()
+                    results[row] = row_results.T
+                    completed_futures += 1
+                    _logger.debug(
+                        f"Completed row {row} ({completed_futures}/{total_futures})"
+                    )
+                except Exception as e:
+                    _logger.error(f"Error processing column {row}: {e}")
+        return results
+    if peaks == 2:
+        results = np.zeros((data.shape[1], data.shape[2], 12))
+        with ProcessPoolExecutor() as executor:
+            # add futures
+            futures = []
+            for row in range(data.shape[1]):
+                row_data = np.copy(data[:, row, :])
+                futures.append(executor.submit(process_row, row_data, row, 2))
+                _logger.debug(f"Added row {row} to executor")
+            total_futures = len(futures)
+            completed_futures = 0
+            for future in as_completed(futures):
+                try:
+                    row, row_results = future.result()
+                    results[row] = row_results.T
+                    completed_futures += 1
+                    _logger.debug(
+                        f"Completed row {row} ({completed_futures}/{total_futures})"
+                    )
+                except Exception as e:
+                    _logger.error(f"Error processing column {row}: {e}")
+        return results
 
 
 def get_fit_over_frames(data: np.ndarray, peaks: int) -> np.ndarray:

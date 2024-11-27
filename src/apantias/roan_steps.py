@@ -147,6 +147,7 @@ class RoanSteps:
             )
             * 2.5  # this is estimated, better safe than sorry
         )
+
         self._logger.info(f"---------Start offnoi step---------")
         self._logger.info(f"RAM available: {self.ram_available:.1f} GB")
         self._logger.info(f"Estimated RAM usage: {estimated_ram_usage:.1f} GB")
@@ -159,7 +160,10 @@ class RoanSteps:
         # total processed frames over all steps
         total_frames_processed = 0
 
-        # process this in steps, so that the ram usage is below the available ram
+        """
+        Start of the loop to process the data in steps, so that the ram usage is below the available ram
+        -removed mips and bad frames for now
+        """
         for step in range(steps_needed):
             self._logger.info(f"Start processing step {step+1} of {steps_needed}")
             current_frame_slice = slice(
@@ -177,83 +181,72 @@ class RoanSteps:
                 * self.polarity
             )
             self._logger.info(f"Data loaded: {data.shape}")
-
-            # delete bad frames from data
-            if self.offnoi_thres_bad_frames != 0 or self.offnoi_thres_mips != 0:
-                data = an.exclude_mips_and_bad_frames(
-                    data, self.offnoi_thres_mips, self.offnoi_thres_bad_frames
-                )
-
             if self.offnoi_comm_mode is True:
                 an.correct_common_mode(data)
-            # calculate rndr signals and update file
             avg_over_nreps = utils.get_avg_over_nreps(data)
             io.add_array(
                 self.analysis_file,
                 "offnoi/precal/rndr_signals_after_common",
                 avg_over_nreps,
             )
-            # calculate bad slopes and update file
             if self.offnoi_thres_bad_slopes != 0:
                 slopes = an.get_slopes(data)
                 io.add_array(self.analysis_file, "offnoi/slopes/all_frames", slopes)
-                io.add_array(
-                    self.analysis_file,
-                    "offnoi/slopes/average",
-                    np.nanmean(slopes, axis=0),
-                )
             total_frames_processed += frames_per_step
             self._logger.info(f"Finished step {step+1} of {steps_needed} total Steps")
 
-        # TODO: paralellize this
-        # Calculate the bad slopes
         self._logger.info("Start calculating bad slopes")
         slopes = io.get_data_from_file(self.analysis_file, "offnoi/slopes/all_frames")
-        bad_slopes_pos = np.full(slopes.shape, False, dtype=bool)
-        bad_slopes_fit = np.zeros((6, self.column_size, self.row_size))
-
-        for row in range(slopes.shape[1]):
-            for col in range(slopes.shape[2]):
-                slopes_pixelwise = slopes[:, row, col]
-                fit_pixelwise = fit.fit_gauss_to_hist(slopes_pixelwise.flatten())
-                lower_bound = fit_pixelwise[1] - self.offnoi_thres_bad_slopes * np.abs(
-                    fit_pixelwise[2]
-                )
-                upper_bound = fit_pixelwise[1] + self.offnoi_thres_bad_slopes * np.abs(
-                    fit_pixelwise[2]
-                )
-                bad_slopes_mask = (slopes_pixelwise < lower_bound) | (
-                    slopes_pixelwise > upper_bound
-                )
-                frame = np.where(bad_slopes_mask)[0]
-                bad_slopes_pos[frame, row, col] = True
-                bad_slopes_fit[:, row, col] = fit_pixelwise
-
-        io.add_array(self.analysis_file, "offnoi/slopes/bad_slopes_pos", bad_slopes_pos)
+        fitted = fit.get_pixelwise_fit(slopes, peaks=1)
+        lower_bound = fitted[:, :, 1] - self.offnoi_thres_bad_slopes * np.abs(
+            fitted[:, :, 2]
+        )
+        upper_bound = fitted[:, :, 1] + self.offnoi_thres_bad_slopes * np.abs(
+            fitted[:, :, 2]
+        )
+        bad_slopes_mask = (slopes < lower_bound) | (slopes > upper_bound)
+        io.add_array(self.analysis_file, "offnoi/slopes/fit/amplitude", fitted[:, :, 0])
+        io.add_array(self.analysis_file, "offnoi/slopes/fit/mean", fitted[:, :, 1])
+        io.add_array(self.analysis_file, "offnoi/slopes/fit/sigma", fitted[:, :, 2])
+        io.add_array(
+            self.analysis_file, "offnoi/slopes/fit/error_amplitude", fitted[:, :, 3]
+        )
+        io.add_array(
+            self.analysis_file, "offnoi/slopes/fit/error_mean", fitted[:, :, 4]
+        )
+        io.add_array(
+            self.analysis_file, "offnoi/slopes/fit/error_sigma", fitted[:, :, 5]
+        )
+        io.add_array(
+            self.analysis_file, "offnoi/slopes/bad_slopes_mask", bad_slopes_mask
+        )
         io.add_array(
             self.analysis_file,
             "offnoi/slopes/bad_slopes_count",
-            np.sum(bad_slopes_pos, axis=0),
+            np.sum(bad_slopes_mask, axis=0),
         )
-        io.add_array(self.analysis_file, "offnoi/slopes/bad_slopes_fit", bad_slopes_fit)
+        failed_fits = np.sum(np.isnan(fitted[:, :, 1]))
+        if failed_fits > 0:
+            self._logger.warning(
+                f"Failed fits: {failed_fits} ({failed_fits/(self.column_size*self.row_size)*100:.2f}%)"
+            )
         self._logger.info("Finished calculating bad slopes")
 
-        self._logger.info("Start calculating offset by fitting pixel wise")
-        # load avg_over_nreps from the loop
+        # get avg_over_nreps from the loop
         avg_over_nreps = io.get_data_from_file(
             self.analysis_file, "offnoi/precal/rndr_signals_after_common"
         )
         # set bad slopes to nan, so they not interfere in future calculations
-        avg_over_nreps[bad_slopes_pos] = np.nan
+        avg_over_nreps[bad_slopes_mask] = np.nan
         io.add_array(
             self.analysis_file,
             "offnoi/precal/rndr_signals_after_common_slopes_removed",
             avg_over_nreps,
         )
+
         # TODO: check if this preliminary fit is useful
-        # do a preliminary fit and set outliers to nan
-        self._logger.info("Start preliminary fit")
-        fitted = fit.get_fit_over_frames(avg_over_nreps, peaks=1)
+        self._logger.info("Start preliminary fit to remove outliers")
+        fitted = fit.get_pixelwise_fit(avg_over_nreps, peaks=1)
         io.add_array(self.analysis_file, "offnoi/prelim_fit/amplitude", fitted[0, :, :])
         io.add_array(self.analysis_file, "offnoi/prelim_fit/mean", fitted[1, :, :])
         io.add_array(self.analysis_file, "offnoi/prelim_fit/sigma", fitted[2, :, :])
@@ -266,42 +259,47 @@ class RoanSteps:
         io.add_array(
             self.analysis_file, "offnoi/prelim_fit/error_sigma", fitted[5, :, :]
         )
-        lower_bound = fitted[1, :, :] - 8 * fitted[2, :, :]
-        upper_bound = fitted[1, :, :] + 8 * fitted[2, :, :]
+        lower_bound = fitted[:, :, 1] - 8 * fitted[:, :, 2]
+        upper_bound = fitted[:, :, 1] + 8 * fitted[:, :, 2]
         avg_over_nreps[
             (avg_over_nreps < lower_bound) | (avg_over_nreps > upper_bound)
         ] = np.nan
-        self._logger.info("Finished preliminary fit")
-        # fit a 2 peak gaussian to the data
-        self._logger.info("Start fitting 2 peak gaussian")
-        fitted = fit.get_fit_over_frames(avg_over_nreps, peaks=2)
-        io.add_array(self.analysis_file, "offnoi/fit/amplitude1", fitted[0, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/mean1", fitted[1, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/sigma1", fitted[2, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/error_amplitude1", fitted[3, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/error_mean1", fitted[4, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/error_sigma1", fitted[5, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/amplitude2", fitted[6, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/mean2", fitted[7, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/sigma2", fitted[8, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/error_amplitude2", fitted[9, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/error_mean2", fitted[10, :, :])
-        io.add_array(self.analysis_file, "offnoi/fit/error_sigma2", fitted[11, :, :])
-        self._logger.info("Finished fitting 2 peak gaussian")
-        # use the fitted mean of the first peak as offset
-        avg_over_nreps -= fitted[1, :, :]
+        failed_fits = np.sum(np.isnan(fitted[1, :, :]))
+        if failed_fits > 0:
+            self._logger.warning(
+                f"Failed fits: {failed_fits} ({failed_fits/(self.column_size*self.row_size)*100:.2f}%)"
+            )
+        self._logger.info("Finished preliminary fit to remove outliers")
 
+        self._logger.info("Start fitting 2 peak gaussian to determine offset")
+        fitted = fit.get_pixelwise_fit(avg_over_nreps, peaks=2)
+        io.add_array(self.analysis_file, "offnoi/fit/amplitude1", fitted[:, :, 0])
+        io.add_array(self.analysis_file, "offnoi/fit/mean1", fitted[:, :, 1])
+        io.add_array(self.analysis_file, "offnoi/fit/sigma1", fitted[:, :, 2])
+        io.add_array(self.analysis_file, "offnoi/fit/error_amplitude1", fitted[:, :, 3])
+        io.add_array(self.analysis_file, "offnoi/fit/error_mean1", fitted[:, :, 4])
+        io.add_array(self.analysis_file, "offnoi/fit/error_sigma1", fitted[:, :, 5])
+        io.add_array(self.analysis_file, "offnoi/fit/amplitude2", fitted[:, :, 6])
+        io.add_array(self.analysis_file, "offnoi/fit/mean2", fitted[:, :, 7])
+        io.add_array(self.analysis_file, "offnoi/fit/sigma2", fitted[:, :, 8])
+        io.add_array(self.analysis_file, "offnoi/fit/error_amplitude2", fitted[:, :, 9])
+        io.add_array(self.analysis_file, "offnoi/fit/error_mean2", fitted[:, :, 10])
+        io.add_array(self.analysis_file, "offnoi/fit/error_sigma2", fitted[:, :, 11])
+        failed_fits = np.sum(np.isnan(fitted[:, :, 1]))
+        if failed_fits > 0:
+            self._logger.warning(
+                f"Failed fits: {failed_fits} ({failed_fits/(self.column_size*self.row_size)*100:.2f}%)"
+            )
+        self._logger.info("Start fitting 2 peak gaussian to determine offset")
+
+        self._logger.info("Offset data and save rndr_signals")
+        avg_over_nreps -= fitted[:, :, 1]
         io.add_array(
             self.analysis_file,
             "offnoi/rndr_signals/all_frames",
             avg_over_nreps,
         )
-        io.add_array(
-            self.analysis_file,
-            "offnoi/rndr_signals/average",
-            np.nanmean(avg_over_nreps, axis=0),
-        )
-        self._logger.info("Finished calculating offset by fitting pixel wise")
+        self._logger.info("Finished offsetting data and saving rndr_signals")
         self._logger.info("Finished offnoi step")
 
     # TODO: continue here
@@ -327,7 +325,10 @@ class RoanSteps:
         # total processed frames over all steps
         total_frames_processed = 0
 
-        # process this in steps, so that the ram usage is below the available ram
+        """
+        Start of the loop to process the data in steps, so that the ram usage is below the available ram
+        -removed mips and bad frames for now
+        """
         for step in range(steps_needed):
             self._logger.info(f"Start processing step {step+1} of {steps_needed}")
             current_frame_slice = slice(
@@ -345,22 +346,14 @@ class RoanSteps:
                 * self.polarity
             )
             self._logger.info(f"Data loaded: {data.shape}")
-            # delete bad frames from data
-            if self.filter_thres_bad_frames != 0 or self.filter_thres_mips != 0:
-                data = an.exclude_mips_and_bad_frames(
-                    data, self.filter_thres_mips, self.filter_thres_bad_frames
-                )
-
             if self.filter_comm_mode is True:
                 an.correct_common_mode(data)
-            # calculate rndr signals and update file
             avg_over_nreps = utils.get_avg_over_nreps(data)
             io.add_array(
                 self.analysis_file,
                 "filter/precal/rndr_signals_after_common",
                 avg_over_nreps,
             )
-            # subtract fitted offset from data
             fitted_offset = io.get_data_from_file(
                 self.analysis_file, "offnoi/fit/mean1"
             )
@@ -368,86 +361,63 @@ class RoanSteps:
             io.add_array(
                 self.analysis_file, "filter/rndr_signals/all_frames", avg_over_nreps
             )
-            io.add_array(
-                self.analysis_file,
-                "filter/rndr_signals/average",
-                np.nanmean(avg_over_nreps, axis=0),
-            )
-            # calculate bad slopes and update file
             if self.filter_thres_bad_slopes != 0:
                 slopes = an.get_slopes(data)
                 io.add_array(self.analysis_file, "filter/slopes/all_frames", slopes)
-            self._logger.info(f"Finished step {step+1} of {steps_needed} total Steps")
             total_frames_processed += frames_per_step
+            self._logger.info(f"Finished step {step+1} of {steps_needed} total Steps")
 
-        slopes = io.get_data_from_file(self.analysis_file, "filter/slopes/all_frames")
-        bad_slopes_pos = np.full(slopes.shape, False, dtype=bool)
-        bad_slopes_fit = np.zeros((6, self.column_size, self.row_size))
-
-        # TODO: paralellize this
-        # Calculate the bad slopes
         self._logger.info("Start calculating bad slopes")
-        for row in range(slopes.shape[1]):
-            for col in range(slopes.shape[2]):
-                slopes_pixelwise = slopes[:, row, col]
-                fit_pixelwise = fit.fit_gauss_to_hist(slopes_pixelwise.flatten())
-                lower_bound = fit_pixelwise[1] - self.offnoi_thres_bad_slopes * np.abs(
-                    fit_pixelwise[2]
-                )
-                upper_bound = fit_pixelwise[1] + self.offnoi_thres_bad_slopes * np.abs(
-                    fit_pixelwise[2]
-                )
-                bad_slopes_mask = (slopes_pixelwise < lower_bound) | (
-                    slopes_pixelwise > upper_bound
-                )
-                frame = np.where(bad_slopes_mask)[0]
-                bad_slopes_pos[frame, row, col] = True
-                bad_slopes_fit[:, row, col] = fit_pixelwise
-
-        io.add_array(self.analysis_file, "filter/slopes/bad_slopes_pos", bad_slopes_pos)
+        slopes = io.get_data_from_file(self.analysis_file, "filter/slopes/all_frames")
+        fitted = fit.get_pixelwise_fit(slopes, peaks=1)
+        lower_bound = fitted[:, :, 1] - self.filter_thres_bad_slopes * np.abs(
+            fitted[:, :, 2]
+        )
+        upper_bound = fitted[:, :, 1] + self.filter_thres_bad_slopes * np.abs(
+            fitted[:, :, 2]
+        )
+        bad_slopes_mask = (slopes < lower_bound) | (slopes > upper_bound)
+        io.add_array(self.analysis_file, "filter/slopes/fit/amplitude", fitted[:, :, 0])
+        io.add_array(self.analysis_file, "filter/slopes/fit/mean", fitted[:, :, 1])
+        io.add_array(self.analysis_file, "filter/slopes/fit/sigma", fitted[:, :, 2])
+        io.add_array(
+            self.analysis_file, "filter/slopes/fit/error_amplitude", fitted[:, :, 3]
+        )
+        io.add_array(
+            self.analysis_file, "filter/slopes/fit/error_mean", fitted[:, :, 4]
+        )
+        io.add_array(
+            self.analysis_file, "filter/slopes/fit/error_sigma", fitted[:, :, 5]
+        )
+        io.add_array(
+            self.analysis_file, "filter/slopes/bad_slopes_mask", bad_slopes_mask
+        )
         io.add_array(
             self.analysis_file,
             "filter/slopes/bad_slopes_count",
-            np.sum(bad_slopes_pos, axis=0),
+            np.sum(bad_slopes_mask, axis=0),
         )
-        io.add_array(self.analysis_file, "filter/slopes/bad_slopes_fit", bad_slopes_fit)
+        failed_fits = np.sum(np.isnan(fitted[:, :, 1]))
+        if failed_fits > 0:
+            self._logger.warning(
+                f"Failed fits: {failed_fits} ({failed_fits/(self.column_size*self.row_size)*100:.2f}%)"
+            )
         self._logger.info("Finished calculating bad slopes")
 
-        self._logger.info("Start calculating offset by fitting pixel wise")
         # load avg_over_nreps from the loop
         avg_over_nreps = io.get_data_from_file(
             self.analysis_file, "filter/rndr_signals/all_frames"
         )
-        avg_over_nreps[bad_slopes_pos] = np.nan
-        noise_map = io.get_data_from_file(self.analysis_file, "offnoi/fit/sigma1")
+        # set bad slopes to nan, so they not interfere in future calculations
+        avg_over_nreps[bad_slopes_mask] = np.nan
         io.add_array(
             self.analysis_file,
             "filter/rndr_signals/all_frames_slopes_removed",
             avg_over_nreps,
         )
-        io.add_array(
-            self.analysis_file,
-            "filter/rndr_signals/average_slopes_removed",
-            np.nanmean(avg_over_nreps, axis=0),
-        )
-        structure = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
-        event_array = an.group_pixels(
-            avg_over_nreps,
-            self.filter_thres_event_prim,
-            self.filter_thres_event_sec,
-            noise_map,
-            structure,
-        )
-        io.add_array(self.analysis_file, "filter/events/event_array", event_array)
-        io.add_array(
-            self.analysis_file,
-            "filter/events/event_count",
-            np.sum(event_array != 0, axis=0),
-        )
-        # TODO: check if this preliminary fit is useful
-        # do a preliminary fit and set outliers to nan
-        self._logger.info("Start preliminary fit")
-        fitted = fit.get_fit_over_frames(avg_over_nreps, peaks=1)
+
+        self._logger.info("Start preliminary fit to remove outliers")
+        fitted = fit.get_pixelwise_fit(avg_over_nreps, peaks=1)
         io.add_array(self.analysis_file, "filter/prelim_fit/amplitude", fitted[0, :, :])
         io.add_array(self.analysis_file, "filter/prelim_fit/mean", fitted[1, :, :])
         io.add_array(self.analysis_file, "filter/prelim_fit/sigma", fitted[2, :, :])
@@ -460,25 +430,49 @@ class RoanSteps:
         io.add_array(
             self.analysis_file, "filter/prelim_fit/error_sigma", fitted[5, :, :]
         )
-        lower_bound = fitted[1, :, :] - 8 * fitted[2, :, :]
-        upper_bound = fitted[1, :, :] + 8 * fitted[2, :, :]
+        lower_bound = fitted[:, :, 1] - 8 * fitted[:, :, 2]
+        upper_bound = fitted[:, :, 1] + 8 * fitted[:, :, 2]
         avg_over_nreps[
             (avg_over_nreps < lower_bound) | (avg_over_nreps > upper_bound)
         ] = np.nan
-        self._logger.info("Finished preliminary fit")
-        # fit a 2 peak gaussian to the data
-        self._logger.info("Start fitting 2 peak gaussian")
-        fitted = fit.get_fit_over_frames(avg_over_nreps, peaks=2)
-        io.add_array(self.analysis_file, "gain/fit/amplitude1", fitted[0, :, :])
-        io.add_array(self.analysis_file, "gain/fit/mean1", fitted[1, :, :])
-        io.add_array(self.analysis_file, "gain/fit/sigma1", fitted[2, :, :])
-        io.add_array(self.analysis_file, "gain/fit/error_amplitude1", fitted[3, :, :])
-        io.add_array(self.analysis_file, "gain/fit/error_mean1", fitted[4, :, :])
-        io.add_array(self.analysis_file, "gain/fit/error_sigma1", fitted[5, :, :])
-        io.add_array(self.analysis_file, "gain/fit/amplitude2", fitted[6, :, :])
-        io.add_array(self.analysis_file, "gain/fit/mean2", fitted[7, :, :])
-        io.add_array(self.analysis_file, "gain/fit/sigma2", fitted[8, :, :])
-        io.add_array(self.analysis_file, "gain/fit/error_amplitude2", fitted[9, :, :])
-        io.add_array(self.analysis_file, "gain/fit/error_mean2", fitted[10, :, :])
-        io.add_array(self.analysis_file, "gain/fit/error_sigma2", fitted[11, :, :])
-        self._logger.info("Finished fitting 2 peak gaussian")
+        failed_fits = np.sum(np.isnan(fitted[1, :, :]))
+        if failed_fits > 0:
+            self._logger.warning(
+                f"Failed fits: {failed_fits} ({failed_fits/(self.column_size*self.row_size)*100:.2f}%)"
+            )
+        self._logger.info("Finished preliminary fit to remove outliers")
+
+        self._logger.info("Start Calculating event_map")
+        noise_map = io.get_data_from_file(self.analysis_file, "offnoi/fit/sigma1")
+        structure = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
+        event_array = an.group_pixels(
+            avg_over_nreps,
+            self.filter_thres_event_prim,
+            self.filter_thres_event_sec,
+            noise_map,
+            structure,
+        )
+        io.add_array(self.analysis_file, "filter/events/event_map", event_array)
+        io.add_array(
+            self.analysis_file,
+            "filter/events/event_map_counts",
+            np.sum(event_array != 0, axis=0),
+        )
+        self._logger.info("Finished calculating event_map")
+
+        self._logger.info("Start fitting 2 peak gaussian for gain calculation")
+        fitted = fit.get_pixelwise_fit(avg_over_nreps, peaks=2)
+        io.add_array(self.analysis_file, "gain/fit/amplitude1", fitted[:, :, 0])
+        io.add_array(self.analysis_file, "gain/fit/mean1", fitted[:, :, 1])
+        io.add_array(self.analysis_file, "gain/fit/sigma1", fitted[:, :, 2])
+        io.add_array(self.analysis_file, "gain/fit/error_amplitude1", fitted[:, :, 3])
+        io.add_array(self.analysis_file, "gain/fit/error_mean1", fitted[:, :, 4])
+        io.add_array(self.analysis_file, "gain/fit/error_sigma1", fitted[:, :, 5])
+        io.add_array(self.analysis_file, "gain/fit/amplitude2", fitted[:, :, 6])
+        io.add_array(self.analysis_file, "gain/fit/mean2", fitted[:, :, 7])
+        io.add_array(self.analysis_file, "gain/fit/sigma2", fitted[:, :, 8])
+        io.add_array(self.analysis_file, "gain/fit/error_amplitude2", fitted[:, :, 9])
+        io.add_array(self.analysis_file, "gain/fit/error_mean2", fitted[:, :, 10])
+        io.add_array(self.analysis_file, "gain/fit/error_sigma2", fitted[:, :, 11])
+        self._logger.info("Finished fitting 2 peak gaussian for gain calculation")
+        self._logger.info("Finished filter step")

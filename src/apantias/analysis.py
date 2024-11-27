@@ -102,11 +102,6 @@ def correct_common_mode(data: np.ndarray) -> None:
     _logger.info("Data is corrected for common mode.")
 
 
-# TODO: Rewrite EventMap and GainFit:
-# - EventMap: Current structure cannot be written to h5 file
-# - GainFit: Find some parameters to find "good" pixels first
-
-
 @njit(parallel=True)
 def group_pixels(data, primary_threshold, secondary_threshold, noise_map, structure):
     """
