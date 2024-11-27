@@ -250,7 +250,30 @@ class RoanSteps:
             "offnoi/precal/rndr_signals_after_common_slopes_removed",
             avg_over_nreps,
         )
+        # TODO: check if this preliminary fit is useful
+        # do a preliminary fit and set outliers to nan
+        self._logger.info("Start preliminary fit")
+        fitted = fit.get_fit_over_frames(avg_over_nreps, peaks=1)
+        io.add_array(self.analysis_file, "offnoi/prelim_fit/amplitude", fitted[0, :, :])
+        io.add_array(self.analysis_file, "offnoi/prelim_fit/mean", fitted[1, :, :])
+        io.add_array(self.analysis_file, "offnoi/prelim_fit/sigma", fitted[2, :, :])
+        io.add_array(
+            self.analysis_file, "offnoi/prelim_fit/error_amplitude", fitted[3, :, :]
+        )
+        io.add_array(
+            self.analysis_file, "offnoi/prelim_fit/error_mean", fitted[4, :, :]
+        )
+        io.add_array(
+            self.analysis_file, "offnoi/prelim_fit/error_sigma", fitted[5, :, :]
+        )
+        lower_bound = fitted[1, :, :] - 8 * fitted[2, :, :]
+        upper_bound = fitted[1, :, :] + 8 * fitted[2, :, :]
+        avg_over_nreps[
+            (avg_over_nreps < lower_bound) | (avg_over_nreps > upper_bound)
+        ] = np.nan
+        self._logger.info("Finished preliminary fit")
         # fit a 2 peak gaussian to the data
+        self._logger.info("Start fitting 2 peak gaussian")
         fitted = fit.get_fit_over_frames(avg_over_nreps, peaks=2)
         io.add_array(self.analysis_file, "offnoi/fit/amplitude1", fitted[0, :, :])
         io.add_array(self.analysis_file, "offnoi/fit/mean1", fitted[1, :, :])
@@ -264,6 +287,7 @@ class RoanSteps:
         io.add_array(self.analysis_file, "offnoi/fit/error_amplitude2", fitted[9, :, :])
         io.add_array(self.analysis_file, "offnoi/fit/error_mean2", fitted[10, :, :])
         io.add_array(self.analysis_file, "offnoi/fit/error_sigma2", fitted[11, :, :])
+        self._logger.info("Finished fitting 2 peak gaussian")
         # use the fitted mean of the first peak as offset
         avg_over_nreps -= fitted[1, :, :]
 
@@ -420,6 +444,30 @@ class RoanSteps:
             "filter/events/event_count",
             np.sum(event_array != 0, axis=0),
         )
+        # TODO: check if this preliminary fit is useful
+        # do a preliminary fit and set outliers to nan
+        self._logger.info("Start preliminary fit")
+        fitted = fit.get_fit_over_frames(avg_over_nreps, peaks=1)
+        io.add_array(self.analysis_file, "filter/prelim_fit/amplitude", fitted[0, :, :])
+        io.add_array(self.analysis_file, "filter/prelim_fit/mean", fitted[1, :, :])
+        io.add_array(self.analysis_file, "filter/prelim_fit/sigma", fitted[2, :, :])
+        io.add_array(
+            self.analysis_file, "filter/prelim_fit/error_amplitude", fitted[3, :, :]
+        )
+        io.add_array(
+            self.analysis_file, "filter/prelim_fit/error_mean", fitted[4, :, :]
+        )
+        io.add_array(
+            self.analysis_file, "filter/prelim_fit/error_sigma", fitted[5, :, :]
+        )
+        lower_bound = fitted[1, :, :] - 8 * fitted[2, :, :]
+        upper_bound = fitted[1, :, :] + 8 * fitted[2, :, :]
+        avg_over_nreps[
+            (avg_over_nreps < lower_bound) | (avg_over_nreps > upper_bound)
+        ] = np.nan
+        self._logger.info("Finished preliminary fit")
+        # fit a 2 peak gaussian to the data
+        self._logger.info("Start fitting 2 peak gaussian")
         fitted = fit.get_fit_over_frames(avg_over_nreps, peaks=2)
         io.add_array(self.analysis_file, "gain/fit/amplitude1", fitted[0, :, :])
         io.add_array(self.analysis_file, "gain/fit/mean1", fitted[1, :, :])
@@ -433,3 +481,4 @@ class RoanSteps:
         io.add_array(self.analysis_file, "gain/fit/error_amplitude2", fitted[9, :, :])
         io.add_array(self.analysis_file, "gain/fit/error_mean2", fitted[10, :, :])
         io.add_array(self.analysis_file, "gain/fit/error_sigma2", fitted[11, :, :])
+        self._logger.info("Finished fitting 2 peak gaussian")
