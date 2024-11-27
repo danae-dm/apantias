@@ -290,7 +290,7 @@ class RoanSteps:
             self._logger.warning(
                 f"Failed fits: {failed_fits} ({failed_fits/(self.column_size*self.row_size)*100:.2f}%)"
             )
-        self._logger.info("Start fitting 2 peak gaussian to determine offset")
+        self._logger.info("Finished fitting 2 peak gaussian to determine offset")
 
         self._logger.info("Offset data and save rndr_signals")
         avg_over_nreps -= fitted[:, :, 1]
