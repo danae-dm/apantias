@@ -16,8 +16,7 @@ from . import file_io as io
 class RoanSteps:
     _logger = logger.Logger("nproan-RoanSteps", "info").get_logger()
 
-    def __init__(self, prm_file: str, ram: int) -> None:
-        self.ram_available = ram
+    def __init__(self, prm_file: str) -> None:
         self.load(prm_file)
 
     def load(self, prm_file: str) -> None:
@@ -30,14 +29,13 @@ class RoanSteps:
 
         # common parameters from params file
         self.results_dir = self.params_dict["common_results_dir"]
+        self.ram_available = self.params_dict["common_available_ram"]
 
         # offnoi parameters from params file
         self.offnoi_data_file = self.params_dict["offnoi_data_file"]
         self.offnoi_nframes_eval = self.params_dict["offnoi_nframes_eval"]
         self.offnoi_nreps_eval = self.params_dict["offnoi_nreps_eval"]
         self.offnoi_comm_mode = self.params_dict["offnoi_comm_mode"]
-        self.offnoi_thres_mips = self.params_dict["offnoi_thres_mips"]
-        self.offnoi_thres_bad_frames = self.params_dict["offnoi_thres_bad_frames"]
         self.offnoi_thres_bad_slopes = self.params_dict["offnoi_thres_bad_slopes"]
 
         # filter parameters from params file
@@ -45,11 +43,8 @@ class RoanSteps:
         self.filter_nframes_eval = self.params_dict["filter_nframes_eval"]
         self.filter_nreps_eval = self.params_dict["filter_nreps_eval"]
         self.filter_comm_mode = self.params_dict["filter_comm_mode"]
-        self.filter_thres_mips = self.params_dict["filter_thres_mips"]
         self.filter_thres_event_prim = self.params_dict["filter_thres_event_prim"]
         self.filter_thres_event_sec = self.params_dict["filter_thres_event_sec"]
-        self.filter_use_fitted_offset = self.params_dict["filter_use_fitted_offset"]
-        self.filter_thres_bad_frames = self.params_dict["filter_thres_bad_frames"]
         self.filter_thres_bad_slopes = self.params_dict["filter_thres_bad_slopes"]
 
         # get parameters from data_h5 file
@@ -230,7 +225,6 @@ class RoanSteps:
             self._logger.warning(
                 f"Failed fits: {failed_fits} ({failed_fits/(self.column_size*self.row_size)*100:.2f}%)"
             )
-        self._logger.info("Finished calculating bad slopes")
 
         # get avg_over_nreps from the loop
         avg_over_nreps = io.get_data_from_file(
@@ -243,32 +237,47 @@ class RoanSteps:
             "offnoi/precal/rndr_signals_after_common_slopes_removed",
             avg_over_nreps,
         )
+        bad_signals = np.sum(bad_slopes_mask)
+        self._logger.warning(
+            f"Signals removed due to bad slopes: {bad_signals} ({bad_signals/(bad_slopes_mask.size)*100:.2f}%)"
+        )
+        self._logger.info("Finished calculating bad slopes")
 
         # TODO: check if this preliminary fit is useful
         self._logger.info("Start preliminary fit to remove outliers")
         fitted = fit.get_pixelwise_fit(avg_over_nreps, peaks=1)
-        io.add_array(self.analysis_file, "offnoi/prelim_fit/amplitude", fitted[0, :, :])
-        io.add_array(self.analysis_file, "offnoi/prelim_fit/mean", fitted[1, :, :])
-        io.add_array(self.analysis_file, "offnoi/prelim_fit/sigma", fitted[2, :, :])
+        io.add_array(self.analysis_file, "offnoi/prelim_fit/amplitude", fitted[:, :, 0])
+        io.add_array(self.analysis_file, "offnoi/prelim_fit/mean", fitted[:, :, 1])
+        io.add_array(self.analysis_file, "offnoi/prelim_fit/sigma", fitted[:, :, 2])
         io.add_array(
-            self.analysis_file, "offnoi/prelim_fit/error_amplitude", fitted[3, :, :]
+            self.analysis_file, "offnoi/prelim_fit/error_amplitude", fitted[:, :, 3]
         )
         io.add_array(
-            self.analysis_file, "offnoi/prelim_fit/error_mean", fitted[4, :, :]
+            self.analysis_file, "offnoi/prelim_fit/error_mean", fitted[:, :, 4]
         )
         io.add_array(
-            self.analysis_file, "offnoi/prelim_fit/error_sigma", fitted[5, :, :]
+            self.analysis_file, "offnoi/prelim_fit/error_sigma", fitted[:, :, 5]
         )
         lower_bound = fitted[:, :, 1] - 8 * fitted[:, :, 2]
         upper_bound = fitted[:, :, 1] + 8 * fitted[:, :, 2]
-        avg_over_nreps[
-            (avg_over_nreps < lower_bound) | (avg_over_nreps > upper_bound)
-        ] = np.nan
+        prelim_fit_mask = (avg_over_nreps < lower_bound) | (
+            avg_over_nreps > upper_bound
+        )
+        avg_over_nreps[prelim_fit_mask] = np.nan
+        io.add_array(
+            self.analysis_file,
+            "offnoi/prelim_fit/prelim_fit_mask",
+            prelim_fit_mask,
+        )
         failed_fits = np.sum(np.isnan(fitted[1, :, :]))
         if failed_fits > 0:
             self._logger.warning(
                 f"Failed fits: {failed_fits} ({failed_fits/(self.column_size*self.row_size)*100:.2f}%)"
             )
+        bad_signals = np.sum(prelim_fit_mask)
+        self._logger.warning(
+            f"Signals removed due to preliminary fit: {bad_signals} ({bad_signals/(prelim_fit_mask.size)*100:.2f}%)"
+        )
         self._logger.info("Finished preliminary fit to remove outliers")
 
         self._logger.info("Start fitting 2 peak gaussian to determine offset")
@@ -402,7 +411,6 @@ class RoanSteps:
             self._logger.warning(
                 f"Failed fits: {failed_fits} ({failed_fits/(self.column_size*self.row_size)*100:.2f}%)"
             )
-        self._logger.info("Finished calculating bad slopes")
 
         # load avg_over_nreps from the loop
         avg_over_nreps = io.get_data_from_file(
@@ -415,6 +423,11 @@ class RoanSteps:
             "filter/rndr_signals/all_frames_slopes_removed",
             avg_over_nreps,
         )
+        bad_signals = np.sum(bad_slopes_mask)
+        self._logger.warning(
+            f"Signals removed due to bad slopes: {bad_signals} ({bad_signals/(bad_slopes_mask.size)*100:.2f}%)"
+        )
+        self._logger.info("Finished calculating bad slopes")
 
         self._logger.info("Start preliminary fit to remove outliers")
         fitted = fit.get_pixelwise_fit(avg_over_nreps, peaks=1)
@@ -432,14 +445,29 @@ class RoanSteps:
         )
         lower_bound = fitted[:, :, 1] - 8 * fitted[:, :, 2]
         upper_bound = fitted[:, :, 1] + 8 * fitted[:, :, 2]
-        avg_over_nreps[
-            (avg_over_nreps < lower_bound) | (avg_over_nreps > upper_bound)
-        ] = np.nan
+        prelim_fit_mask = (avg_over_nreps < lower_bound) | (
+            avg_over_nreps > upper_bound
+        )
+        avg_over_nreps[prelim_fit_mask] = np.nan
+        io.add_array(
+            self.analysis_file,
+            "filter/prelim_fit/prelim_fit_mask",
+            prelim_fit_mask,
+        )
+        io.add_array(
+            self.analysis_file,
+            "filter/rndr_signals/all_frames_slopes_removed_prelim_fit",
+            avg_over_nreps,
+        )
         failed_fits = np.sum(np.isnan(fitted[1, :, :]))
         if failed_fits > 0:
             self._logger.warning(
                 f"Failed fits: {failed_fits} ({failed_fits/(self.column_size*self.row_size)*100:.2f}%)"
             )
+        bad_signals = np.sum(prelim_fit_mask)
+        self._logger.warning(
+            f"Signals removed due to preliminary fit: {bad_signals} ({bad_signals/(prelim_fit_mask.size)*100:.2f}%)"
+        )
         self._logger.info("Finished preliminary fit to remove outliers")
 
         self._logger.info("Start Calculating event_map")

@@ -15,14 +15,13 @@ class Params:
     """
     common_params = {
         "common_results_dir": "",  # str
+        "common_available_ram": 16,  # int
     }
     offnoi_params = {
         "offnoi_data_file": "",  # list of str
         "offnoi_nframes_eval": [0, -1, 1],  # list of ints
         "offnoi_nreps_eval": [0, -1, 1],  # list of ints
         "offnoi_comm_mode": True,  # bool
-        "offnoi_thres_mips": 1000,  # float
-        "offnoi_thres_bad_frames": 5,  # float
         "offnoi_thres_bad_slopes": 5,  # float
     }
     filter_params = {
@@ -30,11 +29,8 @@ class Params:
         "filter_nframes_eval": [0, -1, 1],  # list of ints
         "filter_nreps_eval": [0, -1, 1],  # list of ints
         "filter_comm_mode": True,  # bool
-        "filter_thres_mips": 1000,  # float
         "filter_thres_event_prim": 5,  # float
         "filter_thres_event_sec": 5,  # float
-        "filter_use_fitted_offset": False,  # bool
-        "filter_thres_bad_frames": 5,  # float
         "filter_thres_bad_slopes": 5,  # float
     }
     gain_params = {"gain_min_signals": 5}  # int
@@ -42,22 +38,18 @@ class Params:
     # types are checked when they are read
     params_types = {
         "common_results_dir": str,
+        "common_available_ram": int,
         "offnoi_data_file": str,
         "offnoi_nframes_eval": list,
         "offnoi_nreps_eval": list,
         "offnoi_comm_mode": bool,
-        "offnoi_thres_mips": (int, float),
-        "offnoi_thres_bad_frames": (int, float),
         "offnoi_thres_bad_slopes": (int, float),
         "filter_data_file": str,
         "filter_nframes_eval": list,
         "filter_nreps_eval": list,
         "filter_comm_mode": bool,
-        "filter_thres_mips": (int, float),
         "filter_thres_event_prim": (int, float),
         "filter_thres_event_sec": (int, float),
-        "filter_use_fitted_offset": bool,
-        "filter_thres_bad_frames": (int, float),
         "filter_thres_bad_slopes": (int, float),
         "gain_min_signals": int,
     }
@@ -65,10 +57,10 @@ class Params:
     # required parameters, where there is no default value
     # file cannot be loaded if these are missing
     required_params = [
-        "offnoi_bin_file",
-        "offnoi_nreps",
-        "filter_bin_file",
-        "filter_nreps",
+        "common_results_dir",
+        "offnoi_data_file",
+        "filter_data_file",
+        "common_available_ram",
     ]
 
     def __init__(self, json_path: str = None):
@@ -107,6 +99,10 @@ class Params:
         # check consistency of the input dict with the default dict
         for key, value in self.inp_dict.items():
             if key not in self.default_dict:
+                self.save_default_file()
+                self._logger.error(
+                    "A default parameter file has been saved to the current directory."
+                )
                 raise KeyError(f"{key} is not a valid parameter.")
             else:
                 self.param_dict[key] = value
@@ -117,7 +113,10 @@ class Params:
                 if key in self.required_params:
                     self._logger.error(f"{key} is missing in the file.")
                     self._logger.error("Please provide a complete parameter file")
-                    self._logger.error("Run .info() to see the required parameters.")
+                    self.save_default_file()
+                    self._logger.error(
+                        "A default parameter file has been saved to the current directory."
+                    )
                     self.param_dict = None
                     break
                 else:
