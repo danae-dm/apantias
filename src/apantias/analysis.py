@@ -81,31 +81,6 @@ def get_slopes(data: np.ndarray) -> np.ndarray:
     return slopes
 
 
-def set_bad_pixellist_to_nan(
-    data: np.ndarray, bad_pixels: List[Tuple[int, int]]
-) -> None:
-    """
-    Sets all ignored Pixels in data to NaN. List of pixels is from the
-    parameter file. [(row,col), (row,col), ...]
-    Args:
-        data: np.array in shape (nframes, column_size, nreps, row_size)
-        bad_pixels: list of tuples (row,col)
-    Returns:
-        np.array in shape (nframes, column_size, nreps, row_size)
-    """
-    if np.ndim(data) != 4:
-        _logger.error("Data is not a 4D array")
-        raise ValueError("Data is not a 4D array")
-    _logger.info("Excluding bad pixels")
-    bad_pixel_mask = np.zeros(data.shape, dtype=bool)
-    for index in bad_pixels:
-        col = index[1]
-        row = index[0]
-        bad_pixel_mask[:, row, :, col] = True
-    data[bad_pixel_mask] = np.nan
-    _logger.info(f"Excluded {len(bad_pixels)} pixels")
-
-
 def correct_common_mode(data: np.ndarray) -> None:
     """
     Calculates the median of euch row in data, and substracts it from
@@ -127,15 +102,8 @@ def correct_common_mode(data: np.ndarray) -> None:
     _logger.info("Data is corrected for common mode.")
 
 
-# TODO: Rewrite EventMap and GainFit:
-# - EventMap: Current structure cannot be written to h5 file
-# - GainFit: Find some parameters to find "good" pixels first
-
-
 @njit(parallel=True)
-def group_pixels(
-    data, primary_threshold, secondary_threshold, noise_map, structure=None
-):
+def group_pixels(data, primary_threshold, secondary_threshold, noise_map, structure):
     """
     Uses the two pass labelling to group events.
     Pixels over the primary threshold are connected to pixels above the
@@ -163,9 +131,6 @@ def group_pixels(
         mask_primary[:, -1] = 0
         mask_secondary[:, 0] = 0
         mask_secondary[:, -1] = 0
-
-        if structure is None:
-            structure = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
 
         labeled_primary, num_features_primary = utils.two_pass_labeling(
             mask_primary, structure=structure

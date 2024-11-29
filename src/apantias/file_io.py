@@ -351,43 +351,46 @@ def add_array(
         parts = dataset_path.split("/")
         groups = parts[:-1]
         dataset_name = parts[-1]
-
-        # Create groups if they do not exist
-        current_group = file
-        for group in groups:
-            if group not in current_group:
-                current_group = current_group.create_group(group)
-            else:
-                current_group = current_group[group]
-
-        current_group.create_dataset(
-            dataset_name,
-            data=data,
-            maxshape=(None, *data.shape[1:]),
-            chunks=(1, *data.shape[1:]),
-            compression=compression,
-        )
-        current_dataset = current_group[dataset_name]
-        if attributes:
-            for key, value in attributes.items():
-                current_dataset.attrs[key] = value
-
-        if current_dataset.shape[1:] != data.shape[1:]:
-            _logger.error(
-                f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({current_dataset.shape[1:]})"
+        # check if the dataset already exists
+        if dataset_path not in file:
+            # Create groups if they do not exist
+            current_group = file
+            for group in groups:
+                if group not in current_group:
+                    current_group = current_group.create_group(group)
+                else:
+                    current_group = current_group[group]
+            # Create the new dataset in the group
+            current_group.create_dataset(
+                dataset_name,
+                data=data,
+                maxshape=(None, *data.shape[1:]),
+                chunks=(1, *data.shape[1:]),
+                compression=compression,
             )
-            raise Exception(
-                f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({current_dataset.shape[1:]})"
-            )
-        if dataset_name == "offset_raw":
-            # the data here should not be stacked but averaged
-            current_dataset = (current_dataset + data) / 2
+            current_dataset = current_group[dataset_name]
             if attributes:
                 for key, value in attributes.items():
                     current_dataset.attrs[key] = value
         else:
-            current_dataset.resize(current_dataset.shape[0] + data.shape[0], axis=0)
-            current_dataset[-data.shape[0] :] = data
-            if attributes:
-                for key, value in attributes.items():
-                    current_dataset.attrs[key] = value
+            # append data to existing dataset
+            current_dataset = file[dataset_path]
+            if current_dataset.shape[1:] != data.shape[1:]:
+                _logger.error(
+                    f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({current_dataset.shape[1:]})"
+                )
+                raise Exception(
+                    f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({current_dataset.shape[1:]})"
+                )
+            if dataset_name == "offset_raw":
+                # the data here should not be stacked but averaged
+                current_dataset = (current_dataset + data) / 2
+                if attributes:
+                    for key, value in attributes.items():
+                        current_dataset.attrs[key] = value
+            else:
+                current_dataset.resize(current_dataset.shape[0] + data.shape[0], axis=0)
+                current_dataset[-data.shape[0] :] = data
+                if attributes:
+                    for key, value in attributes.items():
+                        current_dataset.attrs[key] = value
