@@ -431,17 +431,17 @@ class RoanSteps:
 
         self._logger.info("Start preliminary fit to remove outliers")
         fitted = fit.get_pixelwise_fit(avg_over_nreps, peaks=1)
-        io.add_array(self.analysis_file, "filter/prelim_fit/amplitude", fitted[0, :, :])
-        io.add_array(self.analysis_file, "filter/prelim_fit/mean", fitted[1, :, :])
-        io.add_array(self.analysis_file, "filter/prelim_fit/sigma", fitted[2, :, :])
+        io.add_array(self.analysis_file, "filter/prelim_fit/amplitude", fitted[:, :, 0])
+        io.add_array(self.analysis_file, "filter/prelim_fit/mean", fitted[:, :, 1])
+        io.add_array(self.analysis_file, "filter/prelim_fit/sigma", fitted[:, :, 2])
         io.add_array(
-            self.analysis_file, "filter/prelim_fit/error_amplitude", fitted[3, :, :]
+            self.analysis_file, "filter/prelim_fit/error_amplitude", fitted[:, :, 3]
         )
         io.add_array(
-            self.analysis_file, "filter/prelim_fit/error_mean", fitted[4, :, :]
+            self.analysis_file, "filter/prelim_fit/error_mean", fitted[:, :, 4]
         )
         io.add_array(
-            self.analysis_file, "filter/prelim_fit/error_sigma", fitted[5, :, :]
+            self.analysis_file, "filter/prelim_fit/error_sigma", fitted[:, :, 5]
         )
         lower_bound = fitted[:, :, 1] - 8 * fitted[:, :, 2]
         upper_bound = fitted[:, :, 1] + 8 * fitted[:, :, 2]
