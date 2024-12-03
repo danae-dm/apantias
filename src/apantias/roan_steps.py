@@ -409,9 +409,8 @@ class RoanSteps:
             avg_over_nreps,
         )
         self._logger.info("Finished offsetting data and saving rndr_signals")
-        self._logger.info("Finished offnoi step")
+        self._logger.info("---------Finished offnoi step---------")
 
-    # TODO: continue here
     def calc_filter_step(self) -> None:
         estimated_ram_usage = (
             utils.get_ram_usage_in_gb(
@@ -587,8 +586,15 @@ class RoanSteps:
             np.sum(event_array != 0, axis=0),
         )
         self._logger.info("Finished calculating event_map")
+        self._logger.info("---------Finished filter step---------")
 
+    def calc_gain_step(self) -> None:
+        self._logger.info("---------Start gain step---------")
         self._logger.info("Start fitting 1 peak gaussian for gain calculation")
+        avg_over_nreps = io.get_data_from_file(
+            self.analysis_file,
+            "filter/rndr_signals/all_frames_slopes_removed_prelim_fit",
+        )
         fitted = fit.get_pixelwise_fit(avg_over_nreps, peaks=1)
         io.add_array(self.analysis_file, "gain/fit/amplitude1", fitted[:, :, 0])
         io.add_array(self.analysis_file, "gain/fit/mean1", fitted[:, :, 1])
@@ -597,4 +603,4 @@ class RoanSteps:
         io.add_array(self.analysis_file, "gain/fit/error_mean1", fitted[:, :, 4])
         io.add_array(self.analysis_file, "gain/fit/error_sigma1", fitted[:, :, 5])
         self._logger.info("Finished fitting 1 peak gaussian for gain calculation")
-        self._logger.info("Finished filter step")
+        self._logger.info("---------Finished gain step---------")
