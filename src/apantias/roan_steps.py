@@ -392,6 +392,13 @@ class RoanSteps:
             avg_over_nreps > upper_bound
         )
         avg_over_nreps[prelim_fit_mask] = np.nan
+        output_info = {"info": "signal values after removing outliers"}
+        io.add_array_to_file(
+            self.analysis_file,
+            "1_offnoi/3_outliers/signal_values",
+            avg_over_nreps,
+            attributes=output_info,
+        )
         output_info = {"info": "mask of outliers is calculated from the pixelwise fit"}
         io.add_array_to_file(
             self.analysis_file,
