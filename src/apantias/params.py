@@ -11,34 +11,41 @@ class Params:
 
     """
     To change/add parameters, edit/add them here.
+    1) Add the parameter to the common_params, offnoi_params, filter_params, or gain_params dictionaries.
+    2) Add the type of the parameter to the params_types dictionary.
+    3) Add the parameter to the required_params list if it has no default value and is required.
     Also change the load() function in the RoanSteps class.
     """
     common_params = {
         "common_results_dir": "",  # str
-        "common_available_ram": 16,  # int
+        "common_available_cpus": 16,  # int
+        "common_mem_per_cpu_gb": 2,  # int
+        "common_attributes": {},  # dict
     }
     offnoi_params = {
         "offnoi_data_file": "",  # list of str
         "offnoi_nframes_eval": [0, -1, 1],  # list of ints
         "offnoi_nreps_eval": [0, -1, 1],  # list of ints
         "offnoi_comm_mode": True,  # bool
-        "offnoi_thres_bad_slopes": 5,  # float
+        "offnoi_thres_bad_slopes": 3,  # float
     }
     filter_params = {
         "filter_data_file": "",  # list of str
         "filter_nframes_eval": [0, -1, 1],  # list of ints
         "filter_nreps_eval": [0, -1, 1],  # list of ints
         "filter_comm_mode": True,  # bool
-        "filter_thres_event_prim": 5,  # float
-        "filter_thres_event_sec": 5,  # float
-        "filter_thres_bad_slopes": 5,  # float
+        "filter_thres_event_prim": 3,  # float
+        "filter_thres_event_sec": 3,  # float
+        "filter_thres_bad_slopes": 3,  # float
     }
-    gain_params = {"gain_min_signals": 5}  # int
+    gain_params = {"gain_dummy": 5}  # int
 
     # types are checked when they are read
     params_types = {
         "common_results_dir": str,
-        "common_available_ram": int,
+        "common_available_cpus": int,
+        "common_mem_per_cpu_gb": int,
+        "common_attributes": dict,
         "offnoi_data_file": str,
         "offnoi_nframes_eval": list,
         "offnoi_nreps_eval": list,
@@ -51,7 +58,7 @@ class Params:
         "filter_thres_event_prim": (int, float),
         "filter_thres_event_sec": (int, float),
         "filter_thres_bad_slopes": (int, float),
-        "gain_min_signals": int,
+        "gain_dummy": int,
     }
 
     # required parameters, where there is no default value
@@ -60,7 +67,8 @@ class Params:
         "common_results_dir",
         "offnoi_data_file",
         "filter_data_file",
-        "common_available_ram",
+        "common_available_cpus",
+        "common_mem_per_cpu_gb",
     ]
 
     def __init__(self, json_path: str = None):

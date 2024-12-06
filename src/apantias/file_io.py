@@ -226,6 +226,7 @@ def create_analysis_file(
     offnoi_data_file: str,
     filter_data_file: str,
     parameter_file_contents: dict,
+    attributes_dict: dict,
 ) -> None:
     """
     Create an analysis h5 file with offnoi/filter/gain groups.
@@ -245,8 +246,13 @@ def create_analysis_file(
         raise Exception(f"File {filter_data_file} does not exist.")
     # create the hdf5 file
     with h5py.File(output_file, "w") as f:
-        f.attrs["description"] = "This file contains the results of the analysis."
-
+        if attributes_dict:  # an empty dict evaluates to False
+            f.attrs["description"] = (
+                "This file contains the results of the analysis.\n No additional information has been provided in the parameter file."
+            )
+        else:
+            for key, value in attributes_dict.items():
+                f.attrs[key] = value
         f.create_group("offnoi")
         f["offnoi"].attrs["data"] = offnoi_data_file
         f["offnoi"].attrs[

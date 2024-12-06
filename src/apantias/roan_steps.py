@@ -135,7 +135,10 @@ class RoanSteps:
 
         # common parameters from params file
         self.results_dir = self.params_dict["common_results_dir"]
-        self.ram_available = self.params_dict["common_available_ram"]
+        self.available_cpus = self.params_dict["common_available_cpus"]
+        self.mem_per_cpu_gb = self.params_dict["common_mem_per_cpu_gb"]
+        self.attributes_dict = self.params_dict["common_attributes"]
+        self.ram_available = self.available_cpus * self.mem_per_cpu_gb
 
         # offnoi parameters from params file
         self.offnoi_data_file = self.params_dict["offnoi_data_file"]
@@ -230,6 +233,7 @@ class RoanSteps:
             self.offnoi_data_file,
             self.filter_data_file,
             self.params_dict,
+            self.attributes_dict,
         )
         self._logger.info(
             f"Created analysis h5 file: {self.results_dir}/{self.analysis_file_name}"
