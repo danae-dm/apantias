@@ -5,6 +5,7 @@ from typing import List, Tuple, Optional
 import os
 
 from . import logger
+from . import __init__
 
 _logger = logger.Logger(__name__, "info").get_logger()
 
@@ -246,6 +247,10 @@ def create_analysis_file(
         raise Exception(f"File {filter_data_file} does not exist.")
     # create the hdf5 file
     with h5py.File(output_file, "w") as f:
+        # write the current apantias version and git hash to the file
+        f.attrs["apantias_version"] = (
+            f"Current APANTIAS version: {__init__.__version__}"
+        )
         if attributes_dict:  # an empty dict evaluates to False
             f.attrs["description"] = (
                 "This file contains the results of the analysis.\n No additional information has been provided in the parameter file."
