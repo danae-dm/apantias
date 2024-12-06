@@ -16,13 +16,13 @@ from . import file_io as io
 Planned structure of the analysis.h5 output file:
 datasets: ~
 groups: /
-/offnoi
-    /nrep_data
+/1_offnoi
+    /1_nrep_data
         ~signal_values
             # raw signals, averaged over nreps, after common mode correction
         ~slope_values
             # slope values (simple linear fit) of the raw signals
-    /slopes
+    /2_slopes
         /fit
             # slope values from precal are fitted pixel wise with a gaussian
             ~amplitude
@@ -37,7 +37,7 @@ groups: /
             # count of number of bad slopes per pixel
         ~signal_values
             # raw signals after common mode correction, bad slopes are set to nan
-    /outliers
+    /3_outliers
         /fit
             # signal values after common mode correction and bad slopes removed are fitted pixel wise with a gaussian
             ~amplitude
@@ -50,7 +50,7 @@ groups: /
             # mask of outliers is calculated from the pixelwise fit and the threshold from the params file
         ~outliers_count
             # count of number of outliers per pixel
-    /fit
+    /4_fit
         # signal values after common mode correction, bad slopes removed and outliers removed are fitted pixel wise with a gaussian
         ~amplitude
         ~mean
@@ -58,7 +58,7 @@ groups: /
         ~error_amplitude
         ~error_mean
         ~error_sigma
-    /final
+    /5_final
         ~offset
             # offset value from the gaussian fit
         ~noise
@@ -66,13 +66,13 @@ groups: /
         ~signal_values
             # raw signals after common mode correction, bad slopes removed, outliers removed and applied offset
 
-/filter
-    /nrep_data
+/2_filter
+    /1_nrep_data
         ~signal_values
             # raw signals, averaged over nreps, after common mode correction and offset from offnoi step subtracted
         ~slope_values
             # slope values (simple linear fit) of the raw signals
-    /slopes
+    /2_slopes
         /fit
             # slope values from precal are fitted pixel wise with a gaussian
             ~amplitude
@@ -87,7 +87,8 @@ groups: /
             # count of number of bad slopes per pixel
         ~signal_values
             # raw signals after common mode correction, bad slopes are set to nan
-    /outliers
+        ~signal_values_offset_corrected
+    /3_outliers
         /fit
             # signal values after common mode correction and bad slopes removed are fitted pixel wise with a gaussian
             ~amplitude
@@ -100,7 +101,9 @@ groups: /
             # mask of outliers is calculated from the pixelwise fit and the threshold from the params file
         ~outliers_count
             # count of number of outliers per pixel
-    /events
+        ~signal_values
+            # signal values after removing bad slopes and outliers
+    /4_events
         ~event_map
             # event map is calculated from the signal values, the noise values from the offnoi step and the thresholds from the params file
         ~event_map_counts
@@ -109,9 +112,8 @@ groups: /
             #TODO: implement pandas table with event details
         ~bleedthrough
             #TODO: implement bleedthrough calculation
-/gain
-    #TODO: Implement gain method
-    /2_gauss_fit
+/3_gain
+    /fit_with_noise
         #TODO: Move simple 2 Gauss fit from filter step to here
     /signal_fit
         #TODO: somehow cut noise and fit a gaussian to the signal values
@@ -289,19 +291,33 @@ class RoanSteps:
             if self.offnoi_comm_mode is True:
                 an.correct_common_mode(data)
             avg_over_nreps = utils.get_avg_over_nreps(data)
-            io.add_array(
+            output_info = {
+                "info": "raw signals, averaged over nreps, after common mode correction"
+            }
+            io.add_array_to_file(
                 self.analysis_file,
-                "offnoi/precal/rndr_signals_after_common",
+                "1_offnoi/1_nrep_data/signal_values",
                 avg_over_nreps,
+                attributes=output_info,
             )
             if self.offnoi_thres_bad_slopes != 0:
                 slopes = an.get_slopes(data)
-                io.add_array(self.analysis_file, "offnoi/slopes/all_frames", slopes)
+                output_info = {
+                    "info": "slope values (simple linear fit) of the raw signals"
+                }
+                io.add_array_to_file(
+                    self.analysis_file,
+                    "1_offnoi/1_nrep_data/slope_values",
+                    slopes,
+                    attributes=output_info,
+                )
             total_frames_processed += frames_per_step
             self._logger.info(f"Finished step {step+1} of {steps_needed} total Steps")
 
         self._logger.info("Start calculating bad slopes")
-        slopes = io.get_data_from_file(self.analysis_file, "offnoi/slopes/all_frames")
+        slopes = io.get_data_from_file(
+            self.analysis_file, "1_offnoi/1_nrep_data/slope_values"
+        )
         fitted = fit.get_pixelwise_fit(slopes, peaks=1)
         lower_bound = fitted[:, :, 1] - self.offnoi_thres_bad_slopes * np.abs(
             fitted[:, :, 2]
@@ -310,25 +326,27 @@ class RoanSteps:
             fitted[:, :, 2]
         )
         bad_slopes_mask = (slopes < lower_bound) | (slopes > upper_bound)
-        io.add_array(self.analysis_file, "offnoi/slopes/fit/amplitude", fitted[:, :, 0])
-        io.add_array(self.analysis_file, "offnoi/slopes/fit/mean", fitted[:, :, 1])
-        io.add_array(self.analysis_file, "offnoi/slopes/fit/sigma", fitted[:, :, 2])
-        io.add_array(
-            self.analysis_file, "offnoi/slopes/fit/error_amplitude", fitted[:, :, 3]
+        output_info = {
+            "info": "slope values from nrep_data step are fitted pixel wise with a gaussian"
+        }
+        io.add_fit_params_to_file(
+            self.analysis_file, "1_offnoi/2_slopes/fit", fitted, attributes=output_info
         )
-        io.add_array(
-            self.analysis_file, "offnoi/slopes/fit/error_mean", fitted[:, :, 4]
-        )
-        io.add_array(
-            self.analysis_file, "offnoi/slopes/fit/error_sigma", fitted[:, :, 5]
-        )
-        io.add_array(
-            self.analysis_file, "offnoi/slopes/bad_slopes_mask", bad_slopes_mask
-        )
-        io.add_array(
+        output_info = {
+            "info": "mask of bad slopes is calculated from the pixelwise fit"
+        }
+        io.add_array_to_file(
             self.analysis_file,
-            "offnoi/slopes/bad_slopes_count",
+            "1_offnoi/2_slopes/bad_slopes_mask",
+            bad_slopes_mask,
+            attributes=output_info,
+        )
+        output_info = {"info": "count of number of bad slopes per pixel"}
+        io.add_array_to_file(
+            self.analysis_file,
+            "1_offnoi/2_slopes/bad_slopes_count",
             np.sum(bad_slopes_mask, axis=0),
+            attributes=output_info,
         )
         failed_fits = np.sum(np.isnan(fitted[:, :, 1]))
         if failed_fits > 0:
@@ -338,14 +356,18 @@ class RoanSteps:
 
         # get avg_over_nreps from the loop
         avg_over_nreps = io.get_data_from_file(
-            self.analysis_file, "offnoi/precal/rndr_signals_after_common"
+            self.analysis_file, "1_offnoi/1_nrep_data/signal_values"
         )
         # set bad slopes to nan, so they not interfere in future calculations
         avg_over_nreps[bad_slopes_mask] = np.nan
-        io.add_array(
+        output_info = {
+            "info": "raw signals after common mode correction, bad slopes are set to nan"
+        }
+        io.add_array_to_file(
             self.analysis_file,
-            "offnoi/precal/rndr_signals_after_common_slopes_removed",
+            "1_offnoi/2_slopes/signal_values",
             avg_over_nreps,
+            attributes=output_info,
         )
         bad_signals = np.sum(bad_slopes_mask)
         self._logger.warning(
@@ -353,20 +375,16 @@ class RoanSteps:
         )
         self._logger.info("Finished calculating bad slopes")
 
-        # TODO: check if this preliminary fit is useful
         self._logger.info("Start preliminary fit to remove outliers")
         fitted = fit.get_pixelwise_fit(avg_over_nreps, peaks=1)
-        io.add_array(self.analysis_file, "offnoi/prelim_fit/amplitude", fitted[:, :, 0])
-        io.add_array(self.analysis_file, "offnoi/prelim_fit/mean", fitted[:, :, 1])
-        io.add_array(self.analysis_file, "offnoi/prelim_fit/sigma", fitted[:, :, 2])
-        io.add_array(
-            self.analysis_file, "offnoi/prelim_fit/error_amplitude", fitted[:, :, 3]
-        )
-        io.add_array(
-            self.analysis_file, "offnoi/prelim_fit/error_mean", fitted[:, :, 4]
-        )
-        io.add_array(
-            self.analysis_file, "offnoi/prelim_fit/error_sigma", fitted[:, :, 5]
+        output_info = {
+            "info": "signal values after common mode correction and bad slopes removed are fitted pixel wise with a gaussian"
+        }
+        io.add_fit_params_to_file(
+            self.analysis_file,
+            "1_offnoi/3_outliers/fit",
+            fitted,
+            attributes=output_info,
         )
         lower_bound = fitted[:, :, 1] - 8 * fitted[:, :, 2]
         upper_bound = fitted[:, :, 1] + 8 * fitted[:, :, 2]
@@ -374,10 +392,19 @@ class RoanSteps:
             avg_over_nreps > upper_bound
         )
         avg_over_nreps[prelim_fit_mask] = np.nan
-        io.add_array(
+        output_info = {"info": "mask of outliers is calculated from the pixelwise fit"}
+        io.add_array_to_file(
             self.analysis_file,
-            "offnoi/prelim_fit/prelim_fit_mask",
+            "1_offnoi/3_outliers/outliers_mask",
             prelim_fit_mask,
+            attributes=output_info,
+        )
+        output_info = {"info": "count of number of outliers per pixel"}
+        io.add_array_to_file(
+            self.analysis_file,
+            "1_offnoi/3_outliers/outliers_count",
+            np.sum(prelim_fit_mask, axis=0),
+            attributes=output_info,
         )
         failed_fits = np.sum(np.isnan(fitted[1, :, :]))
         if failed_fits > 0:
@@ -392,12 +419,12 @@ class RoanSteps:
 
         self._logger.info("Start fitting 1 peak gaussian to determine offset")
         fitted = fit.get_pixelwise_fit(avg_over_nreps, peaks=1)
-        io.add_array(self.analysis_file, "offnoi/fit/amplitude1", fitted[:, :, 0])
-        io.add_array(self.analysis_file, "offnoi/fit/mean1", fitted[:, :, 1])
-        io.add_array(self.analysis_file, "offnoi/fit/sigma1", fitted[:, :, 2])
-        io.add_array(self.analysis_file, "offnoi/fit/error_amplitude1", fitted[:, :, 3])
-        io.add_array(self.analysis_file, "offnoi/fit/error_mean1", fitted[:, :, 4])
-        io.add_array(self.analysis_file, "offnoi/fit/error_sigma1", fitted[:, :, 5])
+        output_info = {
+            "info": "signal values after common mode correction, bad slopes removed and outliers removed are fitted pixel wise with a gaussian"
+        }
+        io.add_fit_params_to_file(
+            self.analysis_file, "1_offnoi/4_fit", fitted, attributes=output_info
+        )
         failed_fits = np.sum(np.isnan(fitted[:, :, 1]))
         if failed_fits > 0:
             self._logger.warning(
@@ -407,10 +434,12 @@ class RoanSteps:
 
         self._logger.info("Offset data and save rndr_signals")
         avg_over_nreps -= fitted[:, :, 1]
-        io.add_array(
+        output_info = {"info": "Data with signal offset from the gaussian fit"}
+        io.add_array_to_file(
             self.analysis_file,
-            "offnoi/rndr_signals/all_frames",
+            "1_offnoi/5_final/signal_values",
             avg_over_nreps,
+            attributes=output_info,
         )
         self._logger.info("Finished offsetting data and saving rndr_signals")
         self._logger.info("---------Finished offnoi step---------")
@@ -461,26 +490,33 @@ class RoanSteps:
             if self.filter_comm_mode is True:
                 an.correct_common_mode(data)
             avg_over_nreps = utils.get_avg_over_nreps(data)
-            io.add_array(
+            output_info = {
+                "info": "raw signals, averaged over nreps, after common mode correction"
+            }
+            io.add_array_to_file(
                 self.analysis_file,
-                "filter/precal/rndr_signals_after_common",
+                "2_filter/1_nrep_data/signal_values",
                 avg_over_nreps,
-            )
-            fitted_offset = io.get_data_from_file(
-                self.analysis_file, "offnoi/fit/mean1"
-            )
-            avg_over_nreps -= fitted_offset
-            io.add_array(
-                self.analysis_file, "filter/rndr_signals/all_frames", avg_over_nreps
+                attributes=output_info,
             )
             if self.filter_thres_bad_slopes != 0:
                 slopes = an.get_slopes(data)
-                io.add_array(self.analysis_file, "filter/slopes/all_frames", slopes)
+                output_info = {
+                    "info": "slope values (simple linear fit) of the raw signals"
+                }
+                io.add_array_to_file(
+                    self.analysis_file,
+                    "2_filter/1_nrep_data/slope_values",
+                    slopes,
+                    attributes=output_info,
+                )
             total_frames_processed += frames_per_step
             self._logger.info(f"Finished step {step+1} of {steps_needed} total Steps")
 
         self._logger.info("Start calculating bad slopes")
-        slopes = io.get_data_from_file(self.analysis_file, "filter/slopes/all_frames")
+        slopes = io.get_data_from_file(
+            self.analysis_file, "2_filter/1_nrep_data/slope_values"
+        )
         fitted = fit.get_pixelwise_fit(slopes, peaks=1)
         lower_bound = fitted[:, :, 1] - self.filter_thres_bad_slopes * np.abs(
             fitted[:, :, 2]
@@ -489,25 +525,27 @@ class RoanSteps:
             fitted[:, :, 2]
         )
         bad_slopes_mask = (slopes < lower_bound) | (slopes > upper_bound)
-        io.add_array(self.analysis_file, "filter/slopes/fit/amplitude", fitted[:, :, 0])
-        io.add_array(self.analysis_file, "filter/slopes/fit/mean", fitted[:, :, 1])
-        io.add_array(self.analysis_file, "filter/slopes/fit/sigma", fitted[:, :, 2])
-        io.add_array(
-            self.analysis_file, "filter/slopes/fit/error_amplitude", fitted[:, :, 3]
+        output_info = {
+            "info": "slope values from precal are fitted pixel wise with a gaussian"
+        }
+        io.add_fit_params_to_file(
+            self.analysis_file, "2_filter/2_slopes/fit", fitted, attributes=output_info
         )
-        io.add_array(
-            self.analysis_file, "filter/slopes/fit/error_mean", fitted[:, :, 4]
-        )
-        io.add_array(
-            self.analysis_file, "filter/slopes/fit/error_sigma", fitted[:, :, 5]
-        )
-        io.add_array(
-            self.analysis_file, "filter/slopes/bad_slopes_mask", bad_slopes_mask
-        )
-        io.add_array(
+        output_info = {
+            "info": "mask of bad slopes is calculated from the pixelwise fit"
+        }
+        io.add_array_to_file(
             self.analysis_file,
-            "filter/slopes/bad_slopes_count",
+            "2_filter/2_slopes/bad_slopes_mask",
+            bad_slopes_mask,
+            attributes=output_info,
+        )
+        output_info = {"info": "count of number of bad slopes per pixel"}
+        io.add_array_to_file(
+            self.analysis_file,
+            "2_filter/2_slopes/bad_slopes_count",
             np.sum(bad_slopes_mask, axis=0),
+            attributes=output_info,
         )
         failed_fits = np.sum(np.isnan(fitted[:, :, 1]))
         if failed_fits > 0:
@@ -517,14 +555,30 @@ class RoanSteps:
 
         # load avg_over_nreps from the loop
         avg_over_nreps = io.get_data_from_file(
-            self.analysis_file, "filter/rndr_signals/all_frames"
+            self.analysis_file, "2_filter/1_nrep_data/signal_values"
+        )
+        # subtract offset from offnoi step
+        offnoi_offset = io.get_data_from_file(self.analysis_file, "1_offnoi/4_fit/mean")
+        avg_over_nreps -= offnoi_offset
+        output_info = {
+            "info": "raw signals after common mode correction and offset correction"
+        }
+        io.add_array_to_file(
+            self.analysis_file,
+            "2_filter/2_slopes/signal_values_offset_corrected",
+            avg_over_nreps,
+            attributes=output_info,
         )
         # set bad slopes to nan, so they not interfere in future calculations
         avg_over_nreps[bad_slopes_mask] = np.nan
-        io.add_array(
+        output_info = {
+            "info": "raw signals after common mode correction and offset, bad slopes are set to nan"
+        }
+        io.add_array_to_file(
             self.analysis_file,
-            "filter/rndr_signals/all_frames_slopes_removed",
+            "2_filter/2_slopes/signal_values",
             avg_over_nreps,
+            attributes=output_info,
         )
         bad_signals = np.sum(bad_slopes_mask)
         self._logger.warning(
@@ -534,17 +588,14 @@ class RoanSteps:
 
         self._logger.info("Start preliminary fit to remove outliers")
         fitted = fit.get_pixelwise_fit(avg_over_nreps, peaks=1)
-        io.add_array(self.analysis_file, "filter/prelim_fit/amplitude", fitted[:, :, 0])
-        io.add_array(self.analysis_file, "filter/prelim_fit/mean", fitted[:, :, 1])
-        io.add_array(self.analysis_file, "filter/prelim_fit/sigma", fitted[:, :, 2])
-        io.add_array(
-            self.analysis_file, "filter/prelim_fit/error_amplitude", fitted[:, :, 3]
-        )
-        io.add_array(
-            self.analysis_file, "filter/prelim_fit/error_mean", fitted[:, :, 4]
-        )
-        io.add_array(
-            self.analysis_file, "filter/prelim_fit/error_sigma", fitted[:, :, 5]
+        output_info = {
+            "info": "signal values after common mode correction and offset, bad slopes removed are fitted pixel wise with a gaussian"
+        }
+        io.add_fit_params_to_file(
+            self.analysis_file,
+            "2_filter/3_outliers/fit",
+            fitted,
+            attributes=output_info,
         )
         lower_bound = fitted[:, :, 1] - 8 * fitted[:, :, 2]
         upper_bound = fitted[:, :, 1] + 8 * fitted[:, :, 2]
@@ -552,15 +603,26 @@ class RoanSteps:
             avg_over_nreps > upper_bound
         )
         avg_over_nreps[prelim_fit_mask] = np.nan
-        io.add_array(
+        output_info = {"info": "mask of outliers is calculated from the pixelwise fit"}
+        io.add_array_to_file(
             self.analysis_file,
-            "filter/prelim_fit/prelim_fit_mask",
+            "2_filter/3_outliers/outliers_mask",
             prelim_fit_mask,
+            attributes=output_info,
         )
-        io.add_array(
+        output_info = {"info": "count of number of outliers per pixel"}
+        io.add_array_to_file(
             self.analysis_file,
-            "filter/rndr_signals/all_frames_slopes_removed_prelim_fit",
+            "2_filter/3_outliers/outliers_count",
+            np.sum(prelim_fit_mask, axis=0),
+            attributes=output_info,
+        )
+        output_info = {"info": "signal values after removing bad slopes and outliers"}
+        io.add_array_to_file(
+            self.analysis_file,
+            "2_filter/3_outliers/signal_values",
             avg_over_nreps,
+            attributes=output_info,
         )
         failed_fits = np.sum(np.isnan(fitted[1, :, :]))
         if failed_fits > 0:
@@ -574,7 +636,7 @@ class RoanSteps:
         self._logger.info("Finished preliminary fit to remove outliers")
 
         self._logger.info("Start Calculating event_map")
-        noise_map = io.get_data_from_file(self.analysis_file, "offnoi/fit/sigma1")
+        noise_map = io.get_data_from_file(self.analysis_file, "1_offnoi/4_fit/sigma")
         structure = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
         event_array = an.group_pixels(
             avg_over_nreps,
@@ -583,11 +645,19 @@ class RoanSteps:
             noise_map,
             structure,
         )
-        io.add_array(self.analysis_file, "filter/events/event_map", event_array)
-        io.add_array(
+        output_info = {"info": "event map is calculated from the signal values"}
+        io.add_array_to_file(
             self.analysis_file,
-            "filter/events/event_map_counts",
+            "2_filter/4_events/event_map",
+            event_array,
+            attributes=output_info,
+        )
+        output_info = {"info": "count of number of events per pixel"}
+        io.add_array_to_file(
+            self.analysis_file,
+            "2_filter/4_events/event_map_counts",
             np.sum(event_array != 0, axis=0),
+            attributes=output_info,
         )
         self._logger.info("Finished calculating event_map")
         self._logger.info("---------Finished filter step---------")
@@ -597,14 +667,12 @@ class RoanSteps:
         self._logger.info("Start fitting 1 peak gaussian for gain calculation")
         avg_over_nreps = io.get_data_from_file(
             self.analysis_file,
-            "filter/rndr_signals/all_frames_slopes_removed_prelim_fit",
+            "2_filter/3_outliers/signal_values",
         )
-        fitted = fit.get_pixelwise_fit(avg_over_nreps, peaks=1)
-        io.add_array(self.analysis_file, "gain/fit/amplitude1", fitted[:, :, 0])
-        io.add_array(self.analysis_file, "gain/fit/mean1", fitted[:, :, 1])
-        io.add_array(self.analysis_file, "gain/fit/sigma1", fitted[:, :, 2])
-        io.add_array(self.analysis_file, "gain/fit/error_amplitude1", fitted[:, :, 3])
-        io.add_array(self.analysis_file, "gain/fit/error_mean1", fitted[:, :, 4])
-        io.add_array(self.analysis_file, "gain/fit/error_sigma1", fitted[:, :, 5])
+        fitted = fit.get_pixelwise_fit(avg_over_nreps, peaks=2)
+        output_info = {"info": "simple 2 peak gauss fit to determine gain"}
+        io.add_fit_params_to_file(
+            self.analysis_file, "3_gain/fit_with_noise", fitted, attributes=output_info
+        )
         self._logger.info("Finished fitting 1 peak gaussian for gain calculation")
         self._logger.info("---------Finished gain step---------")

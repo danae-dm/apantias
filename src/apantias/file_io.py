@@ -5,7 +5,7 @@ from typing import List, Tuple, Optional
 import os
 
 from . import logger
-from . import __init__
+from apantias import __init__ as apantias_init
 
 _logger = logger.Logger(__name__, "info").get_logger()
 
@@ -247,10 +247,6 @@ def create_analysis_file(
         raise Exception(f"File {filter_data_file} does not exist.")
     # create the hdf5 file
     with h5py.File(output_file, "w") as f:
-        # write the current apantias version and git hash to the file
-        f.attrs["apantias_version"] = (
-            f"Current APANTIAS version: {__init__.__version__}"
-        )
         if attributes_dict:  # an empty dict evaluates to False
             f.attrs["description"] = (
                 "This file contains the results of the analysis.\n No additional information has been provided in the parameter file."
@@ -258,36 +254,40 @@ def create_analysis_file(
         else:
             for key, value in attributes_dict.items():
                 f.attrs[key] = value
-        f.create_group("offnoi")
-        f["offnoi"].attrs["data"] = offnoi_data_file
-        f["offnoi"].attrs[
+        f.create_group("1_offnoi")
+        f["1_offnoi"].attrs["data"] = offnoi_data_file
+        f["1_offnoi"].attrs[
             "description"
         ] = "This group contains the results of the offset noise analysis."
         with h5py.File(offnoi_data_file, "r") as offnoi_data_file:
-            f["offnoi"].attrs["bin_files"] = offnoi_data_file["data"].attrs["bin_files"]
-            f["offnoi"].attrs["column_size"] = offnoi_data_file["data"].attrs[
+            f["1_offnoi"].attrs["bin_files"] = offnoi_data_file["data"].attrs[
+                "bin_files"
+            ]
+            f["1_offnoi"].attrs["column_size"] = offnoi_data_file["data"].attrs[
                 "column_size"
             ]
-            f["offnoi"].attrs["row_size"] = offnoi_data_file["data"].attrs["row_size"]
-            f["offnoi"].attrs["nreps"] = offnoi_data_file["data"].attrs["nreps"]
-            f["offnoi"].attrs["total_frames"] = offnoi_data_file["data"].shape[0]
+            f["1_offnoi"].attrs["row_size"] = offnoi_data_file["data"].attrs["row_size"]
+            f["1_offnoi"].attrs["nreps"] = offnoi_data_file["data"].attrs["nreps"]
+            f["1_offnoi"].attrs["total_frames"] = offnoi_data_file["data"].shape[0]
 
-        f.create_group("filter")
-        f["filter"].attrs["data"] = filter_data_file
-        f["filter"].attrs[
+        f.create_group("2_filter")
+        f["2_filter"].attrs["data"] = filter_data_file
+        f["2_filter"].attrs[
             "description"
         ] = "This group contains the results of the filter analysis."
         with h5py.File(filter_data_file, "r") as filter_data_file:
-            f["filter"].attrs["bin_files"] = filter_data_file["data"].attrs["bin_files"]
-            f["filter"].attrs["column_size"] = filter_data_file["data"].attrs[
+            f["2_filter"].attrs["bin_files"] = filter_data_file["data"].attrs[
+                "bin_files"
+            ]
+            f["2_filter"].attrs["column_size"] = filter_data_file["data"].attrs[
                 "column_size"
             ]
-            f["filter"].attrs["row_size"] = filter_data_file["data"].attrs["row_size"]
-            f["filter"].attrs["nreps"] = filter_data_file["data"].attrs["nreps"]
-            f["filter"].attrs["total_frames"] = filter_data_file["data"].shape[0]
+            f["2_filter"].attrs["row_size"] = filter_data_file["data"].attrs["row_size"]
+            f["2_filter"].attrs["nreps"] = filter_data_file["data"].attrs["nreps"]
+            f["2_filter"].attrs["total_frames"] = filter_data_file["data"].shape[0]
 
-        f.create_group("gain")
-        f["gain"].attrs[
+        f.create_group("3_gain")
+        f["3_gain"].attrs[
             "description"
         ] = "This group contains the results of the gain analysis."
         f.create_group("parameter_json")
@@ -337,7 +337,7 @@ def get_data_from_file(
     return data
 
 
-def add_array(
+def add_array_to_file(
     file_path: str,
     dataset_path: str,
     data: np.ndarray,
@@ -405,3 +405,63 @@ def add_array(
                 if attributes:
                     for key, value in attributes.items():
                         current_dataset.attrs[key] = value
+
+
+def add_fit_params_to_file(
+    file_path: str,
+    folder_path: str,
+    fit_params: np.ndarray,
+    attributes: dict = None,
+) -> None:
+    """
+    Adds the fit parameters to a dataset in an HDF5 file.
+    Assumes fit_params is of shape [rows, columns,n], where n is the number of
+    fit parameters.
+
+    Args:
+        file_path: Path to the HDF5 file.
+        dataset_path: Path to the dataset in the HDF5 file.
+        fit_params: Dictionary with the fit parameters.
+        attributes: Attributes to save.
+    """
+    # check size of fit_params
+    if fit_params.ndim != 3:
+        _logger.error("Fit parameters must have 3 dimensions.")
+        raise Exception("Fit parameters must have 3 dimensions.")
+    if fit_params.shape[2] not in [6, 12]:
+        _logger.error("Fit parameters must have 6 or 12 columns.")
+        raise Exception("Fit parameters must have 6 or 12 columns.")
+    keys_3 = [
+        "amplitude",
+        "mean",
+        "sigma",
+        "error_amplitude",
+        "error_mean",
+        "error_sigma",
+    ]
+    keys_6 = [
+        "amplitude1",
+        "mean1",
+        "sigma1",
+        "error_amplitude1",
+        "error_mean1",
+        "error_sigma1",
+        "amplitude2",
+        "mean2",
+        "sigma2",
+        "error_amplitude2",
+        "error_mean2",
+        "error_sigma2",
+    ]
+    for i in range(fit_params.shape[2]):
+        if fit_params.shape[2] == 6:
+            keys = keys_3
+        else:
+            keys = keys_6
+        data = fit_params[:, :, i]
+        add_array_to_file(
+            file_path,
+            f"{folder_path}/{keys[i]}",
+            data,
+            attributes=attributes,
+        )
