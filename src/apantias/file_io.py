@@ -35,15 +35,21 @@ def read_data_chunk_from_bin(
         test_data = np.fromfile(
             bin_file,
             dtype="uint16",
-            count=column_size * raw_row_size * 2000 * 2 * 10,
+            # load three times the given nreps and load 20 frames, times two because uint16 is 2 bytes
+            count=column_size * raw_row_size * 3 * nreps * 10 * 2,
             offset=offset,
         )
         test_data = test_data.reshape(-1, raw_row_size)
+        # get indices of frame keys, they are in the last column
         frame_keys = np.where(test_data[:, column_size] == 65535)
         frames = np.stack((frame_keys[0][:-1], frame_keys[0][1:]))
+        # calculate distances between frame keys
         diff = np.diff(frames, axis=0)
-        median_diff = np.median(diff)
-        estimated_nreps = int(median_diff / column_size)
+        # determine which distance is the most common
+        unique_numbers, counts = np.unique(diff, return_counts=True)
+        max_count_index = np.argmax(counts)
+        estimated_distance = unique_numbers[max_count_index]
+        estimated_nreps = int(estimated_distance / column_size)
         if nreps != estimated_nreps:
             raise Exception(f"Estimated nreps: {estimated_nreps}, given nreps: {nreps}")
 
