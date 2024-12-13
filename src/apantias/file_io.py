@@ -5,7 +5,6 @@ from typing import List, Tuple, Optional
 import os
 
 from . import logger
-from apantias import __init__ as apantias_init
 
 _logger = logger.Logger(__name__, "info").get_logger()
 
