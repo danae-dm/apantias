@@ -153,5 +153,7 @@ def group_pixels(data, primary_threshold, secondary_threshold, noise_map, struct
             indices = np.where(labeled_expanded > 0)
             for i in range(len(indices[0])):
                 output[frame_index, indices[0][i], indices[1][i]] = feature_num
+             # Convert the current frame in the output to binary
+            binary_output[frame_index] = output[frame_index] > 0
 
-    return output
+    return binary_output
