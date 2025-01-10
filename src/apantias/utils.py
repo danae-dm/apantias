@@ -726,3 +726,33 @@ def two_pass_labeling(data, structure):
     )  # Subtract 1 to exclude the background label (0)
 
     return labels, num_features
+
+
+def parse_numpy_slicing(slicing_str: str) -> list:
+    """
+    Parses a NumPy array slicing string and converts it to a list of Python slice objects.
+
+    Args:
+        slicing_str: A string representing NumPy array slicing (e.g., "1:5, :, 2:10:2").
+
+    Returns:
+        A list of Python slice objects.
+    """
+    slicing_str.replace("[", "").replace("]", "")
+    slices = []
+    slicing_parts = slicing_str.split(",")
+
+    for part in slicing_parts:
+        part = part.strip()
+        if ":" in part:
+            slice_parts = part.split(":")
+            start = int(slice_parts[0]) if slice_parts[0] else None
+            stop = int(slice_parts[1]) if slice_parts[1] else None
+            step = (
+                int(slice_parts[2]) if len(slice_parts) > 2 and slice_parts[2] else None
+            )
+            slices.append(slice(start, stop, step))
+        else:
+            slices.append(int(part))
+
+    return slices

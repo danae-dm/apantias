@@ -23,14 +23,8 @@ groups: /
         ~slope_values
             # slope values (simple linear fit) of the raw signals
     /2_slopes
-        /fit
+        ~slope_fit
             # slope values from precal are fitted pixel wise with a gaussian
-            ~amplitude
-            ~mean
-            ~sigma
-            ~error_amplitude
-            ~error_mean
-            ~error_sigma
         ~bad_slopes_mask
             # mask of bad slopes is calculated from the pixelwise fit and the threshold from the params file
         ~bad_slopes_count
@@ -38,26 +32,19 @@ groups: /
         ~signal_values
             # raw signals after common mode correction, bad slopes are set to nan
     /3_outliers
-        /fit
+        ~outliers_fit
             # signal values after common mode correction and bad slopes removed are fitted pixel wise with a gaussian
-            ~amplitude
-            ~mean
-            ~sigma
-            ~error_amplitude
-            ~error_mean
-            ~error_sigma
         ~outliers_mask
             # mask of outliers is calculated from the pixelwise fit and the threshold from the params file
         ~outliers_count
             # count of number of outliers per pixel
+        ~signal_values
+            # signal values after removing bad slopes and outliers
     /4_fit
+        ~fit_1_peak
         # signal values after common mode correction, bad slopes removed and outliers removed are fitted pixel wise with a gaussian
-        ~amplitude
-        ~mean
-        ~sigma
-        ~error_amplitude
-        ~error_mean
-        ~error_sigma
+        ~fit_2_peak
+        # double gauss
     /5_final
         ~offset
             # offset value from the gaussian fit
@@ -73,14 +60,8 @@ groups: /
         ~slope_values
             # slope values (simple linear fit) of the raw signals
     /2_slopes
-        /fit
+        ~slope_fit
             # slope values from precal are fitted pixel wise with a gaussian
-            ~amplitude
-            ~mean
-            ~sigma
-            ~error_amplitude
-            ~error_mean
-            ~error_sigma
         ~bad_slopes_mask
             # mask of bad slopes is calculated from the pixelwise fit and the threshold from the params file
         ~bad_slopes_count
@@ -89,14 +70,8 @@ groups: /
             # raw signals after common mode correction, bad slopes are set to nan
         ~signal_values_offset_corrected
     /3_outliers
-        /fit
+        ~outliers_fit
             # signal values after common mode correction and bad slopes removed are fitted pixel wise with a gaussian
-            ~amplitude
-            ~mean
-            ~sigma
-            ~error_amplitude
-            ~error_mean
-            ~error_sigma
         ~outliers_mask
             # mask of outliers is calculated from the pixelwise fit and the threshold from the params file
         ~outliers_count
@@ -183,21 +158,38 @@ class RoanSteps:
         self.filter_total_frames = total_frames_filter
 
         # nreps_eval and nframes_eval is [start,stop,step], if stop is -1 it goes to the end
-        if self.offnoi_nframes_eval[1] == -1:
+        start = self.offnoi_nframes_eval[0]
+        stop = self.offnoi_nframes_eval[1]
+        step = self.offnoi_nframes_eval[2]
+        if stop == -1:
             self.offnoi_nframes_eval[1] = self.offnoi_total_frames
-        if self.offnoi_nreps_eval[1] == -1:
+            self.offnoi_nframes_slice = f"{start}::{step}"
+        else:
+            self.offnoi_nframes_slice = f"{start}:{stop}:{step}"
+        start = self.offnoi_nreps_eval[0]
+        stop = self.offnoi_nreps_eval[1]
+        step = self.offnoi_nreps_eval[2]
+        if stop == -1:
             self.offnoi_nreps_eval[1] = self.offnoi_total_nreps
-        if self.filter_nframes_eval[1] == -1:
+            self.offnoi_nreps_slice = f"{start}::{step}"
+        else:
+            self.offnoi_nreps_slice = f"{start}:{stop}:{step}"
+        start = self.filter_nframes_eval[0]
+        stop = self.filter_nframes_eval[1]
+        step = self.filter_nframes_eval[2]
+        if stop == -1:
             self.filter_nframes_eval[1] = self.filter_total_frames
-        if self.filter_nreps_eval[1] == -1:
+            self.filter_nframes_slice = f"{start}::{step}"
+        else:
+            self.filter_nframes_slice = f"{start}:{stop}:{step}"
+        start = self.filter_nreps_eval[0]
+        stop = self.filter_nreps_eval[1]
+        step = self.filter_nreps_eval[2]
+        if stop == -1:
             self.filter_nreps_eval[1] = self.filter_total_nreps
-
-        # create slices for retrieval of data from the data file
-        # loading from h5 doesnt work with numpy sling notation, so we have to create slices
-        self.offnoi_nreps_slice = slice(*self.offnoi_nreps_eval)
-        self.offnoi_nframes_slice = slice(*self.offnoi_nframes_eval)
-        self.filter_nreps_slice = slice(*self.filter_nreps_eval)
-        self.filter_nframes_slice = slice(*self.filter_nframes_eval)
+            self.filter_nreps_slice = f"[{start}::{step}]"
+        else:
+            self.filter_nreps_slice = f"[{start}:{stop}:{step}]"
 
         # set variables to number of nreps_eval and nframes_eval to be evaluated (int)
         self.offnoi_nreps_eval = int(
@@ -216,13 +208,6 @@ class RoanSteps:
             (self.filter_nframes_eval[1] - self.filter_nframes_eval[0])
             / self.filter_nframes_eval[2]
         )
-
-        # check, if offnoi_nreps_eval is greater or equal than filter_nreps_eval
-        # this is necessary, because the filter step needs the offset_raw from the offnoi step
-        if self.offnoi_nreps_eval < self.filter_nreps_eval:
-            raise ValueError(
-                "offnoi_nreps_eval must be greater or equal than filter_nreps_eval"
-            )
 
         # create analysis h5 file
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -273,18 +258,12 @@ class RoanSteps:
         """
         for step in range(steps_needed):
             self._logger.info(f"Start processing step {step+1} of {steps_needed}")
-            current_frame_slice = slice(
-                total_frames_processed,
-                total_frames_processed + frames_per_step,
+            current_frame_slice = (
+                f"{total_frames_processed}:{total_frames_processed + frames_per_step}"
             )
-            slices = [
-                current_frame_slice,
-                slice(None),
-                self.offnoi_nreps_slice,
-                slice(None),
-            ]
+            slice = f"[{current_frame_slice},:,{self.offnoi_nreps_slice},:]"
             data = (
-                io.get_data_from_file(self.offnoi_data_file, "data", slices)
+                io.get_data_from_file(self.offnoi_data_file, "data", slice)
                 * self.polarity
             )
             self._logger.info(f"Data loaded: {data.shape}")
@@ -479,18 +458,12 @@ class RoanSteps:
         """
         for step in range(steps_needed):
             self._logger.info(f"Start processing step {step+1} of {steps_needed}")
-            current_frame_slice = slice(
-                total_frames_processed,
-                total_frames_processed + frames_per_step,
+            current_frame_slice = (
+                f"{total_frames_processed}:{total_frames_processed + frames_per_step}"
             )
-            slices = [
-                current_frame_slice,
-                slice(None),
-                self.filter_nreps_slice,
-                slice(None),
-            ]
+            slice = f"[{current_frame_slice},:,{self.filter_nreps_slice},:]"
             data = (
-                io.get_data_from_file(self.filter_data_file, "data", slices)
+                io.get_data_from_file(self.filter_data_file, "data", slice)
                 * self.polarity
             )
             self._logger.info(f"Data loaded: {data.shape}")

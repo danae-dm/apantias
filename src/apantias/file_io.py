@@ -5,6 +5,7 @@ from typing import List, Tuple, Optional
 import os
 
 from . import logger
+from . import utils
 
 _logger = logger.Logger(__name__, "info").get_logger()
 
@@ -311,7 +312,7 @@ def create_analysis_file(
 def get_data_from_file(
     file_path: str,
     dataset_path: str,
-    slices: List[slice] = None,
+    slice: str = None,
 ) -> np.ndarray:
     """
     Get the data from the HDF5 file.
@@ -323,6 +324,11 @@ def get_data_from_file(
     Returns:
         data: np.ndarray
     """
+    if slice is not None:
+        slices = utils.parse_slice(slice)
+    else:
+        slices = None
+
     with h5py.File(file_path, "r") as file:
         dataset = file[dataset_path]
         if slices is not None:
