@@ -738,7 +738,8 @@ def parse_numpy_slicing(slicing_str: str) -> list:
     Returns:
         A list of Python slice objects.
     """
-    slicing_str.replace("[", "").replace("]", "")
+    slicing_str = slicing_str.replace("[", "")
+    slicing_str = slicing_str.replace("]", "")
     slices = []
     slicing_parts = slicing_str.split(",")
 
@@ -754,5 +755,4 @@ def parse_numpy_slicing(slicing_str: str) -> list:
             slices.append(slice(start, stop, step))
         else:
             slices.append(int(part))
-
     return slices

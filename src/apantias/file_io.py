@@ -325,7 +325,7 @@ def get_data_from_file(
         data: np.ndarray
     """
     if slice is not None:
-        slices = utils.parse_slice(slice)
+        slices = utils.parse_numpy_slicing(slice)
     else:
         slices = None
 
