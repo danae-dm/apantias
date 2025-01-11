@@ -309,7 +309,10 @@ class RoanSteps:
             "info": "slope values from nrep_data step are fitted pixel wise with a gaussian"
         }
         io.add_array_to_file(
-            self.analysis_file, "1_offnoi/2_slopes/fit", fitted, attributes=output_info
+            self.analysis_file,
+            "1_offnoi/2_slopes/fit_parameters",
+            fitted,
+            attributes=output_info,
         )
         output_info = {
             "info": "mask of bad slopes is calculated from the pixelwise fit"
@@ -361,7 +364,7 @@ class RoanSteps:
         }
         io.add_array_to_file(
             self.analysis_file,
-            "1_offnoi/3_outliers/fit",
+            "1_offnoi/3_outliers/fit_parameters",
             fitted,
             attributes=output_info,
         )
@@ -409,7 +412,10 @@ class RoanSteps:
             "info": "signal values after common mode correction, bad slopes removed and outliers removed are fitted pixel wise with a gaussian"
         }
         io.add_array_to_file(
-            self.analysis_file, "1_offnoi/4_fit", fitted, attributes=output_info
+            self.analysis_file,
+            "1_offnoi/4_fit/fit_parameters",
+            fitted,
+            attributes=output_info,
         )
         failed_fits = np.sum(np.isnan(fitted[:, :, 1]))
         if failed_fits > 0:
@@ -509,7 +515,10 @@ class RoanSteps:
             "info": "slope values from precal are fitted pixel wise with a gaussian"
         }
         io.add_array_to_file(
-            self.analysis_file, "2_filter/2_slopes/fit", fitted, attributes=output_info
+            self.analysis_file,
+            "2_filter/2_slopes/fit_parameters",
+            fitted,
+            attributes=output_info,
         )
         output_info = {
             "info": "mask of bad slopes is calculated from the pixelwise fit"
@@ -575,7 +584,7 @@ class RoanSteps:
         }
         io.add_array_to_file(
             self.analysis_file,
-            "2_filter/3_outliers/fit",
+            "2_filter/3_outliers/fit_parameters",
             fitted,
             attributes=output_info,
         )
@@ -656,7 +665,7 @@ class RoanSteps:
         fitted = fit.get_pixelwise_fit(avg_over_nreps, peaks=2)
         output_info = {"info": "simple 2 peak gauss fit to determine gain"}
         io.add_array_to_file(
-            self.analysis_file, "3_gain/fit_with_noise", fitted, attributes=output_info
+            self.analysis_file, "3_gain/fit_parameters", fitted, attributes=output_info
         )
         self._logger.info("Finished fitting 1 peak gaussian for gain calculation")
         self._logger.info("---------Finished gain step---------")
