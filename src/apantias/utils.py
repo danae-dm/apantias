@@ -3,27 +3,13 @@ import os
 
 import numpy as np
 from numba import njit, prange
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from . import logger
 from . import fitting
 
 
 _logger = logger.Logger(__name__, "info").get_logger()
-
-
-def get_avg_over_frames(data: np.ndarray) -> np.ndarray:
-    """
-    Calculates the average over the frames in data.
-    Args:
-        data: in shape (nframes, column_size, nreps, row_size)
-
-    Returns:
-        np.array in shape (column_size, nreps, row_size)
-    """
-    if np.ndim(data) != 4:
-        _logger.error("Input data is not a 4D array.")
-        raise ValueError("Input data is not a 4D array.")
-    return nanmean(data, axis=0)
 
 
 def get_avg_over_nreps(data: np.ndarray) -> np.ndarray:
@@ -38,54 +24,6 @@ def get_avg_over_nreps(data: np.ndarray) -> np.ndarray:
         _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     return nanmean(data, axis=2)
-
-
-def get_avg_over_frames_and_nreps(
-    data: np.ndarray,
-    avg_over_frames: np.ndarray = None,
-    avg_over_nreps: np.ndarray = None,
-) -> np.ndarray:
-    """
-    Calculates the average over the frames and nreps in data. If avg_over_frames
-    or avg_over_nreps are already calculated they can be passed as arguments to
-    save computation time.
-    Args:
-        data: in shape (nframes, column_size, nreps, row_size)
-        avg_over_frames: (optional) in shape (column_size, nreps, row_size)
-        avg_over_nreps: (optional) np.in shape (nframes, column_size, row_size)
-    Returns:
-        np.array in shape (column_size, row_size)
-    """
-    if np.ndim(data) != 4:
-        _logger.error("Input data is not a 4D array.")
-        raise ValueError("Input data is not a 4D array.")
-
-    if avg_over_frames is None and avg_over_nreps is None:
-        return parallel_computations.nanmean(
-            parallel_computations.nanmean(data, axis=0), axis=2
-        )
-
-    if avg_over_frames is not None and avg_over_nreps is not None:
-        if np.ndim(avg_over_frames) != 3 or np.ndim(avg_over_nreps) != 3:
-            _logger.error("Input avg_over_frames or avg_over_nreps is not a 3D array.")
-            raise ValueError(
-                "Input avg_over_frames or avg_over_nreps is not a 3D array."
-            )
-        if avg_over_frames.shape[1] < avg_over_nreps.shape[0]:
-            return nanmean(avg_over_frames, axis=1)
-        else:
-            return nanmean(avg_over_nreps, axis=0)
-    else:
-        if avg_over_nreps is not None:
-            if np.ndim(avg_over_nreps) != 3:
-                _logger.error("Input avg_over_nreps is not a 3D array.")
-                raise ValueError("Input avg_over_nreps is not a 3D array.")
-            return parallel_computations.nanmean(avg_over_nreps, axis=0)
-        else:
-            if np.ndim(avg_over_frames) != 3:
-                _logger.error("Input avg_over_frames is not a 3D array.")
-                raise ValueError("Input avg_over_frames is not a 3D array.")
-            return parallel_computations.nanmean(avg_over_frames, axis=1)
 
 
 def get_rolling_average(data: np.ndarray, window_size: int) -> np.ndarray:
@@ -756,3 +694,63 @@ def parse_numpy_slicing(slicing_str: str) -> list:
         else:
             slices.append(int(part))
     return slices
+
+
+def process_row(func, row_data, row, *args, **kwargs):
+    """
+    Helper function to apply a function to a row of data.
+    """
+
+    def func_with_args(data):
+        return func(data, *args, **kwargs)
+
+    row_results = np.apply_along_axis(func_with_args, axis=0, arr=row_data)
+    return row, row_results
+
+
+def parallel_pixelwise(data, func, *args, **kwargs) -> np.ndarray:
+    """
+    Helper function to apply a function to each pixel in a 3D numpy array in parallel.
+    Data must have shape (n,row,col). The function is applied to [:,row,col].
+    A process is created for each row, to avoid overhead from creating too many processes.
+    The passed function must accept a 1D array as input and must have a 1D array as output.
+    The passed function must have a data parameter, which is the first argument.
+    """
+    # check data consistency
+    if data.ndim != 3:
+        raise ValueError("Data must be a 3D array.")
+    # try the passed function and check return value
+    try:
+        result = func(data[:, 0, 0], *args, **kwargs)
+    except Exception as e:
+        _logger.error(f"Error when trying to apply the function: {e}")
+    if not isinstance(result, np.ndarray):
+        raise ValueError("Function must return a numpy array.")
+    if result.ndim != 1:
+        raise ValueError("Function must return a 1D numpy array.")
+    # initialize results, now that we know what the function returns
+    results = np.zeros((data.shape[1], data.shape[2], result.shape[0]))
+
+    with ProcessPoolExecutor() as executor:
+        futures = []
+        for row in range(data.shape[1]):
+            # copy the data of one row and submit it to the executor
+            # this is necessary to avoid memory issues
+            row_data = np.copy(data[:, row, :])
+            futures.append(
+                executor.submit(process_row, func, row_data, row, *args, **kwargs)
+            )
+            _logger.debug(f"Submitted row {row} to the executor.")
+        total_futures = len(futures)
+        completed_futures = 0
+        for future in as_completed(futures):
+            try:
+                row, row_results = future.result()
+                results[row] = row_results.T
+                completed_futures += 1
+                _logger.debug(
+                    f"Completed row {row} ({completed_futures}/{total_futures})"
+                )
+            except Exception as e:
+                _logger.error(f"Error processing column {row}: {e}")
+    return results

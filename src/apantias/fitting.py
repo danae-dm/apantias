@@ -6,11 +6,11 @@ import numpy as np
 from numba import njit, prange
 
 from . import logger
+from . import utils
 
 _logger = logger.Logger(__name__, "info").get_logger()
 
 
-# TODO: Optimize this by not computing the guesses (calculate them beforehand und save them to a file)
 def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
     """
     fits a gaussian to a histogram using the scipy curve_fit method
@@ -156,49 +156,9 @@ def get_pixelwise_fit(data: np.ndarray, peaks: int) -> np.ndarray:
     if peaks not in [1, 2]:
         raise ValueError("Peaks must be 1 or 2")
     if peaks == 1:
-        results = np.zeros((data.shape[1], data.shape[2], 6))
-        with ProcessPoolExecutor() as executor:
-            # add futures
-            futures = []
-            for row in range(data.shape[1]):
-                row_data = np.copy(data[:, row, :])
-                futures.append(executor.submit(process_row, row_data, row, 1))
-                _logger.debug(f"Added row {row} to executor")
-            total_futures = len(futures)
-            completed_futures = 0
-            for future in as_completed(futures):
-                try:
-                    row, row_results = future.result()
-                    results[row] = row_results.T
-                    completed_futures += 1
-                    _logger.debug(
-                        f"Completed row {row} ({completed_futures}/{total_futures})"
-                    )
-                except Exception as e:
-                    _logger.error(f"Error processing column {row}: {e}")
-        return results
+        return utils.parallel_pixelwise(data, fit_gauss_to_hist)
     if peaks == 2:
-        results = np.zeros((data.shape[1], data.shape[2], 12))
-        with ProcessPoolExecutor() as executor:
-            # add futures
-            futures = []
-            for row in range(data.shape[1]):
-                row_data = np.copy(data[:, row, :])
-                futures.append(executor.submit(process_row, row_data, row, 2))
-                _logger.debug(f"Added row {row} to executor")
-            total_futures = len(futures)
-            completed_futures = 0
-            for future in as_completed(futures):
-                try:
-                    row, row_results = future.result()
-                    results[row] = row_results.T
-                    completed_futures += 1
-                    _logger.debug(
-                        f"Completed row {row} ({completed_futures}/{total_futures})"
-                    )
-                except Exception as e:
-                    _logger.error(f"Error processing column {row}: {e}")
-        return results
+        return utils.parallel_pixelwise(data, fit_2_gauss_to_hist)
 
 
 def get_fit_over_frames(data: np.ndarray, peaks: int) -> np.ndarray:
