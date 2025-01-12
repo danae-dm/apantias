@@ -100,7 +100,17 @@ class RoanSteps:
     _logger = logger.Logger("nproan-RoanSteps", "info").get_logger()
 
     def __init__(self, prm_file: str) -> None:
-        self.load(prm_file)
+        self.prm_file = prm_file
+        self.analysis_file_created = False
+        self._logger.info(f"RoanSteps initialized with parameter file: {prm_file}")
+        self._logger.info("To run the analysis steps, call:")
+        self._logger.info("calc_offnoi_step()")
+        self._logger.info("calc_filter_step()")
+        self._logger.info("calc_gain_step()")
+        self._logger.info(
+            "If a external offsetmap or noisemap is used, make sure the path in the params file is set. And start with the filter step."
+        )
+        self._logger.info("")
 
     def load(self, prm_file: str) -> None:
         # load parameter file
@@ -132,6 +142,8 @@ class RoanSteps:
         self.filter_thres_event_prim = self.params_dict["filter_thres_event_prim"]
         self.filter_thres_event_sec = self.params_dict["filter_thres_event_sec"]
         self.filter_thres_bad_slopes = self.params_dict["filter_thres_bad_slopes"]
+        self.filter_ext_offsetmap = self.params_dict["filter_ext_offsetmap"]
+        self.filter_ext_noisemap = self.params_dict["filter_ext_noisemap"]
 
         # get parameters from data_h5 file
         total_frames_offnoi, column_size_offnoi, row_size_offnoi, nreps_offnoi = (
@@ -222,6 +234,7 @@ class RoanSteps:
             self.params_dict,
             self.attributes_dict,
         )
+        self.analysis_file_created = True
         self._logger.info(
             f"Created analysis h5 file: {self.results_dir}/{self.analysis_file_name}"
         )
@@ -229,7 +242,7 @@ class RoanSteps:
         self.params.print_contents()
 
     def calc_offnoi_step(self) -> None:
-
+        self.load(self.prm_file)
         estimated_ram_usage = (
             utils.get_ram_usage_in_gb(
                 self.offnoi_nframes_eval,
@@ -239,7 +252,7 @@ class RoanSteps:
             )
             * 2.5  # this is estimated, better safe than sorry
         )
-
+        self._logger.info(f"\n")
         self._logger.info(f"---------Start offnoi step---------")
         self._logger.info(f"RAM available: {self.ram_available:.1f} GB")
         self._logger.info(f"Estimated RAM usage: {estimated_ram_usage:.1f} GB")
@@ -437,6 +450,36 @@ class RoanSteps:
         self._logger.info("---------Finished offnoi step---------")
 
     def calc_filter_step(self) -> None:
+
+        if not self.analysis_file_created:
+            self.load(self.prm_file)
+            if (self.filter_ext_noisemap or self.filter_ext_offsetmap) == "":
+                raise ValueError(
+                    "Offnoi step was not run, and no external offsetmap or noisemap provided."
+                )
+                self._logger.error(
+                    "Offnoi step was not run, and no external offsetmap or noisemap provided."
+                )
+            else:
+                try:
+                    # if offset step was not run, load external offsetmap and noisemap
+                    offnoi_offset = np.load(self.filter_ext_offsetmap)
+                    noise_map = np.load(self.filter_ext_noisemap)
+                except:
+                    self._logger.error(
+                        "External offsetmap or noisemap could not be loaded."
+                    )
+                    raise ValueError(
+                        "External offsetmap or noisemap could not be loaded."
+                    )
+        else:
+            # if offset step was run, load offsetmap and noisemap
+            offnoi_offset = io.get_data_from_file(
+                self.analysis_file, "1_offnoi/4_fit/fit_parameters", "[:,:,1]"
+            )
+            noise_map = io.get_data_from_file(
+                self.analysis_file, "1_offnoi/4_fit/fit_parameters", "[:,:,2]"
+            )
         estimated_ram_usage = (
             utils.get_ram_usage_in_gb(
                 self.filter_nframes_eval,
@@ -446,6 +489,7 @@ class RoanSteps:
             )
             * 2.5  # this is estimated, better safe than sorry
         )
+        self._logger.info(f"\n")
         self._logger.info(f"---------Start filter step---------")
         self._logger.info(f"RAM available: {self.ram_available:.1f} GB")
         self._logger.info(f"Estimated RAM usage: {estimated_ram_usage:.1f} GB")
@@ -547,9 +591,6 @@ class RoanSteps:
             self.analysis_file, "2_filter/1_nrep_data/signal_values"
         )
         # subtract offset from offnoi step
-        offnoi_offset = io.get_data_from_file(
-            self.analysis_file, "1_offnoi/4_fit", "[:,:,1]"
-        )
         avg_over_nreps -= offnoi_offset
         output_info = {
             "info": "raw signals after common mode correction and offset correction"
@@ -627,9 +668,6 @@ class RoanSteps:
         self._logger.info("Finished preliminary fit to remove outliers")
 
         self._logger.info("Start Calculating event_map")
-        noise_map = io.get_data_from_file(
-            self.analysis_file, "1_offnoi/4_fit", "[:,:,2]"
-        )
         structure = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
         event_array = an.group_pixels(
             avg_over_nreps,
@@ -656,6 +694,7 @@ class RoanSteps:
         self._logger.info("---------Finished filter step---------")
 
     def calc_gain_step(self) -> None:
+        self._logger.info(f"\n")
         self._logger.info("---------Start gain step---------")
         self._logger.info("Start fitting 1 peak gaussian for gain calculation")
         avg_over_nreps = io.get_data_from_file(

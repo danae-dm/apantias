@@ -37,6 +37,8 @@ class Params:
         "filter_thres_event_prim": 3,  # float
         "filter_thres_event_sec": 3,  # float
         "filter_thres_bad_slopes": 3,  # float
+        "filter_ext_offsetmap": "",  # str
+        "filter_ext_noisemap": "",  # str
     }
     gain_params = {"gain_dummy": 5}  # int
 
@@ -58,6 +60,8 @@ class Params:
         "filter_thres_event_prim": (int, float),
         "filter_thres_event_sec": (int, float),
         "filter_thres_bad_slopes": (int, float),
+        "filter_ext_offsetmap": str,
+        "filter_ext_noisemap": str,
         "gain_dummy": int,
     }
 
