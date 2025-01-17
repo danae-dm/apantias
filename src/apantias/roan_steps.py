@@ -454,12 +454,13 @@ class RoanSteps:
         if not self.analysis_file_created:
             self.load(self.prm_file)
             if (self.filter_ext_noisemap or self.filter_ext_offsetmap) == "":
-                raise ValueError(
-                    "Offnoi step was not run, and no external offsetmap or noisemap provided."
-                )
                 self._logger.error(
                     "Offnoi step was not run, and no external offsetmap or noisemap provided."
                 )
+                raise ValueError(
+                    "Offnoi step was not run, and no external offsetmap or noisemap provided."
+                )
+
             else:
                 try:
                     # if offset step was not run, load external offsetmap and noisemap
@@ -669,25 +670,38 @@ class RoanSteps:
 
         self._logger.info("Start Calculating event_map")
         structure = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
-        event_array = an.group_pixels(
+        event_map = an.group_pixels(
             avg_over_nreps,
             self.filter_thres_event_prim,
             self.filter_thres_event_sec,
             noise_map,
             structure,
         )
-        output_info = {"info": "event map is calculated from the signal values"}
+        event_counts = event_map > 0
+        event_counts_sum = np.sum(event_counts, axis=0)
+        output_info = {
+            "info": "event map is calculated from the signal values, events are grouped. 0 means no event."
+        }
         io.add_array_to_file(
             self.analysis_file,
             "2_filter/4_events/event_map",
-            event_array,
+            event_map,
             attributes=output_info,
         )
-        output_info = {"info": "count of number of events per pixel"}
+        output_info = {"info": "count of number of events per pixel and per frame"}
         io.add_array_to_file(
             self.analysis_file,
             "2_filter/4_events/event_map_counts",
-            np.sum(event_array != 0, axis=0),
+            event_counts,
+            attributes=output_info,
+        )
+        output_info = {
+            "info": "sum of counts of number of events per pixel and per frame"
+        }
+        io.add_array_to_file(
+            self.analysis_file,
+            "2_filter/4_events/event_map_counts_sum",
+            event_counts_sum,
             attributes=output_info,
         )
         self._logger.info("Finished calculating event_map")

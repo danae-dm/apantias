@@ -116,10 +116,8 @@ def group_pixels(data, primary_threshold, secondary_threshold, noise_map, struct
     """
     output = np.zeros(data.shape, dtype=np.uint16)
     for frame_index in prange(data.shape[0]):
-        mask_primary = data[frame_index] > primary_threshold * noise_map[frame_index]
-        mask_secondary = (
-            data[frame_index] > secondary_threshold * noise_map[frame_index]
-        )
+        mask_primary = data[frame_index] > primary_threshold * noise_map
+        mask_secondary = data[frame_index] > secondary_threshold * noise_map
         # Set the first and last rows to zero
         mask_primary[0, :] = 0
         mask_primary[-1, :] = 0
@@ -135,7 +133,6 @@ def group_pixels(data, primary_threshold, secondary_threshold, noise_map, struct
         labeled_primary, num_features_primary = utils.two_pass_labeling(
             mask_primary, structure=structure
         )
-
         # Iterate over each feature in the primary mask
         for feature_num in range(1, num_features_primary + 1):
             # Create a mask for the current feature
@@ -153,7 +150,5 @@ def group_pixels(data, primary_threshold, secondary_threshold, noise_map, struct
             indices = np.where(labeled_expanded > 0)
             for i in range(len(indices[0])):
                 output[frame_index, indices[0][i], indices[1][i]] = feature_num
-             # Convert the current frame in the output to binary
-        output[frame_index] = output[frame_index] > 0
 
     return output
