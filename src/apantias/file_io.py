@@ -2,12 +2,138 @@ import h5py
 import numpy as np
 import json
 from typing import List, Tuple, Optional
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import os
 
 from . import logger
 from . import utils
 
 _logger = logger.Logger(__name__, "info").get_logger()
+
+
+def create_data_file_from_bins_v2(
+    bin_files: List[str],
+    output_folder: str,
+    output_filename: str,
+    nreps: int,
+    column_size: int = 64,
+    row_size: int = 64,
+    key_ints: int = 3,
+    offset: int = 8,
+    attributes: dict = None,
+    compression: str = None,
+    available_cpu_cores: int = 32,
+    available_ram_gb: int = 12,
+) -> None:
+    """
+    If not specified otherwise, sizes are in bytes.
+    """
+    output_file = os.path.join(output_folder, output_filename)
+    # check if h5 file already exists
+    if os.path.exists(output_file):
+        _logger.error(f"File {output_file} already exists. Please delete")
+        raise Exception(f"File {output_file} already exists. Please delete")
+    # check if bin files exist, nreps are consistent and add up the total size
+    bin_size_list = []
+    for bin_file in bin_files:
+        if not os.path.exists(bin_file):
+            _logger.error(f"File {bin_file} does not exist")
+            raise Exception(f"File {bin_file} does not exist")
+        else:
+            # check if nreps are correct
+            raw_row_size = row_size + key_ints
+            test_data = np.fromfile(
+                bin_file,
+                dtype="uint16",
+                # load three times the given nreps and load 20 frames, times two because uint16 is 2 bytes
+                count=column_size * raw_row_size * 3 * nreps * 10 * 2,
+                offset=8,
+            )
+            test_data = test_data.reshape(-1, raw_row_size)
+            # get indices of frame keys, they are in the last column
+            frame_keys = np.where(test_data[:, column_size] == 65535)
+            frames = np.stack((frame_keys[0][:-1], frame_keys[0][1:]))
+            # calculate distances between frame keys
+            diff = np.diff(frames, axis=0)
+            # determine which distance is the most common
+            unique_numbers, counts = np.unique(diff, return_counts=True)
+            max_count_index = np.argmax(counts)
+            estimated_distance = unique_numbers[max_count_index]
+            estimated_nreps = int(estimated_distance / column_size)
+            if nreps != estimated_nreps:
+                raise Exception(
+                    f"Estimated nreps for {bin_file}: {estimated_nreps}, given nreps: {nreps}"
+                )
+            # add up the total size
+            bin_size_list.append(os.path.getsize(bin_file))
+    # create the hdf5 file
+    with h5py.File(output_file, "w") as f:
+        # create the dataset
+        dataset = f.create_dataset(
+            "data",
+            dtype="uint16",
+            shape=(0, column_size, nreps, row_size),
+            maxshape=(None, column_size, nreps, row_size),
+            chunks=(1, column_size, nreps, row_size),
+            compression=compression,
+        )
+        f.attrs["description"] = (
+            "This file contains the raw data from the bin files, only complete frames are saved"
+        )
+        dataset.attrs["bin_files"] = bin_files
+        dataset.attrs["column_size"] = column_size
+        dataset.attrs["row_size"] = row_size
+        dataset.attrs["nreps"] = nreps
+        dataset.attrs["total_frames"] = 0
+        if compression:
+            dataset.attrs["compression"] = compression
+        else:
+            dataset.attrs["compression"] = "None"
+        if attributes:
+            for key, value in attributes.items():
+                dataset.attrs[key] = value
+        _logger.info(f"Initialized empty file: {output_file}")
+        print(bin_size_list)
+        total_size = sum(bin_size_list)
+        # we use 80% of the available RAM to be safe
+        available_ram = int((available_ram_gb * 1024 * 1024 * 1024) * 0.8)
+        frame_size = int(column_size * row_size * nreps * 2)
+        available_ram_per_process = int(available_ram / available_cpu_cores)
+        frames_per_process = int(available_ram_per_process / frame_size)
+        process_infos = {}
+        for bin in bin_files:
+            list = []
+            bin_size = os.path.getsize(bin)
+            rounds = int(bin_size / available_ram) + 1
+            # the offset is named that way because of the kwarg of np.fromfile
+            current_offset = offset
+            for i in range(rounds):
+                list.append([])
+                bytes_left = bin_size - current_offset
+                if bytes_left > available_ram:
+                    for n in range(available_cpu_cores):
+                        list[i].append(
+                            (current_offset, current_offset + available_ram_per_process)
+                        )
+                        current_offset += available_ram_per_process
+                else:
+                    bytes_per_process = int(bytes_left / available_cpu_cores)
+                    for n in range(available_cpu_cores):
+                        list[i].append(
+                            (current_offset, current_offset + bytes_per_process)
+                        )
+                        current_offset += bytes_per_process
+            process_infos[bin] = list
+        print("simulate process spawning")
+        for bin in process_infos.keys():
+            print(f"start processing {bin}")
+            for i, chunk in enumerate(process_infos[bin]):
+                print(f"start round {i}")
+                for j, offset_tuple in enumerate(chunk):
+                    print(
+                        f"start process {j} (gb: {(offset_tuple[1]- offset_tuple[0])  / 1024 / 1024 / 1024})"
+                    )
+                    print(offset_tuple)
 
 
 def read_data_chunk_from_bin(
