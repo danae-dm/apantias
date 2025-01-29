@@ -4,6 +4,7 @@ import json
 from typing import List, Tuple, Optional
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import os
+import gc
 
 from . import logger
 from . import utils
@@ -26,7 +27,7 @@ def create_data_file_from_bins_v2(
     available_ram_gb: int = 12,
 ) -> None:
     """
-    If not specified otherwise, sizes are in bytes.
+    All sizes are in bytes, unsless otherwise specified.
     """
     output_file = os.path.join(output_folder, output_filename)
     # check if h5 file already exists
@@ -93,17 +94,20 @@ def create_data_file_from_bins_v2(
             for key, value in attributes.items():
                 dataset.attrs[key] = value
         _logger.info(f"Initialized empty file: {output_file}")
-        print(bin_size_list)
-        total_size = sum(bin_size_list)
-        # we use 80% of the available RAM to be safe
-        available_ram = int((available_ram_gb * 1024 * 1024 * 1024) * 0.8)
-        frame_size = int(column_size * row_size * nreps * 2)
+        # we use 30% of the available RAM to be safe
+        available_ram = int((available_ram_gb * 1024 * 1024 * 1024) * 0.3)
         available_ram_per_process = int(available_ram / available_cpu_cores)
-        frames_per_process = int(available_ram_per_process / frame_size)
+        # calculate how many rows can be read per process, a row has 67 uint16 values 2 bytes each
+        rows_read_per_process = int(
+            available_ram_per_process / ((row_size + key_ints) * 2)
+        )
+
         process_infos = {}
         for bin in bin_files:
             list = []
+            # bin_size is in unit bytes
             bin_size = os.path.getsize(bin)
+            # check how often all subprocesses must be called to read the whole file
             rounds = int(bin_size / available_ram) + 1
             # the offset is named that way because of the kwarg of np.fromfile
             current_offset = offset
@@ -112,28 +116,108 @@ def create_data_file_from_bins_v2(
                 bytes_left = bin_size - current_offset
                 if bytes_left > available_ram:
                     for n in range(available_cpu_cores):
-                        list[i].append(
-                            (current_offset, current_offset + available_ram_per_process)
-                        )
-                        current_offset += available_ram_per_process
+                        # counts is the number of uint16 values to read
+                        counts = rows_read_per_process * (row_size + key_ints)
+                        list[i].append((current_offset, counts))
+                        # set the new offset in bytes
+                        current_offset += counts * 2
                 else:
-                    bytes_per_process = int(bytes_left / available_cpu_cores)
+                    bytes_left_per_process = int(bytes_left / available_cpu_cores)
+                    rows_left_read_per_process = int(
+                        bytes_left_per_process / ((row_size + key_ints) * 2)
+                    )
                     for n in range(available_cpu_cores):
-                        list[i].append(
-                            (current_offset, current_offset + bytes_per_process)
-                        )
-                        current_offset += bytes_per_process
+                        # counts is the number of uint16 values to read
+                        counts = rows_left_read_per_process * (row_size + key_ints)
+                        list[i].append((current_offset, counts))
+                        # set the new offset in bytes
+                        current_offset += counts * 2
             process_infos[bin] = list
-        print("simulate process spawning")
+        print(process_infos)
+
+        print("start process spawning")
         for bin in process_infos.keys():
             print(f"start processing {bin}")
             for i, chunk in enumerate(process_infos[bin]):
                 print(f"start round {i}")
-                for j, offset_tuple in enumerate(chunk):
-                    print(
-                        f"start process {j} (gb: {(offset_tuple[1]- offset_tuple[0])  / 1024 / 1024 / 1024})"
-                    )
-                    print(offset_tuple)
+                with ProcessPoolExecutor(max_workers=available_cpu_cores) as executor:
+                    futures = []
+                    for j, offset_tuple in enumerate(chunk):
+                        print(
+                            f"spawning process {j} {offset_tuple} with size {(2*(offset_tuple[1]))/(1024*1024*1024)} GB"
+                        )
+                        futures.append(
+                            executor.submit(
+                                read_data_chunk_from_bin_v2,
+                                bin,
+                                column_size,
+                                row_size,
+                                key_ints,
+                                nreps,
+                                offset_tuple[0],
+                                offset_tuple[1],
+                            )
+                        )
+                    gc.collect()
+                    for future in as_completed(futures):
+                        data = future.result()
+                        if data is not None:
+                            print(f"data shape: {data.shape} loaded by process {j}")
+                    gc.collect()
+
+
+def read_data_chunk_from_bin_v2(
+    bin_file: str,
+    column_size: int,
+    row_size: int,
+    key_ints: int,
+    nreps: int,
+    offset: int,
+    chunk_size: int,
+) -> Tuple[np.ndarray, int]:
+    """
+    Reads data from a .bin file in chunks and returns a numpy array with the data and the new offset.
+    The bins usually have a header of 8 bytes, followed by the data. So an initial offset of 8 is needed.
+    After that the new offset is the position in the file where the next chunk should start. The parameter
+    frames_to_read should be set to a value that fits into the available RAM.
+    The function returns -1 as offset when end of file is reached.
+    offset must be in bytes, chunk_size must be in bytes as well.
+
+    Returns:
+        data, offset: Tuple[np.ndarray, int]
+    """
+    raw_row_size = row_size + key_ints
+    rows_per_frame = column_size * nreps
+    # count parameter needs to be in units of uint16 (uint16 = 2 bytes)
+    inp_data = np.fromfile(
+        bin_file, dtype="uint16", count=int(chunk_size / 2), offset=offset
+    )
+    offset += chunk_size  # offset is in bytes, uint16 = 16 bit = 2 bytes
+    # check if file is at its end
+    if inp_data.size == 0:
+        return None
+    # reshape the array into rows -> (#ofRows,67)
+    inp_data = inp_data.reshape(-1, raw_row_size)
+    # find all the framekeys
+    frame_keys = np.where(inp_data[:, column_size] == 65535)
+    # stack them and calculate difference to find incomplete frames
+    frames = np.stack((frame_keys[0][:-1], frame_keys[0][1:]))
+    diff = np.diff(frames, axis=0)
+    valid_frames_position = np.nonzero(diff == rows_per_frame)[1]
+    if len(valid_frames_position) == 0:
+        _logger.warning("No valid frames found in chunk!")
+        return None
+    valid_frames = frames.T[valid_frames_position]
+    frame_start_indices = valid_frames[:, 0]
+    frame_end_indices = valid_frames[:, 1]
+    inp_data = np.array(
+        [
+            inp_data[start + 1 : end + 1, :64]
+            for start, end in zip(frame_start_indices, frame_end_indices)
+        ]
+    )
+    inp_data = inp_data.reshape(-1, column_size, nreps, row_size)
+    return inp_data
 
 
 def read_data_chunk_from_bin(
