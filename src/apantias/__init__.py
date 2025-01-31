@@ -7,5 +7,6 @@ from . import display
 from . import roan_steps
 from . import utils
 from . import file_io
+from . import bin_to_h5
 
 print(f"APANTIAS version {__version__} loaded.")
