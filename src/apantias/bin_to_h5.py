@@ -6,9 +6,11 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import os
 import gc
 from multiprocessing import Manager
+import time
 
 from . import logger
 from . import utils
+from . import file_io as io
 
 _logger = logger.Logger(__name__, "info").get_logger()
 
@@ -104,8 +106,16 @@ def create_data_file_from_bins_v2(
             available_ram_per_process / ((row_size + key_ints) * 2)
         )
         process_infos = {}
+        """
+        Structure of process_infos:
+        {
+            "bin1": value[round_index][process_index] = (offset (in bytes), counts (in uint16))
+            "bin2": value[round_index][process_index] = (offset (in bytes), counts (in uint16))
+            ...
+        }
+        """
         for bin in bin_files:
-            list = []
+            bin_list = []
             # bin_size is in unit bytes
             bin_size = os.path.getsize(bin)
             # check how often all subprocesses must be called to read the whole file
@@ -113,13 +123,13 @@ def create_data_file_from_bins_v2(
             # the offset is named that way because of the kwarg of np.fromfile
             current_offset = offset
             for i in range(rounds):
-                list.append([])
+                bin_list.append([])
                 bytes_left = bin_size - current_offset
                 if bytes_left > available_ram:
                     for n in range(available_cpu_cores):
                         # counts is the number of uint16 values to read
                         counts = rows_read_per_process * (row_size + key_ints)
-                        list[i].append((current_offset, counts))
+                        bin_list[i].append((current_offset, counts))
                         # set the new offset in bytes
                         current_offset += counts * 2
                 else:
@@ -130,56 +140,69 @@ def create_data_file_from_bins_v2(
                     for n in range(available_cpu_cores):
                         # counts is the number of uint16 values to read
                         counts = rows_left_read_per_process * (row_size + key_ints)
-                        list[i].append((current_offset, counts))
+                        bin_list[i].append((current_offset, counts))
                         # set the new offset in bytes
                         current_offset += counts * 2
-            process_infos[bin] = list
+            process_infos[bin] = bin_list
         print(process_infos)
-        shared_dict = Manager().dict()
-        shared_dict = {}
+        manager = Manager()
+        shared_dict = manager.dict()
+        """
+        Structure of shared_dict:
+        {
+            "bin1": value[round_index][process_index] = read frames in subprocess
+            "bin2": calue[round_index][process_index] = read frames in subprocess
+            ...
+        }
+        """
         for bin in process_infos.keys():
-            shared_dict[bin].append(Manager().dict())
-            for round in bin.keys():
-                shared_dict[bin][round].append(Manager().dict())
-                for process in round:
-                    shared_dict[bin][round][process] = Manager().dict()
+            shared_dict[bin] = manager.list(
+                [manager.list() for _ in range(len(process_infos[bin]))]
+            )
 
+        for key, value in shared_dict.items():
+            print(f"{key}: {[list(inner_list) for inner_list in value]}")
 
-"""                    
         print("start process spawning")
         for bin in process_infos.keys():
             print(f"start processing {bin}")
-            for i, chunk in enumerate(process_infos[bin]):
-                print(f"start round {i}")
+            for round_id, chunk in enumerate(process_infos[bin]):
+                print(f"start round {round_id}")
                 with ProcessPoolExecutor(max_workers=available_cpu_cores) as executor:
                     futures = []
-                    for j, offset_tuple in enumerate(chunk):
+                    for process_id, offset_tuple in enumerate(chunk):
                         print(
-                            f"spawning process {j} {offset_tuple} with size {(2*(offset_tuple[1]))/(1024*1024*1024)} GB"
+                            f"spawning process {process_id} {offset_tuple} with size {(2*(offset_tuple[1]))/(1024*1024*1024)} GB"
                         )
                         futures.append(
                             executor.submit(
                                 read_and_process_data_from_bin,
                                 bin,
+                                round_id,
+                                process_id,
                                 column_size,
                                 row_size,
                                 key_ints,
                                 nreps,
                                 offset_tuple[0],
                                 offset_tuple[1],
+                                shared_dict,
+                                available_cpu_cores,
                             )
                         )
                     gc.collect()
                     for future in as_completed(futures):
-                        data = future.result()
-                        if data is not None:
-                            print(f"data shape: {data.shape} loaded by process {j}")
+                        future.result()
                     gc.collect()
-"""
+
+    for key, value in shared_dict.items():
+        print(f"{key}: {[list(inner_list) for inner_list in value]}")
 
 
 def read_and_process_data_from_bin(
     bin_file: str,
+    round_id: int,
+    process_id: int,
     column_size: int,
     row_size: int,
     key_ints: int,
@@ -187,6 +210,8 @@ def read_and_process_data_from_bin(
     offset: int,
     chunk_size: int,
     shared_dict: dict,
+    available_cpu_cores: int,
+    output_file: str,
 ) -> Tuple[np.ndarray, int]:
     """
     Reads data from a .bin file in chunks and returns a numpy array with the data and the new offset.
@@ -230,4 +255,34 @@ def read_and_process_data_from_bin(
         ]
     )
     inp_data = inp_data.reshape(-1, column_size, nreps, row_size)
-    return inp_data
+    final_frame_count = inp_data.shape[0]
+    shared_dict[bin_file][round_id].append((process_id, final_frame_count))
+    # wait until all processes are done reading
+    processed_finished = False
+    while not processed_finished:
+        processed_finished = True
+        if len(shared_dict[bin_file][round_id]) != available_cpu_cores:
+            processed_finished = False
+            print(
+                f"waiting for {available_cpu_cores - len(shared_dict[bin_file][round_id])} processes to finish"
+            )
+        time.sleep(1)
+    print(f"All processes finished reading {bin_file}")
+    # now look if there is a process id in the shared_dict that is smaller than the current process id
+    # TODO: make writing parallel, its serial now
+    # not so easy, because i need to calculate the correct indices for parallel writing
+    writing_permitted = False
+    while not writing_permitted:
+        writing_permitted = True
+        # check if all processes with a smaller id have finished writing
+        for process in shared_dict[bin_file][round_id]:
+            if process[0] < process_id:
+                writing_permitted = False
+        time.sleep(1)
+    print(f"Process {process_id} is writing")
+    io.add_array_to_file(output_file, "data", inp_data)
+    print(f"Process {process_id} finished writing")
+    for item in shared_dict[bin_file][round_id]:
+        if item[0] == process_id:
+            shared_dict[bin_file][round_id].remove(item)
+            break

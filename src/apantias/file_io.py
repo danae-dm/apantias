@@ -354,6 +354,7 @@ def add_array_to_file(
     file_path: str,
     dataset_path: str,
     data: np.ndarray,
+    frame_index_start: int = None,
     attributes: dict = None,
     compression: str = None,
 ) -> None:
@@ -367,6 +368,7 @@ def add_array_to_file(
         group_name: Name of the group.
         dataset_name: Name of the dataset.
         data: Data to save.
+        frame_index_start: Index of the frame where the data will be inserted
         attributes: Attributes to save.
         compression: Compression to use.
     """
@@ -387,12 +389,21 @@ def add_array_to_file(
             # Create the new dataset in the group
             current_group.create_dataset(
                 dataset_name,
-                data=data,
+                shape=(0, *data.shape[1:]),
                 maxshape=(None, *data.shape[1:]),
                 chunks=(1, *data.shape[1:]),
                 compression=compression,
             )
             current_dataset = current_group[dataset_name]
+            if frame_index_start is None:
+                current_dataset = data
+            else:
+                current_dataset.resize(
+                    current_dataset.shape[0] + frame_index_start + data.shape[0], axis=0
+                )
+                current_dataset[
+                    frame_index_start : frame_index_start + data.shape[0]
+                ] = data
             if attributes:
                 for key, value in attributes.items():
                     current_dataset.attrs[key] = value
@@ -406,15 +417,19 @@ def add_array_to_file(
                 raise Exception(
                     f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({current_dataset.shape[1:]})"
                 )
-            if dataset_name == "offset_raw":
-                # the data here should not be stacked but averaged
-                current_dataset = (current_dataset + data) / 2
-                if attributes:
-                    for key, value in attributes.items():
-                        current_dataset.attrs[key] = value
-            else:
+
+            # current_dataset.resize(current_dataset.shape[0] + data.shape[0], axis=0)
+            # current_dataset[-data.shape[0] :] = data
+            if frame_index_start is None:
                 current_dataset.resize(current_dataset.shape[0] + data.shape[0], axis=0)
                 current_dataset[-data.shape[0] :] = data
-                if attributes:
-                    for key, value in attributes.items():
-                        current_dataset.attrs[key] = value
+            else:
+                current_dataset.resize(
+                    current_dataset.shape[0] + frame_index_start + data.shape[0], axis=0
+                )
+                current_dataset[
+                    frame_index_start : frame_index_start + data.shape[0]
+                ] = data
+            if attributes:
+                for key, value in attributes.items():
+                    current_dataset.attrs[key] = value
