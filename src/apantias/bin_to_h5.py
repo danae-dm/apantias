@@ -171,9 +171,6 @@ def create_data_file_from_bins_v2(
                 with ProcessPoolExecutor(max_workers=available_cpu_cores) as executor:
                     futures = []
                     for process_id, offset_tuple in enumerate(chunk):
-                        print(
-                            f"spawning process {process_id} {offset_tuple} with size {(2*(offset_tuple[1]))/(1024*1024*1024)} GB"
-                        )
                         futures.append(
                             executor.submit(
                                 read_and_process_data_from_bin,
@@ -188,6 +185,7 @@ def create_data_file_from_bins_v2(
                                 offset_tuple[1],
                                 shared_dict,
                                 available_cpu_cores,
+                                output_file,
                             )
                         )
                     gc.collect()
@@ -263,26 +261,30 @@ def read_and_process_data_from_bin(
         processed_finished = True
         if len(shared_dict[bin_file][round_id]) != available_cpu_cores:
             processed_finished = False
-            print(
-                f"waiting for {available_cpu_cores - len(shared_dict[bin_file][round_id])} processes to finish"
-            )
         time.sleep(1)
-    print(f"All processes finished reading {bin_file}")
-    # now look if there is a process id in the shared_dict that is smaller than the current process id
-    # TODO: make writing parallel, its serial now
-    # not so easy, because i need to calculate the correct indices for parallel writing
-    writing_permitted = False
-    while not writing_permitted:
-        writing_permitted = True
-        # check if all processes with a smaller id have finished writing
-        for process in shared_dict[bin_file][round_id]:
-            if process[0] < process_id:
-                writing_permitted = False
-        time.sleep(1)
-    print(f"Process {process_id} is writing")
-    io.add_array_to_file(output_file, "data", inp_data)
-    print(f"Process {process_id} finished writing")
-    for item in shared_dict[bin_file][round_id]:
-        if item[0] == process_id:
-            shared_dict[bin_file][round_id].remove(item)
+    # now lets find the starting index for writing to .h5 file
+    index = 0
+    last_bin = False
+    last_round = False
+    for bin_name, value in shared_dict.items():
+        if last_bin == True:
             break
+        for i in range(round_id + 1):
+            if i == round_id:
+                last_round = True
+            for process in value[i]:
+                current_id = process[0]
+                frames_found = process[1]
+                if last_round:
+                    if current_id < process_id:
+                        index += frames_found
+                else:
+                    index += frames_found
+    if bin_name == bin_file:
+        last_bin = True
+    print(f"Round {round_id}, Process {process_id}, Started writing from index {index}")
+    # TODO: this takes waaay too long
+    io.add_array_to_file(output_file, "data", inp_data, index)
+    print(
+        f"Round {round_id}, Process {process_id}, Finished writing from index {index}"
+    )
