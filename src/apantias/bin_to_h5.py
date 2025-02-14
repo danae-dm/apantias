@@ -111,7 +111,12 @@ def _read_data_from_bin(
     if inp_data.size == 0:
         return None
     # reshape the array into rows -> (#ofRows,67)
-    inp_data = inp_data.reshape(-1, raw_row_size)
+    try:
+        inp_data = inp_data.reshape(-1, raw_row_size)
+    except ValueError:
+        raise ValueError(
+            f"Could not reshape data from {bin_file}. Check if the file is corrupted."
+        )
     # find all the framekeys
     frame_keys = np.where(inp_data[:, column_size] == 65535)
     # stack them and calculate difference to find incomplete frames
@@ -287,7 +292,6 @@ def _second_preproc(
 def create_data_file_from_bins(
     bin_files: List[str],
     h5_file: str,
-    nreps: int,
     column_size: int = 64,
     row_size: int = 64,
     key_ints: int = 3,
@@ -324,10 +328,8 @@ def create_data_file_from_bins(
             max_count_index = np.argmax(counts)
             estimated_distance = unique_numbers[max_count_index]
             estimated_nreps = int(estimated_distance / column_size)
-            if nreps != estimated_nreps:
-                raise Exception(
-                    f"Estimated nreps for {bin_file}: {estimated_nreps}, given nreps: {nreps}"
-                )
+            nreps = estimated_nreps
+
     if ext_dark_frame_h5 is not None:
         if not os.path.exists(ext_dark_frame_h5):
             raise Exception(f'File "{ext_dark_frame_h5}" does not exist')
