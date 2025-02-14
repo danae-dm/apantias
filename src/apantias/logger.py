@@ -1,6 +1,6 @@
 import logging
-import time
 import sys
+
 
 """
 levels:
@@ -36,7 +36,7 @@ class CustomFormatter(logging.Formatter):
 
 
 class Logger:
-    def __init__(self, logger_name: str, level: str = "info", file_name: str = None):
+    def __init__(self, logger_name: str, level: str = "info"):
         # Create a logger
         self.logger = logging.getLogger(logger_name)
         levels = [
@@ -50,18 +50,6 @@ class Logger:
             raise ValueError("Invalid level")
         level = levels[["debug", "info", "warning", "error", "critical"].index(level)]
         self.logger.setLevel(level)
-
-        if file_name is not None:
-            # Create a file handler
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
-            fh = logging.FileHandler(timestamp + "_" + file_name)
-            fh.setLevel(level)
-            # Add the formatter to the handler
-            fh.setFormatter(CustomFormatter())
-            # Add the handler to the logger
-            self.logger.addHandler(fh)
-            # print to sys.stdout to avoid red background in notebook
-            fh = logging.StreamHandler(sys.stdout)
 
         # Create a console handler
         ch = logging.StreamHandler(sys.stdout)

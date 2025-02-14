@@ -8,6 +8,8 @@ import gc
 
 from . import file_io as io
 from . import utils
+from . import logger
+from . import __version__
 
 
 def _get_workload_dict(
@@ -301,6 +303,7 @@ def create_data_file_from_bins(
     ext_dark_frame_h5: str = None,
     attributes: dict = None,
 ) -> None:
+    _logger = logger.Logger("apantias.bin_to_h5", "info").get_logger()
     # check if bin files exist, nreps are consistent and add up the total size
     if os.path.exists(h5_file):
         raise Exception(f"File {h5_file} already exists. Please delete")
@@ -353,7 +356,7 @@ def create_data_file_from_bins(
                 manager.list([0 for _ in range(available_cpu_cores)])
             )
     for key, value in shared_dict.items():
-        print(f"{key}: {[list(inner_list) for inner_list in value]}")
+        _logger.info(f"{key}: {[list(inner_list) for inner_list in value]}")
     # create new h5 file with swmr mode
     with h5py.File(h5_file, "w", libver="latest") as f:
         f.create_dataset(
@@ -364,6 +367,7 @@ def create_data_file_from_bins(
             chunks=None,
         )
         f.swmr_mode = True
+        f.attrs["apantias_version"] = __version__
         if attributes is not None:
             for key, value in attributes.items():
                 f.attrs[key] = value
@@ -392,10 +396,10 @@ def create_data_file_from_bins(
                 )
                 processes.append(p)
                 p.start()
-            print(f"Waiting for round {round_index} to finish")
+            _logger.info(f"Waiting for round {round_index} to finish")
             for p in processes:
                 p.join()
-            print(f"Round {round_index} finished")
+            _logger.info(f"Round {round_index} finished")
     mean = io.get_data_from_file(h5_file, "preproc_prelim/mean_nreps")
     std = io.get_data_from_file(h5_file, "preproc_prelim/std_nreps")
     slopes = io.get_data_from_file(h5_file, "preproc_prelim/slope_nreps")
