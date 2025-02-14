@@ -313,8 +313,8 @@ def create_data_file_from_bins(
             test_data = np.fromfile(
                 bin_file,
                 dtype="uint16",
-                # load three times the given nreps and load 20 frames, times two because uint16 is 2 bytes
-                count=column_size * raw_row_size * 3 * nreps * 10 * 2,
+                # load three times of 1000 and load 20 frames, times two because uint16 is 2 bytes
+                count=column_size * raw_row_size * 3 * 1000 * 10 * 2,
                 offset=8,
             )
             test_data = test_data.reshape(-1, raw_row_size)
@@ -406,6 +406,8 @@ def create_data_file_from_bins(
     _write_data_to_h5(lock, h5_file, "preproc_prelim/std_nreps_frames", std)
     _write_data_to_h5(lock, h5_file, "preproc_prelim/slopes_nreps_frames", slopes)
 
+
+"""
     # reset shared dict with zeroes for synchronization
     shared_dict = manager.dict()
     for bin in workload_dict.keys():
@@ -417,3 +419,4 @@ def create_data_file_from_bins(
     for key, value in shared_dict.items():
         print(f"{key}: {[list(inner_list) for inner_list in value]}")
     # TODO: add further preproc steps
+"""
