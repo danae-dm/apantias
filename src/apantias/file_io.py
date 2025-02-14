@@ -96,7 +96,6 @@ def create_data_file_from_bins(
     column_size: int = 64,
     row_size: int = 64,
     attributes: dict = None,
-    compression: str = None,
     available_ram_gb: int = 16,
 ) -> None:
     """
@@ -112,7 +111,6 @@ def create_data_file_from_bins(
         column_size
         row_size
         attributes
-        compression
         available_ram_gb: the available RAM in GB
     """
     output_file = os.path.join(output_folder, output_filename)
@@ -134,7 +132,6 @@ def create_data_file_from_bins(
             shape=(0, column_size, nreps, row_size),
             maxshape=(None, column_size, nreps, row_size),
             chunks=(1, column_size, nreps, row_size),
-            compression=compression,
         )
         f.attrs["description"] = (
             "This file contains the raw data from the bin files, only complete frames are saved"
@@ -144,10 +141,6 @@ def create_data_file_from_bins(
         dataset.attrs["row_size"] = row_size
         dataset.attrs["nreps"] = nreps
         dataset.attrs["total_frames"] = 0
-        if compression:
-            dataset.attrs["compression"] = compression
-        else:
-            dataset.attrs["compression"] = "None"
         if attributes:
             for key, value in attributes.items():
                 dataset.attrs[key] = value
@@ -351,29 +344,79 @@ def get_data_from_file(
 
 
 def add_array_to_file(
-    file_path: str,
-    dataset_path: str,
-    data: np.ndarray,
-    frame_index_start: int = None,
-    attributes: dict = None,
-    compression: str = None,
+    file_path: str, dataset_path: str, data: np.ndarray, attributes: dict = None
 ) -> None:
     """
     Adds an array to a Dataset. If the dataset exists, the array is appended.
     Dataset and group is created if not already present.
-    Per default no compression is used, bit 'gzip' can be specified.
 
     Args:
         file_path: Path to the HDF5 file.
         group_name: Name of the group.
         dataset_name: Name of the dataset.
         data: Data to save.
-        frame_index_start: Index of the frame where the data will be inserted
         attributes: Attributes to save.
-        compression: Compression to use.
     """
-    with h5py.File(file_path, "a") as file:
+    with h5py.File(file_path, "a", libver="latest") as file:
         # Split the dataset path into groups and dataset name
+        parts = dataset_path.split("/")
+        groups = parts[:-1]
+        dataset_name = parts[-1]
+        print(dataset_name)
+
+        # Create groups if they do not exist
+        current_group = file
+        for group in groups:
+            if group not in current_group:
+                current_group = current_group.create_group(group)
+            else:
+                current_group = current_group[group]
+        print(current_group)
+        # Check if the dataset already exists
+        if dataset_name not in current_group:
+            print("?")
+            # Create the new dataset in the group
+            current_dataset = current_group.create_dataset(
+                dataset_name,
+                shape=(0, *data.shape[1:]),
+                maxshape=(None, *data.shape[1:]),
+                chunks=True,
+                dtype=data.dtype,
+            )
+        else:
+            current_dataset = current_group[dataset_name]
+
+        # append data to existing dataset
+        if current_dataset.shape[1:] != data.shape[1:]:
+            _logger.error(
+                f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({current_dataset.shape[1:]})"
+            )
+            raise Exception(
+                f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({current_dataset.shape[1:]})"
+            )
+        print(f"old shape: {current_dataset.shape}")
+        current_dataset.resize(current_dataset.shape[0] + data.shape[0], axis=0)
+        current_dataset[-data.shape[0] :] = data
+        print(f"new shape: {current_dataset.shape}")
+        if attributes:
+            for key, value in attributes.items():
+                current_dataset.attrs[key] = value
+
+
+def write_array_to_dataset(
+    file_path: str,
+    dataset_path: str,
+    data: np.ndarray,
+) -> None:
+    """
+    Writes an array to a new Dataset.
+    Args:
+        file_path: Path to the HDF5 file.
+        dataset_path: Name of the dataset.
+        data: Data to save.
+    """
+    with h5py.File(file_path, "w") as file:
+        # check if the dataset already exists
         parts = dataset_path.split("/")
         groups = parts[:-1]
         dataset_name = parts[-1]
@@ -388,48 +431,6 @@ def add_array_to_file(
                     current_group = current_group[group]
             # Create the new dataset in the group
             current_group.create_dataset(
-                dataset_name,
-                shape=(0, *data.shape[1:]),
-                maxshape=(None, *data.shape[1:]),
-                chunks=(1, *data.shape[1:]),
-                compression=compression,
+                dataset_name, data=data, chunks=(1, *data.shape[1:])
             )
-            current_dataset = current_group[dataset_name]
-            if frame_index_start is None:
-                current_dataset = data
-            else:
-                current_dataset.resize(
-                    current_dataset.shape[0] + frame_index_start + data.shape[0], axis=0
-                )
-                current_dataset[
-                    frame_index_start : frame_index_start + data.shape[0]
-                ] = data
-            if attributes:
-                for key, value in attributes.items():
-                    current_dataset.attrs[key] = value
-        else:
-            # append data to existing dataset
-            current_dataset = file[dataset_path]
-            if current_dataset.shape[1:] != data.shape[1:]:
-                _logger.error(
-                    f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({current_dataset.shape[1:]})"
-                )
-                raise Exception(
-                    f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({current_dataset.shape[1:]})"
-                )
-
-            # current_dataset.resize(current_dataset.shape[0] + data.shape[0], axis=0)
-            # current_dataset[-data.shape[0] :] = data
-            if frame_index_start is None:
-                current_dataset.resize(current_dataset.shape[0] + data.shape[0], axis=0)
-                current_dataset[-data.shape[0] :] = data
-            else:
-                current_dataset.resize(
-                    current_dataset.shape[0] + frame_index_start + data.shape[0], axis=0
-                )
-                current_dataset[
-                    frame_index_start : frame_index_start + data.shape[0]
-                ] = data
-            if attributes:
-                for key, value in attributes.items():
-                    current_dataset.attrs[key] = value
+            current_group[dataset_name] = data

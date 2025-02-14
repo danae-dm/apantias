@@ -1,48 +1,230 @@
 import h5py
 import numpy as np
-import json
-from typing import List, Tuple, Optional
-from concurrent.futures import ProcessPoolExecutor, as_completed
-import os
-import gc
-from multiprocessing import Manager
+import multiprocessing
 import time
-
-from . import logger
-from . import utils
-from . import file_io as io
-
-_logger = logger.Logger(__name__, "info").get_logger()
+from typing import List, Tuple, Optional
+import os
 
 
-def create_data_file_from_bins_v2(
+def _get_workload_dict(
+    bin_files, available_ram_gb, available_cpu_cores, row_size, key_ints, initial_offset
+) -> dict:
+    """
+    Returns a dictionary with the workload for each process. It looks at the size if the bin files and
+    assigns bits of the file to each process. Each process has available_ram/available_cpu_cores ram to work with.
+    The workload is a list of #available_cpu_cores tuples with the offset and the number of uint16 values to read.
+    If the file is larger than available_ram, the file is loaded in multiple "rounds".
+    {
+        'bin_file1': [
+            [(offset1, counts1), (offset2, counts2), ...],  # round 1 of available_cpu_cores processes
+            [(offset1, counts1), (offset2, counts2), ...],  # round 2 of available_cpu_cores processes, if needed
+            ...
+        ],
+        'bin_file2': [                                      # same for the next bin file
+            [(offset1, counts1), (offset2, counts2), ...],
+            [(offset1, counts1), (offset2, counts2), ...],
+            ...
+        ],
+        ...
+        Args:
+            bin_files: list of absolute paths to the bin files
+            available_ram: available ram per process in bytes
+            available_cpu_cores: number of available cpu cores
+            rows_read_per_process: number of rows to read per process
+            row_size: size of a row in bytes
+            key_ints: number of key integers
+            offset: offset in bytes to start reading
+        Returns:
+            workload_dict: dictionary with the workload for each process
+    """
+    # 30% of available ram, this number can be tweaked later to improve performance
+    available_ram = int((available_ram_gb * 1024 * 1024 * 1024) * 0.3)
+    available_ram_per_process = int(available_ram / available_cpu_cores)
+    rows_read_per_process = int(available_ram_per_process / ((row_size + key_ints) * 2))
+    workload_dict = {}
+    for bin in bin_files:
+        bin_list = []
+        # bin_size is in unit bytes
+        bin_size = os.path.getsize(bin)
+        # check how often all subprocesses must be called to read the whole file
+        rounds = int(bin_size / available_ram) + 1
+        # the offset is named that way because of the kwarg of np.fromfile
+        current_offset = initial_offset
+        for i in range(rounds):
+            bin_list.append([])
+            bytes_left = bin_size - current_offset
+            if bytes_left > available_ram:
+                for n in range(available_cpu_cores):
+                    # counts is the number of uint16 values to read
+                    counts = rows_read_per_process * (row_size + key_ints)
+                    bin_list[i].append((current_offset, counts))
+                    # set the new offset in bytes
+                    current_offset += counts * 2
+            else:
+                bytes_left_per_process = int(bytes_left / available_cpu_cores)
+                rows_left_read_per_process = int(
+                    bytes_left_per_process / ((row_size + key_ints) * 2)
+                )
+                for n in range(available_cpu_cores):
+                    # counts is the number of uint16 values to read
+                    counts = rows_left_read_per_process * (row_size + key_ints)
+                    bin_list[i].append((current_offset, counts))
+                    # set the new offset in bytes
+                    current_offset += counts * 2
+        workload_dict[bin] = bin_list
+    return workload_dict
+
+
+def _read_data_from_bin(
+    bin_file: str,
+    column_size: int,
+    row_size: int,
+    key_ints: int,
+    nreps: int,
+    offset: int,
+    counts: int,
+) -> np.ndarray:
+    """
+    Reads an reshapes data from a binary file.
+    Args:
+        bin_file: absolute path to the binary file
+        column_size: number of columns in the binary file
+        row_size: number of rows in the binary file
+        key_ints: number of key integers
+        nreps: number of repetitions
+        offset: offset in bytes to start reading
+        counts: number of uint16 values to read
+    Returns:
+        inp_data: reshaped data from the binary file
+    """
+    raw_row_size = row_size + key_ints
+    rows_per_frame = column_size * nreps
+    chunk_size = counts * 2
+    # count parameter needs to be in units of uint16 (uint16 = 2 bytes)
+    inp_data = np.fromfile(bin_file, dtype="uint16", count=counts, offset=offset)
+    offset += chunk_size  # offset is in bytes, uint16 = 16 bit = 2 bytes
+    # check if file is at its end
+    if inp_data.size == 0:
+        return None
+    # reshape the array into rows -> (#ofRows,67)
+    inp_data = inp_data.reshape(-1, raw_row_size)
+    # find all the framekeys
+    frame_keys = np.where(inp_data[:, column_size] == 65535)
+    # stack them and calculate difference to find incomplete frames
+    frames = np.stack((frame_keys[0][:-1], frame_keys[0][1:]))
+    diff = np.diff(frames, axis=0)
+    valid_frames_position = np.nonzero(diff == rows_per_frame)[1]
+    if len(valid_frames_position) == 0:
+        print("No valid frames found in chunk!")
+        return None
+    valid_frames = frames.T[valid_frames_position]
+    frame_start_indices = valid_frames[:, 0]
+    frame_end_indices = valid_frames[:, 1]
+    inp_data = np.array(
+        [
+            inp_data[start + 1 : end + 1, :64]
+            for start, end in zip(frame_start_indices, frame_end_indices)
+        ]
+    )
+    inp_data = inp_data.reshape(-1, column_size, nreps, row_size)
+    return inp_data
+
+
+def _write_data_to_h5(lock, h5_file, dataset_path, data) -> None:
+    """ "
+    Writes data to a h5 file in a thread safe manner.
+    If the dataset does not exist, it is created with unlimited
+    maxshape along axis=0.
+    It appends the data to the dataset along axis=0.
+    Args:
+        lock: a multiprocessing lock
+        h5_file: the path to the h5 file
+        dataset_path: the path to the dataset in the h5 file
+        data: the data to write
+    """
+    with lock:
+        with h5py.File(h5_file, "a", libver="latest") as f:
+            f.swmr_mode = True
+            path_parts = dataset_path.strip("/").split("/")
+            groups = path_parts[:-1]
+            dataset = path_parts[-1]
+            current_group = f
+            for group in groups:
+                if group not in current_group:
+                    current_group = current_group.create_group(group)
+                else:
+                    current_group = current_group[group]
+            if dataset in current_group:
+                dataset = current_group[dataset]
+            else:
+                dataset = current_group.create_dataset(
+                    dataset,
+                    dtype=data.dtype,
+                    shape=(0, *data.shape[1:]),
+                    maxshape=(None, *data.shape[1:]),
+                    chunks=None,
+                )
+            dataset.resize(dataset.shape[0] + data.shape[0], axis=0)
+            dataset[-data.shape[0] :] = data
+            f.flush()
+
+
+def _run_subprocess(
+    h5_file,
+    column_size,
+    row_size,
+    key_ints,
+    nreps,
+    offset,
+    counts,
+    shared_dict,
+    bin,
+    round_index,
+    process_index,
+    lock,
+) -> None:
+    # read data from bin file, multiple processes can read from the same file
+    data = _read_data_from_bin(
+        bin, column_size, row_size, key_ints, nreps, offset, counts
+    )
+    common_modes = np.nanmedian(data, axis=3)
+
+    # now, check if all processes with a smaller id have finished writing, if not, wait
+    # this acts as a barrier
+    writing_permitted = False
+    while not writing_permitted:
+        writing_permitted = True
+        # check if all processes with a smaller id have finished writing
+        for process in shared_dict[bin][round_index]:
+            if process < process_index:
+                writing_permitted = False
+    # write data to h5 file, this is done by only one process at a time
+
+    _write_data_to_h5(lock, h5_file, "data", data)
+    _write_data_to_h5(lock, h5_file, "common_modes", common_modes)
+    shared_dict[bin][round_index].remove(process_index)
+
+
+def create_data_file_from_bins(
     bin_files: List[str],
-    output_folder: str,
-    output_filename: str,
+    h5_file: str,
     nreps: int,
     column_size: int = 64,
     row_size: int = 64,
     key_ints: int = 3,
     offset: int = 8,
+    available_cpu_cores: int = 4,
+    available_ram_gb: int = 16,
+    ext_dark_frame: str = None,
     attributes: dict = None,
-    dark_frame_offset: str = None,
-    compression: str = None,
-    available_cpu_cores: int = 32,
-    available_ram_gb: int = 12,
 ) -> None:
-    """
-    All sizes are in bytes, unsless otherwise specified.
-    """
-    output_file = os.path.join(output_folder, output_filename)
-    # check if h5 file already exists
-    if os.path.exists(output_file):
-        _logger.error(f"File {output_file} already exists. Please delete")
-        raise Exception(f"File {output_file} already exists. Please delete")
     # check if bin files exist, nreps are consistent and add up the total size
-    bin_size_list = []
+    if os.path.exists(h5_file):
+        print(f"File {h5_file} already exists. Please delete")
+        raise Exception(f"File {h5_file} already exists. Please delete")
     for bin_file in bin_files:
         if not os.path.exists(bin_file):
-            _logger.error(f"File {bin_file} does not exist")
+            print(f"File {bin_file} does not exist")
             raise Exception(f"File {bin_file} does not exist")
         else:
             # check if nreps are correct
@@ -69,219 +251,59 @@ def create_data_file_from_bins_v2(
                 raise Exception(
                     f"Estimated nreps for {bin_file}: {estimated_nreps}, given nreps: {nreps}"
                 )
-            # add up the total size
-            bin_size_list.append(os.path.getsize(bin_file))
-    # create the hdf5 file
-    with h5py.File(output_file, "w") as f:
-        # create the dataset
-        dataset = f.create_dataset(
-            "data",
-            dtype="uint16",
-            shape=(0, column_size, nreps, row_size),
-            maxshape=(None, column_size, nreps, row_size),
-            chunks=(1, column_size, nreps, row_size),
-            compression=compression,
+            else:
+                print(f"Estimated nreps for {bin_file}: {estimated_nreps}")
+    workload_dict = _get_workload_dict(
+        bin_files, available_ram_gb, available_cpu_cores, row_size, key_ints, offset
+    )
+    manager = multiprocessing.Manager()
+    # initialize shared dict for synchronization
+    shared_dict = manager.dict()
+    for bin in workload_dict.keys():
+        shared_dict[bin] = manager.list(
+            [
+                manager.list(range(available_cpu_cores))
+                for _ in range(len(workload_dict[bin]))
+            ]
         )
-        f.attrs["description"] = (
-            "This file contains the raw data from the bin files, only complete frames are saved"
-        )
-        dataset.attrs["bin_files"] = bin_files
-        dataset.attrs["column_size"] = column_size
-        dataset.attrs["row_size"] = row_size
-        dataset.attrs["nreps"] = nreps
-        dataset.attrs["total_frames"] = 0
-        if compression:
-            dataset.attrs["compression"] = compression
-        else:
-            dataset.attrs["compression"] = "None"
-        if attributes:
-            for key, value in attributes.items():
-                dataset.attrs[key] = value
-        _logger.info(f"Initialized empty file: {output_file}")
-        # we use 30% of the available RAM to be safe
-        available_ram = int((available_ram_gb * 1024 * 1024 * 1024) * 0.3)
-        available_ram_per_process = int(available_ram / available_cpu_cores)
-        # calculate how many rows can be read per process, a row has 67 uint16 values 2 bytes each
-        rows_read_per_process = int(
-            available_ram_per_process / ((row_size + key_ints) * 2)
-        )
-        process_infos = {}
-        """
-        Structure of process_infos:
-        {
-            "bin1": value[round_index][process_index] = (offset (in bytes), counts (in uint16))
-            "bin2": value[round_index][process_index] = (offset (in bytes), counts (in uint16))
-            ...
-        }
-        """
-        for bin in bin_files:
-            bin_list = []
-            # bin_size is in unit bytes
-            bin_size = os.path.getsize(bin)
-            # check how often all subprocesses must be called to read the whole file
-            rounds = int(bin_size / available_ram) + 1
-            # the offset is named that way because of the kwarg of np.fromfile
-            current_offset = offset
-            for i in range(rounds):
-                bin_list.append([])
-                bytes_left = bin_size - current_offset
-                if bytes_left > available_ram:
-                    for n in range(available_cpu_cores):
-                        # counts is the number of uint16 values to read
-                        counts = rows_read_per_process * (row_size + key_ints)
-                        bin_list[i].append((current_offset, counts))
-                        # set the new offset in bytes
-                        current_offset += counts * 2
-                else:
-                    bytes_left_per_process = int(bytes_left / available_cpu_cores)
-                    rows_left_read_per_process = int(
-                        bytes_left_per_process / ((row_size + key_ints) * 2)
-                    )
-                    for n in range(available_cpu_cores):
-                        # counts is the number of uint16 values to read
-                        counts = rows_left_read_per_process * (row_size + key_ints)
-                        bin_list[i].append((current_offset, counts))
-                        # set the new offset in bytes
-                        current_offset += counts * 2
-            process_infos[bin] = bin_list
-        print(process_infos)
-        manager = Manager()
-        shared_dict = manager.dict()
-        """
-        Structure of shared_dict:
-        {
-            "bin1": value[round_index][process_index] = read frames in subprocess
-            "bin2": calue[round_index][process_index] = read frames in subprocess
-            ...
-        }
-        """
-        for bin in process_infos.keys():
-            shared_dict[bin] = manager.list(
-                [manager.list() for _ in range(len(process_infos[bin]))]
-            )
-
-        for key, value in shared_dict.items():
-            print(f"{key}: {[list(inner_list) for inner_list in value]}")
-
-        print("start process spawning")
-        for bin in process_infos.keys():
-            print(f"start processing {bin}")
-            for round_id, chunk in enumerate(process_infos[bin]):
-                print(f"start round {round_id}")
-                with ProcessPoolExecutor(max_workers=available_cpu_cores) as executor:
-                    futures = []
-                    for process_id, offset_tuple in enumerate(chunk):
-                        futures.append(
-                            executor.submit(
-                                read_and_process_data_from_bin,
-                                bin,
-                                round_id,
-                                process_id,
-                                column_size,
-                                row_size,
-                                key_ints,
-                                nreps,
-                                offset_tuple[0],
-                                offset_tuple[1],
-                                shared_dict,
-                                available_cpu_cores,
-                                output_file,
-                            )
-                        )
-                    gc.collect()
-                    for future in as_completed(futures):
-                        future.result()
-                    gc.collect()
-
     for key, value in shared_dict.items():
         print(f"{key}: {[list(inner_list) for inner_list in value]}")
+    # create new h5 file with swmr mode
+    with h5py.File(h5_file, "w", libver="latest") as f:
+        f.create_dataset(
+            "data",
+            dtype="uint16",
+            shape=(0, 64, 200, 64),
+            maxshape=(None, 64, 200, 64),
+            chunks=None,
+        )
+        f.swmr_mode = True
 
-
-def read_and_process_data_from_bin(
-    bin_file: str,
-    round_id: int,
-    process_id: int,
-    column_size: int,
-    row_size: int,
-    key_ints: int,
-    nreps: int,
-    offset: int,
-    chunk_size: int,
-    shared_dict: dict,
-    available_cpu_cores: int,
-    output_file: str,
-) -> Tuple[np.ndarray, int]:
-    """
-    Reads data from a .bin file in chunks and returns a numpy array with the data and the new offset.
-    The bins usually have a header of 8 bytes, followed by the data. So an initial offset of 8 is needed.
-    After that the new offset is the position in the file where the next chunk should start. The parameter
-    frames_to_read should be set to a value that fits into the available RAM.
-    The function returns -1 as offset when end of file is reached.
-    offset must be in bytes, chunk_size must be in bytes as well.
-
-    Returns:
-        data, offset: Tuple[np.ndarray, int]
-    """
-    raw_row_size = row_size + key_ints
-    rows_per_frame = column_size * nreps
-    # count parameter needs to be in units of uint16 (uint16 = 2 bytes)
-    inp_data = np.fromfile(
-        bin_file, dtype="uint16", count=int(chunk_size / 2), offset=offset
-    )
-    offset += chunk_size  # offset is in bytes, uint16 = 16 bit = 2 bytes
-    # check if file is at its end
-    if inp_data.size == 0:
-        return None
-    # reshape the array into rows -> (#ofRows,67)
-    inp_data = inp_data.reshape(-1, raw_row_size)
-    # find all the framekeys
-    frame_keys = np.where(inp_data[:, column_size] == 65535)
-    # stack them and calculate difference to find incomplete frames
-    frames = np.stack((frame_keys[0][:-1], frame_keys[0][1:]))
-    diff = np.diff(frames, axis=0)
-    valid_frames_position = np.nonzero(diff == rows_per_frame)[1]
-    if len(valid_frames_position) == 0:
-        _logger.warning("No valid frames found in chunk!")
-        return None
-    valid_frames = frames.T[valid_frames_position]
-    frame_start_indices = valid_frames[:, 0]
-    frame_end_indices = valid_frames[:, 1]
-    inp_data = np.array(
-        [
-            inp_data[start + 1 : end + 1, :64]
-            for start, end in zip(frame_start_indices, frame_end_indices)
-        ]
-    )
-    inp_data = inp_data.reshape(-1, column_size, nreps, row_size)
-
-    # TODO: Computations here
-
-    # append process data to shared dict.
-    final_frame_count = inp_data.shape[0]
-    shared_dict[bin_file][round_id].append((process_id, final_frame_count))
-    # wait until all processes are done reading
-    processed_finished = False
-    while not processed_finished:
-        processed_finished = True
-        if len(shared_dict[bin_file][round_id]) != available_cpu_cores:
-            processed_finished = False
-            print(
-                f"waiting for {available_cpu_cores - len(shared_dict[bin_file][round_id])} processes to finish"
-            )
-        time.sleep(1)
-    print(f"All processes finished reading {bin_file}")
-    # check if data can be written already.
-    writing_permitted = False
-    while not writing_permitted:
-        writing_permitted = True
-        # check if all processes with a smaller id have finished writing
-        for process in shared_dict[bin_file][round_id]:
-            if process[0] < process_id:
-                writing_permitted = False
-        time.sleep(1)
-    print(f"Writing data from process {process_id} to file")
-    io.add_array_to_file(output_file, "data", inp_data)
-    # TODO: write additional data to file here.
-    print(f"Data from process {process_id} written to file")
-    # delete process from shared dict
-    shared_dict[bin_file][round_id].remove((process_id, final_frame_count))
+    lock = multiprocessing.Lock()
+    processes = []
+    for bin in workload_dict.keys():
+        for round_index, round in enumerate(workload_dict[bin]):
+            for process_index, (offset, counts) in enumerate(round):
+                p = multiprocessing.Process(
+                    target=_run_subprocess,
+                    args=(
+                        h5_file,
+                        column_size,
+                        row_size,
+                        key_ints,
+                        nreps,
+                        offset,
+                        counts,
+                        shared_dict,
+                        bin,
+                        round_index,
+                        process_index,
+                        lock,
+                    ),
+                )
+                processes.append(p)
+                p.start()
+            print(f"Waiting for round {round_index} to finish")
+            for p in processes:
+                p.join()
+            print(f"Round {round_index} finished")
