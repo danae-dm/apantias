@@ -11,6 +11,8 @@ from . import utils
 from .logger import global_logger
 from . import __version__
 
+_logger = global_logger
+
 
 def _get_workload_dict(
     bin_files, available_ram_gb, available_cpu_cores, row_size, key_ints, initial_offset
@@ -213,13 +215,19 @@ def _write_raw_data_prelim_preproc(
     # writing is finished, set the index to 1
     shared_dict[bin][round_index][process_index] = 1
     # start calculatins
+    _logger.info(f"Process {process_index} starts common mode calculation")
     common_modes = np.nanmedian(data, axis=3, keepdims=True)
     data = data.astype(np.float64)
+    _logger.info(f"Process {process_index} starts subtraction")
     data -= common_modes
+    _logger.info(f"Process {process_index} starts mean calculation")
     mean = np.mean(data, axis=2)
+    _logger.info(f"Process {process_index} starts std calculation")
     std = np.std(data, axis=2)
+    _logger.info(f"Process {process_index} starts median calculation")
     median = np.median(data, axis=2)
     x = np.arange(data.shape[2])
+    _logger.info(f"Process {process_index} starts slope calculation")
     slopes = np.apply_along_axis(lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data)
     # this acts as a barrier
     writing_permitted = False
@@ -230,11 +238,13 @@ def _write_raw_data_prelim_preproc(
         else:
             if shared_dict[bin][round_index][process_index - 1] == 2:
                 writing_permitted = True
+    _logger.info(f"Process {process_index} starts writing to h5 file")
     _write_data_to_h5(lock, h5_file, "preproc_prelim/common_modes", common_modes)
     _write_data_to_h5(lock, h5_file, "preproc_prelim/mean_nreps", mean)
     _write_data_to_h5(lock, h5_file, "preproc_prelim/median_nreps", median)
     _write_data_to_h5(lock, h5_file, "preproc_prelim/std_nreps", std)
     _write_data_to_h5(lock, h5_file, "preproc_prelim/slope_nreps", slopes)
+    _logger.info(f"Process {process_index} finished writing to h5 file")
     del data, common_modes, mean, std, slopes
     gc.collect()
     shared_dict[bin][round_index][process_index] = 2
@@ -305,7 +315,6 @@ def create_data_file_from_bins(
     ext_dark_frame_h5: str = None,
     attributes: dict = None,
 ) -> None:
-    _logger = global_logger
     # check if bin files exist, nreps are consistent and add up the total size
     if os.path.exists(h5_file):
         raise Exception(f"File {h5_file} already exists. Please delete")
