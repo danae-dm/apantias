@@ -4,6 +4,10 @@ import multiprocessing
 import time
 from typing import List, Tuple, Optional
 import os
+import gc
+
+from . import file_io as io
+from . import utils
 
 
 def _get_workload_dict(
@@ -37,8 +41,8 @@ def _get_workload_dict(
         Returns:
             workload_dict: dictionary with the workload for each process
     """
-    # 30% of available ram, this number can be tweaked later to improve performance
-    available_ram = int((available_ram_gb * 1024 * 1024 * 1024) * 0.3)
+    # 15% of available ram, this number can be tweaked later to improve performance
+    available_ram = int((available_ram_gb * 1024 * 1024 * 1024) * 0.15)
     available_ram_per_process = int(available_ram / available_cpu_cores)
     rows_read_per_process = int(available_ram_per_process / ((row_size + key_ints) * 2))
     workload_dict = {}
@@ -115,8 +119,7 @@ def _read_data_from_bin(
     diff = np.diff(frames, axis=0)
     valid_frames_position = np.nonzero(diff == rows_per_frame)[1]
     if len(valid_frames_position) == 0:
-        print("No valid frames found in chunk!")
-        return None
+        raise ValueError("No valid frames found in chunk!")
     valid_frames = frames.T[valid_frames_position]
     frame_start_indices = valid_frames[:, 0]
     frame_end_indices = valid_frames[:, 1]
@@ -169,7 +172,7 @@ def _write_data_to_h5(lock, h5_file, dataset_path, data) -> None:
             f.flush()
 
 
-def _run_subprocess(
+def _write_raw_data_prelim_preproc(
     h5_file,
     column_size,
     row_size,
@@ -187,22 +190,98 @@ def _run_subprocess(
     data = _read_data_from_bin(
         bin, column_size, row_size, key_ints, nreps, offset, counts
     )
-    common_modes = np.nanmedian(data, axis=3)
-
     # now, check if all processes with a smaller id have finished writing, if not, wait
+    # the shared dict is initialized with zeroes, so the first process can write immediately
+    # when the process finished writing it sets its index to 1, so the next process can write
     # this acts as a barrier
     writing_permitted = False
     while not writing_permitted:
-        writing_permitted = True
-        # check if all processes with a smaller id have finished writing
-        for process in shared_dict[bin][round_index]:
-            if process < process_index:
-                writing_permitted = False
+        if process_index == 0:
+            writing_permitted = True
+        else:
+            if shared_dict[bin][round_index][process_index - 1] == 1:
+                writing_permitted = True
     # write data to h5 file, this is done by only one process at a time
-
     _write_data_to_h5(lock, h5_file, "data", data)
-    _write_data_to_h5(lock, h5_file, "common_modes", common_modes)
-    shared_dict[bin][round_index].remove(process_index)
+    # writing is finished, set the index to 1
+    shared_dict[bin][round_index][process_index] = 1
+    # start calculatins
+    common_modes = np.nanmedian(data, axis=3, keepdims=True)
+    data = data.astype(np.float64)
+    data -= common_modes
+    mean = np.nanmean(data, axis=2)
+    std = np.nanstd(data, axis=2)
+    x = np.arange(data.shape[2])
+    slopes = np.apply_along_axis(lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data)
+    # this acts as a barrier
+    writing_permitted = False
+    while not writing_permitted:
+        if process_index == 0:
+            if shared_dict[bin][round_index][-1] == 1:
+                writing_permitted = True
+        else:
+            if shared_dict[bin][round_index][process_index - 1] == 2:
+                writing_permitted = True
+    _write_data_to_h5(lock, h5_file, "preproc_prelim/common_modes", common_modes)
+    _write_data_to_h5(lock, h5_file, "preproc_prelim/mean_nreps", mean)
+    _write_data_to_h5(lock, h5_file, "preproc_prelim/std_nreps", std)
+    _write_data_to_h5(lock, h5_file, "preproc_prelim/slope_nreps", slopes)
+    del data, common_modes, mean, std, slopes
+    gc.collect()
+    shared_dict[bin][round_index][process_index] = 2
+
+
+def _second_preproc(
+    h5_file,
+    ext_dark_frame_h5,
+    column_size,
+    row_size,
+    key_ints,
+    nreps,
+    offset,
+    counts,
+    shared_dict,
+    bin,
+    round_index,
+    process_index,
+    lock,
+) -> None:
+    # read data from bin file, multiple processes can read from the same file
+    data = _read_data_from_bin(
+        bin, column_size, row_size, key_ints, nreps, offset, counts
+    )
+    if ext_dark_frame_h5 is not None:
+        dark_frame_offset = io.get_data_from_file(
+            ext_dark_frame_h5, "preproc_prelim/mean_nreps_frames"
+        )
+        data -= dark_frame_offset[np.newaxis, :, np.newaxis, :]
+    else:
+        dark_frame_offset = io.get_data_from_file(
+            h5_file, "preproc_prelim/mean_nreps_frames"
+        )
+        data -= dark_frame_offset[np.newaxis, :, np.newaxis, :]
+    common_modes = np.nanmedian(data, axis=3, keepdims=True)
+    data -= common_modes
+    mean = np.nanmean(data, axis=2)
+    std = np.nanstd(data, axis=2)
+    x = np.arange(data.shape[2])
+    slopes = np.apply_along_axis(lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data)
+    # this acts as a barrier
+    writing_permitted = False
+    while not writing_permitted:
+        if process_index == 0:
+            writing_permitted = True
+        else:
+            if shared_dict[bin][round_index][process_index - 1] == 1:
+                writing_permitted = True
+    _write_data_to_h5(lock, h5_file, "preproc/common_modes", common_modes)
+    _write_data_to_h5(lock, h5_file, "preproc/mean_nreps", mean)
+    _write_data_to_h5(lock, h5_file, "preproc/std_nreps", std)
+    _write_data_to_h5(lock, h5_file, "preproc/slope_nreps", slopes)
+    _write_data_to_h5(lock, h5_file, "preproc/dark_frame_offset", dark_frame_offset)
+    del data, common_modes, mean, std, slopes, dark_frame_offset
+    gc.collect()
+    shared_dict[bin][round_index][process_index] = 1
 
 
 def create_data_file_from_bins(
@@ -215,16 +294,14 @@ def create_data_file_from_bins(
     offset: int = 8,
     available_cpu_cores: int = 4,
     available_ram_gb: int = 16,
-    ext_dark_frame: str = None,
+    ext_dark_frame_h5: str = None,
     attributes: dict = None,
 ) -> None:
     # check if bin files exist, nreps are consistent and add up the total size
     if os.path.exists(h5_file):
-        print(f"File {h5_file} already exists. Please delete")
         raise Exception(f"File {h5_file} already exists. Please delete")
     for bin_file in bin_files:
         if not os.path.exists(bin_file):
-            print(f"File {bin_file} does not exist")
             raise Exception(f"File {bin_file} does not exist")
         else:
             # check if nreps are correct
@@ -251,21 +328,28 @@ def create_data_file_from_bins(
                 raise Exception(
                     f"Estimated nreps for {bin_file}: {estimated_nreps}, given nreps: {nreps}"
                 )
-            else:
-                print(f"Estimated nreps for {bin_file}: {estimated_nreps}")
+    if ext_dark_frame_h5 is not None:
+        if not os.path.exists(ext_dark_frame_h5):
+            raise Exception(f'File "{ext_dark_frame_h5}" does not exist')
+        with h5py.File(ext_dark_frame_h5, "r") as f:
+            shape = f["preproc/self/mean_nreps_frames"].shape
+            if shape[0] != column_size or shape[1] != row_size:
+                raise Exception(
+                    f"Shape of external dark frame {ext_dark_frame_h5} does not match ({column_size}, {row_size}) of the bin files"
+                )
+
     workload_dict = _get_workload_dict(
         bin_files, available_ram_gb, available_cpu_cores, row_size, key_ints, offset
     )
     manager = multiprocessing.Manager()
-    # initialize shared dict for synchronization
+    # initialize shared dict with zeroes for synchronization
     shared_dict = manager.dict()
     for bin in workload_dict.keys():
-        shared_dict[bin] = manager.list(
-            [
-                manager.list(range(available_cpu_cores))
-                for _ in range(len(workload_dict[bin]))
-            ]
-        )
+        shared_dict[bin] = manager.list()
+        for round in workload_dict[bin]:
+            shared_dict[bin].append(
+                manager.list([0 for _ in range(available_cpu_cores)])
+            )
     for key, value in shared_dict.items():
         print(f"{key}: {[list(inner_list) for inner_list in value]}")
     # create new h5 file with swmr mode
@@ -273,11 +357,14 @@ def create_data_file_from_bins(
         f.create_dataset(
             "data",
             dtype="uint16",
-            shape=(0, 64, 200, 64),
-            maxshape=(None, 64, 200, 64),
+            shape=(0, column_size, nreps, row_size),
+            maxshape=(None, column_size, nreps, row_size),
             chunks=None,
         )
         f.swmr_mode = True
+        if attributes is not None:
+            for key, value in attributes.items():
+                f.attrs[key] = value
 
     lock = multiprocessing.Lock()
     processes = []
@@ -285,7 +372,7 @@ def create_data_file_from_bins(
         for round_index, round in enumerate(workload_dict[bin]):
             for process_index, (offset, counts) in enumerate(round):
                 p = multiprocessing.Process(
-                    target=_run_subprocess,
+                    target=_write_raw_data_prelim_preproc,
                     args=(
                         h5_file,
                         column_size,
@@ -307,3 +394,23 @@ def create_data_file_from_bins(
             for p in processes:
                 p.join()
             print(f"Round {round_index} finished")
+    mean = io.get_data_from_file(h5_file, "preproc_prelim/mean_nreps")
+    std = io.get_data_from_file(h5_file, "preproc_prelim/std_nreps")
+    slopes = io.get_data_from_file(h5_file, "preproc_prelim/slope_nreps")
+    mean = utils.nanmean(mean, axis=0)
+    std = utils.nanmean(std, axis=0)
+    slopes = utils.nanmean(slopes, axis=0)
+    _write_data_to_h5(lock, h5_file, "preproc_prelim/mean_nreps_frames", mean)
+    _write_data_to_h5(lock, h5_file, "preproc_prelim/std_nreps_frames", std)
+    _write_data_to_h5(lock, h5_file, "preproc_prelim/slopes_nreps_frames", slopes)
+
+    # reset shared dict with zeroes for synchronization
+    shared_dict = manager.dict()
+    for bin in workload_dict.keys():
+        shared_dict[bin] = manager.list()
+        for round in workload_dict[bin]:
+            shared_dict[bin].append(
+                manager.list([0 for _ in range(available_cpu_cores)])
+            )
+    for key, value in shared_dict.items():
+        print(f"{key}: {[list(inner_list) for inner_list in value]}")
