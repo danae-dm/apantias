@@ -61,3 +61,7 @@ class Logger:
 
     def get_logger(self) -> logging.Logger:
         return self.logger
+
+
+# Create a global logger instance to avoid multiple handlers
+global_logger = Logger("apantias", level="info").get_logger()

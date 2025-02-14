@@ -1,4 +1,4 @@
-__version__ = "1.1.6"
+__version__ = "2.0.0"
 __author__ = "Florian Heinrich"
 __credits__ = "HEPHY Vienna"
 

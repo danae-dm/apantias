@@ -8,7 +8,7 @@ import gc
 
 from . import file_io as io
 from . import utils
-from . import logger
+from .logger import global_logger
 from . import __version__
 
 
@@ -216,8 +216,9 @@ def _write_raw_data_prelim_preproc(
     common_modes = np.nanmedian(data, axis=3, keepdims=True)
     data = data.astype(np.float64)
     data -= common_modes
-    mean = np.nanmean(data, axis=2)
-    std = np.nanstd(data, axis=2)
+    mean = np.mean(data, axis=2)
+    std = np.std(data, axis=2)
+    median = np.median(data, axis=2)
     x = np.arange(data.shape[2])
     slopes = np.apply_along_axis(lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data)
     # this acts as a barrier
@@ -231,6 +232,7 @@ def _write_raw_data_prelim_preproc(
                 writing_permitted = True
     _write_data_to_h5(lock, h5_file, "preproc_prelim/common_modes", common_modes)
     _write_data_to_h5(lock, h5_file, "preproc_prelim/mean_nreps", mean)
+    _write_data_to_h5(lock, h5_file, "preproc_prelim/median_nreps", median)
     _write_data_to_h5(lock, h5_file, "preproc_prelim/std_nreps", std)
     _write_data_to_h5(lock, h5_file, "preproc_prelim/slope_nreps", slopes)
     del data, common_modes, mean, std, slopes
@@ -303,7 +305,7 @@ def create_data_file_from_bins(
     ext_dark_frame_h5: str = None,
     attributes: dict = None,
 ) -> None:
-    _logger = logger.Logger("apantias.bin_to_h5", "info").get_logger()
+    _logger = global_logger
     # check if bin files exist, nreps are consistent and add up the total size
     if os.path.exists(h5_file):
         raise Exception(f"File {h5_file} already exists. Please delete")
@@ -401,12 +403,15 @@ def create_data_file_from_bins(
                 p.join()
             _logger.info(f"Round {round_index} finished")
     mean = io.get_data_from_file(h5_file, "preproc_prelim/mean_nreps")
+    median = io.get_data_from_file(h5_file, "preproc_prelim/median_nreps")
     std = io.get_data_from_file(h5_file, "preproc_prelim/std_nreps")
     slopes = io.get_data_from_file(h5_file, "preproc_prelim/slope_nreps")
     mean = utils.nanmean(mean, axis=0)
+    median = utils.nanmedian(median, axis=0)
     std = utils.nanmean(std, axis=0)
     slopes = utils.nanmean(slopes, axis=0)
     _write_data_to_h5(lock, h5_file, "preproc_prelim/mean_nreps_frames", mean)
+    _write_data_to_h5(lock, h5_file, "preproc_prelim/median_nreps_frames", median)
     _write_data_to_h5(lock, h5_file, "preproc_prelim/std_nreps_frames", std)
     _write_data_to_h5(lock, h5_file, "preproc_prelim/slopes_nreps_frames", slopes)
 
