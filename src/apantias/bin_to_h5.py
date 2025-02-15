@@ -15,22 +15,29 @@ _logger = global_logger
 
 
 def _get_workload_dict(
-    bin_files, available_ram_gb, available_cpu_cores, row_size, key_ints, initial_offset
+    bin_files,
+    h5_file_process,
+    available_ram_gb,
+    available_cpu_cores,
+    row_size,
+    key_ints,
+    initial_offset,
 ) -> dict:
     """
     Returns a dictionary with the workload for each process. It looks at the size if the bin files and
     assigns bits of the file to each process. Each process has available_ram/available_cpu_cores ram to work with.
     The workload is a list of #available_cpu_cores tuples with the offset and the number of uint16 values to read.
-    If the file is larger than available_ram, the file is loaded in multiple "rounds".
+    If the file is larger than available_ram, the file is loaded in multiple "batches".
+    It also assigns a group name to each batch. The group name is used to write the data to the h5 file.
     {
         'bin_file1': [
-            [(offset1, counts1), (offset2, counts2), ...],  # round 1 of available_cpu_cores processes
-            [(offset1, counts1), (offset2, counts2), ...],  # round 2 of available_cpu_cores processes, if needed
+            [(offset1, counts1, group), (offset2, counts2, group), ...],  # batch 1 of available_cpu_cores processes
+            [(offset1, counts1, group), (offset2, counts2, group), ...],  # batch 2 of available_cpu_cores processes, if needed
             ...
         ],
         'bin_file2': [                                      # same for the next bin file
-            [(offset1, counts1), (offset2, counts2), ...],
-            [(offset1, counts1), (offset2, counts2), ...],
+            [(offset1, counts1, group), (offset2, counts2, group), ...],
+            [(offset1, counts1, group), (offset2, counts2, group), ...],
             ...
         ],
         ...
@@ -50,22 +57,24 @@ def _get_workload_dict(
     available_ram_per_process = int(available_ram / available_cpu_cores)
     rows_read_per_process = int(available_ram_per_process / ((row_size + key_ints) * 2))
     workload_dict = {}
-    for bin in bin_files:
+    for index, bin in enumerate(bin_files):
         bin_list = []
         # bin_size is in unit bytes
         bin_size = os.path.getsize(bin)
+        bin_name = os.path.basename(bin).split(".")[0].split(".")[0]
         # check how often all subprocesses must be called to read the whole file
-        rounds = int(bin_size / available_ram) + 1
+        batches = int(bin_size / available_ram) + 1
         # the offset is named that way because of the kwarg of np.fromfile
         current_offset = initial_offset
-        for i in range(rounds):
+        for i in range(batches):
             bin_list.append([])
             bytes_left = bin_size - current_offset
             if bytes_left > available_ram:
                 for n in range(available_cpu_cores):
                     # counts is the number of uint16 values to read
                     counts = rows_read_per_process * (row_size + key_ints)
-                    bin_list[i].append((current_offset, counts))
+                    group = f"{h5_file_process[n]}/{index}_{bin_name}/batch_{i}/"
+                    bin_list[i].append([current_offset, counts, group])
                     # set the new offset in bytes
                     current_offset += counts * 2
             else:
@@ -76,7 +85,8 @@ def _get_workload_dict(
                 for n in range(available_cpu_cores):
                     # counts is the number of uint16 values to read
                     counts = rows_left_read_per_process * (row_size + key_ints)
-                    bin_list[i].append((current_offset, counts))
+                    group = f"{h5_file_process[n]}/{index}_{bin_name}/batch_{i}/"
+                    bin_list[i].append([current_offset, counts, group])
                     # set the new offset in bytes
                     current_offset += counts * 2
         workload_dict[bin] = bin_list
@@ -142,112 +152,84 @@ def _read_data_from_bin(
     return inp_data
 
 
-def _write_data_to_h5(lock, h5_file, dataset_path, data) -> None:
+def _write_data_to_h5(path, data) -> None:
     """ "
-    Writes data to a h5 file in a thread safe manner.
-    If the dataset does not exist, it is created with unlimited
-    maxshape along axis=0.
-    It appends the data to the dataset along axis=0.
+    Writes data to a h5 file.
+    Takes the full path of a dataset: /scratch/some_folder/data.h5/some_group/some_dataset
     Args:
-        lock: a multiprocessing lock
-        h5_file: the path to the h5 file
-        dataset_path: the path to the dataset in the h5 file
+        dataset_path: the path to the dataset including the path to the file
         data: the data to write
     """
-    with lock:
-        with h5py.File(h5_file, "a", libver="latest") as f:
-            f.swmr_mode = True
-            path_parts = dataset_path.strip("/").split("/")
-            groups = path_parts[:-1]
-            dataset = path_parts[-1]
-            current_group = f
-            for group in groups:
-                if group not in current_group:
-                    current_group = current_group.create_group(group)
-                else:
-                    current_group = current_group[group]
-            if dataset in current_group:
-                dataset = current_group[dataset]
+    h5_file = path.split(".h5")[0] + ".h5"
+    dataset_path = path.split(".h5")[1]
+    with h5py.File(h5_file, "a") as f:
+        path_parts = dataset_path.strip("/").split("/")
+        groups = path_parts[:-1]
+        dataset = path_parts[-1]
+        current_group = f
+        for group in groups:
+            if group not in current_group:
+                current_group = current_group.create_group(group)
             else:
-                dataset = current_group.create_dataset(
-                    dataset,
-                    dtype=data.dtype,
-                    shape=(0, *data.shape[1:]),
-                    maxshape=(None, *data.shape[1:]),
-                    chunks=None,
-                )
-            dataset.resize(dataset.shape[0] + data.shape[0], axis=0)
-            dataset[-data.shape[0] :] = data
-            f.flush()
+                current_group = current_group[group]
+        if dataset in current_group:
+            raise ValueError(f"Dataset {dataset} already exists in {h5_file}")
+        else:
+            dataset = current_group.create_dataset(
+                dataset, dtype=data.dtype, data=data, chunks=None
+            )
+
+
+def _get_datasets_from_h5(path: str):
+    """
+    Returns a list of datasets in a group.
+    Args:
+        group_path: path to the group
+    Returns:
+        datasets: list of datasets and its shapes in the group
+    """
+    h5_file = path.split(".h5")[0] + ".h5"
+    group_path = path.split(".h5")[1]
+    with h5py.File(h5_file, "r") as f:
+        datasets = []
+        group = f[group_path]
+        for name, item in group.items():
+            if isinstance(item, h5py.Dataset):
+                datasets.append([name, list(item.shape)])
+    return datasets
 
 
 def _write_raw_data_prelim_preproc(
-    h5_file,
+    h5_group,
     column_size,
     row_size,
     key_ints,
     nreps,
     offset,
     counts,
-    shared_dict,
     bin,
-    round_index,
+    batch_index,
     process_index,
-    lock,
 ) -> None:
     # read data from bin file, multiple processes can read from the same file
     data = _read_data_from_bin(
         bin, column_size, row_size, key_ints, nreps, offset, counts
     )
-    # now, check if all processes with a smaller id have finished writing, if not, wait
-    # the shared dict is initialized with zeroes, so the first process can write immediately
-    # when the process finished writing it sets its index to 1, so the next process can write
-    # this acts as a barrier
-    writing_permitted = False
-    while not writing_permitted:
-        if process_index == 0:
-            writing_permitted = True
-        else:
-            if shared_dict[bin][round_index][process_index - 1] == 1:
-                writing_permitted = True
-    # write data to h5 file, this is done by only one process at a time
-    _write_data_to_h5(lock, h5_file, "data", data)
-    # writing is finished, set the index to 1
-    shared_dict[bin][round_index][process_index] = 1
-    # start calculatins
-    _logger.info(f"Process {process_index} starts common mode calculation")
     common_modes = np.nanmedian(data, axis=3, keepdims=True)
     data = data.astype(np.float64)
-    _logger.info(f"Process {process_index} starts subtraction")
     data -= common_modes
-    _logger.info(f"Process {process_index} starts mean calculation")
     mean = np.mean(data, axis=2)
-    _logger.info(f"Process {process_index} starts std calculation")
     std = np.std(data, axis=2)
-    _logger.info(f"Process {process_index} starts median calculation")
     median = np.median(data, axis=2)
     x = np.arange(data.shape[2])
-    _logger.info(f"Process {process_index} starts slope calculation")
     slopes = np.apply_along_axis(lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data)
-    # this acts as a barrier
-    writing_permitted = False
-    while not writing_permitted:
-        if process_index == 0:
-            if shared_dict[bin][round_index][-1] == 1:
-                writing_permitted = True
-        else:
-            if shared_dict[bin][round_index][process_index - 1] == 2:
-                writing_permitted = True
-    _logger.info(f"Process {process_index} starts writing to h5 file")
-    _write_data_to_h5(lock, h5_file, "preproc_prelim/common_modes", common_modes)
-    _write_data_to_h5(lock, h5_file, "preproc_prelim/mean_nreps", mean)
-    _write_data_to_h5(lock, h5_file, "preproc_prelim/median_nreps", median)
-    _write_data_to_h5(lock, h5_file, "preproc_prelim/std_nreps", std)
-    _write_data_to_h5(lock, h5_file, "preproc_prelim/slope_nreps", slopes)
-    _logger.info(f"Process {process_index} finished writing to h5 file")
+    _write_data_to_h5(h5_group + "common_modes", common_modes)
+    _write_data_to_h5(h5_group + "mean_nreps", mean)
+    _write_data_to_h5(h5_group + "median_nreps", median)
+    _write_data_to_h5(h5_group + "std_nreps", std)
+    _write_data_to_h5(h5_group + "slope_nreps", slopes)
     del data, common_modes, mean, std, slopes
     gc.collect()
-    shared_dict[bin][round_index][process_index] = 2
 
 
 def _second_preproc(
@@ -261,7 +243,7 @@ def _second_preproc(
     counts,
     shared_dict,
     bin,
-    round_index,
+    batch_index,
     process_index,
     lock,
 ) -> None:
@@ -291,7 +273,7 @@ def _second_preproc(
         if process_index == 0:
             writing_permitted = True
         else:
-            if shared_dict[bin][round_index][process_index - 1] == 1:
+            if shared_dict[bin][batch_index][process_index - 1] == 1:
                 writing_permitted = True
     _write_data_to_h5(lock, h5_file, "preproc/common_modes", common_modes)
     _write_data_to_h5(lock, h5_file, "preproc/mean_nreps", mean)
@@ -300,12 +282,12 @@ def _second_preproc(
     _write_data_to_h5(lock, h5_file, "preproc/dark_frame_offset", dark_frame_offset)
     del data, common_modes, mean, std, slopes, dark_frame_offset
     gc.collect()
-    shared_dict[bin][round_index][process_index] = 1
+    shared_dict[bin][batch_index][process_index] = 1
 
 
 def create_data_file_from_bins(
     bin_files: List[str],
-    h5_file: str,
+    output_folder: str,
     column_size: int = 64,
     row_size: int = 64,
     key_ints: int = 3,
@@ -315,14 +297,14 @@ def create_data_file_from_bins(
     ext_dark_frame_h5: str = None,
     attributes: dict = None,
 ) -> None:
-    # check if bin files exist, nreps are consistent and add up the total size
-    if os.path.exists(h5_file):
-        raise Exception(f"File {h5_file} already exists. Please delete")
+    # check if folder, bin files exist and calculate nreps and make sure they are all the same
+    if not os.path.exists(output_folder):
+        raise Exception(f"Folder {output_folder} does not exist.")
+    nreps_list = []
     for bin_file in bin_files:
         if not os.path.exists(bin_file):
             raise Exception(f"File {bin_file} does not exist")
         else:
-            # check if nreps are correct
             raw_row_size = row_size + key_ints
             test_data = np.fromfile(
                 bin_file,
@@ -342,8 +324,15 @@ def create_data_file_from_bins(
             max_count_index = np.argmax(counts)
             estimated_distance = unique_numbers[max_count_index]
             estimated_nreps = int(estimated_distance / column_size)
-            nreps = estimated_nreps
-
+            nreps_list.append(estimated_nreps)
+    # check if all nreps are the same
+    if all(x == nreps_list[0] for x in nreps_list):
+        nreps = nreps_list[0]
+    else:
+        raise Exception(
+            f"Not all bin files have the same number of nreps: {nreps_list}"
+        )
+    # check if external dark frame exists and has the right shape
     if ext_dark_frame_h5 is not None:
         if not os.path.exists(ext_dark_frame_h5):
             raise Exception(f'File "{ext_dark_frame_h5}" does not exist')
@@ -351,90 +340,126 @@ def create_data_file_from_bins(
             shape = f["preproc/self/mean_nreps_frames"].shape
             if shape[0] != column_size or shape[1] != row_size:
                 raise Exception(
-                    f"Shape of external dark frame {ext_dark_frame_h5} does not match ({column_size}, {row_size}) of the bin files"
+                    f"Shape of external dark frame {ext_dark_frame_h5} does"
+                    "not match ({column_size}, {row_size}) of the bin files"
                 )
-
-    workload_dict = _get_workload_dict(
-        bin_files, available_ram_gb, available_cpu_cores, row_size, key_ints, offset
-    )
-    manager = multiprocessing.Manager()
-    # initialize shared dict with zeroes for synchronization
-    shared_dict = manager.dict()
-    for bin in workload_dict.keys():
-        shared_dict[bin] = manager.list()
-        for round in workload_dict[bin]:
-            shared_dict[bin].append(
-                manager.list([0 for _ in range(available_cpu_cores)])
+    # create folders:
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    bin_name = os.path.basename(bin_files[0]).split(".")[0]
+    working_folder = os.path.join(output_folder, f"{timestamp}_{bin_name}")
+    data_folder = os.path.join(working_folder, "data")
+    os.mkdir(working_folder)
+    os.mkdir(data_folder)
+    # create a h5 file for every process in the data_folder
+    h5_file_process = [
+        os.path.join(data_folder, f"data_{i}.h5") for i in range(available_cpu_cores)
+    ]
+    h5_file_averages = os.path.join(data_folder, "averages.h5")
+    h5_file_virtual = os.path.join(working_folder, f"{bin_name}.h5")
+    for file in h5_file_process:
+        with h5py.File(file, "w") as f:
+            f.attrs["info"] = (
+                "This file contains data from one subprocess to enable parallel"
+                "processing. Retrieve the whole measurement data from the virtual dataset in the"
+                f"folder {working_folder}."
             )
-    for key, value in shared_dict.items():
-        _logger.info(f"{key}: {[list(inner_list) for inner_list in value]}")
-    # create new h5 file with swmr mode
-    with h5py.File(h5_file, "w", libver="latest") as f:
-        f.create_dataset(
-            "data",
-            dtype="uint16",
-            shape=(0, column_size, nreps, row_size),
-            maxshape=(None, column_size, nreps, row_size),
-            chunks=None,
+            f.attrs["apantias-version"] = __version__
+    # one for data where frames are averaged
+    with h5py.File(h5_file_averages, "w") as f:
+        f.attrs["info"] = (
+            "This file contains additional data where frames are averaged."
+            "Retrieve the whole measurement data from the virtual dataset in the"
+            f"folder {working_folder}."
         )
-        f.swmr_mode = True
-        f.attrs["apantias_version"] = __version__
-        if attributes is not None:
-            for key, value in attributes.items():
-                f.attrs[key] = value
-
-    lock = multiprocessing.Lock()
+        f.attrs["apantias-version"] = __version__
+    # and one for the virtual datasets
+    with h5py.File(h5_file_virtual, "w") as f:
+        f.attrs["info"] = (
+            "This file contains virtual datasets to access the data from the"
+            f"folder {data_folder}."
+        )
+        f.attrs["apantias-version"] = __version__
+    workload_dict = _get_workload_dict(
+        bin_files,
+        h5_file_process,
+        available_ram_gb,
+        available_cpu_cores,
+        row_size,
+        key_ints,
+        offset,
+    )
     processes = []
+    _logger.info("Starting first preprocessing step.")
+    _logger.info("These .bin files will be processed:")
+    for bin in bin_files:
+        _logger.info(f"{bin} of size {(os.path.getsize(bin) / (1024**3)):.2f} GB")
+        _logger.info(
+            f"The file will be split into {len(workload_dict[bin])} batches to fit into memory."
+        )
+    _logger.info(
+        "Note, that the provided bin files will be treated as being from the same measurement."
+    )
+    _logger.info(
+        "If you wish to process multiple measurements, please provide them separately."
+    )
     for bin in workload_dict.keys():
-        for round_index, round in enumerate(workload_dict[bin]):
-            for process_index, (offset, counts) in enumerate(round):
+        for batch_index, batch in enumerate(workload_dict[bin]):
+            for process_index, [offset, counts, h5_group] in enumerate(batch):
                 p = multiprocessing.Process(
                     target=_write_raw_data_prelim_preproc,
                     args=(
-                        h5_file,
+                        h5_group,
                         column_size,
                         row_size,
                         key_ints,
                         nreps,
                         offset,
                         counts,
-                        shared_dict,
                         bin,
-                        round_index,
+                        batch_index,
                         process_index,
-                        lock,
                     ),
                 )
                 processes.append(p)
                 p.start()
-            _logger.info(f"Waiting for round {round_index} to finish")
+            _logger.info(f"Waiting for batch {batch_index} of {bin} to finish")
             for p in processes:
                 p.join()
-            _logger.info(f"Round {round_index} finished")
-    mean = io.get_data_from_file(h5_file, "preproc_prelim/mean_nreps")
-    median = io.get_data_from_file(h5_file, "preproc_prelim/median_nreps")
-    std = io.get_data_from_file(h5_file, "preproc_prelim/std_nreps")
-    slopes = io.get_data_from_file(h5_file, "preproc_prelim/slope_nreps")
-    mean = utils.nanmean(mean, axis=0)
-    median = utils.nanmedian(median, axis=0)
-    std = utils.nanmean(std, axis=0)
-    slopes = utils.nanmean(slopes, axis=0)
-    _write_data_to_h5(lock, h5_file, "preproc_prelim/mean_nreps_frames", mean)
-    _write_data_to_h5(lock, h5_file, "preproc_prelim/median_nreps_frames", median)
-    _write_data_to_h5(lock, h5_file, "preproc_prelim/std_nreps_frames", std)
-    _write_data_to_h5(lock, h5_file, "preproc_prelim/slopes_nreps_frames", slopes)
+            _logger.info(f"batch {batch_index} of total {len(workload_dict[bin])} done")
+
+    # loop through the dict to find the final shape and names of all datasets across the .h5 files
+    datasets = []
+    for bin in workload_dict.keys():
+        for batch_index, batch in enumerate(workload_dict[bin]):
+            for process_index, [offset, counts, h5_group] in enumerate(batch):
+                new_datasets = _get_datasets_from_h5(h5_group)
+                if datasets == []:
+                    datasets = new_datasets
+                else:
+                    for i, new_dataset in enumerate(new_datasets):
+                        new_name = new_dataset[0]
+                        new_shape_frames = new_dataset[1][0]
+                        if new_name not in [dataset[0] for dataset in datasets]:
+                            raise ValueError(
+                                f"Dataset {new_name} not found in datasets"
+                            )
+                        else:
+                            # increment the shape of the dataset by the new shape across axis 0
+                            datasets[i][1][0] += new_shape_frames
+    print(datasets)
 
 
 """
-    # reset shared dict with zeroes for synchronization
-    shared_dict = manager.dict()
-    for bin in workload_dict.keys():
-        shared_dict[bin] = manager.list()
-        for round in workload_dict[bin]:
-            shared_dict[bin].append(
-                manager.list([0 for _ in range(available_cpu_cores)])
-            )
-    for key, value in shared_dict.items():
-        print(f"{key}: {[list(inner_list) for inner_list in value]}")
-    # TODO: add further preproc steps
+TODO: add stuff to virtual datasets
+
+something like this:
+loop over datasets in datasets:
+    layout = h5py.VirtualLayout(shape="shape from the list")
+    for n in range(batches+processes+bins):
+        vsource = h5py.VirtualSource(f"{n}.h5", "data", shape=(100,))
+        layout[n*100:(n+1)*100] = vsource
+
+# Add virtual dataset to VDS file
+with h5py.File("VDS.h5", "w") as f:
+    f.create_virtual_dataset("vdata", layout, fillvalue=-1)
 """
