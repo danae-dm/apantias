@@ -52,7 +52,7 @@ def _get_workload_dict(
         Returns:
             workload_dict: dictionary with the workload for each process
     """
-    # 15% of available ram, this number can be tweaked later to improve performance
+    # 20% of available ram, this number can be tweaked later to improve performance
     available_ram = int((available_ram_gb * 1024 * 1024 * 1024) * 0.15)
     available_ram_per_process = int(available_ram / available_cpu_cores)
     rows_read_per_process = int(available_ram_per_process / ((row_size + key_ints) * 2))
@@ -215,8 +215,10 @@ def _write_raw_data_prelim_preproc(
     data = _read_data_from_bin(
         bin, column_size, row_size, key_ints, nreps, offset, counts
     )
+    _write_data_to_h5(h5_group + "raw_data", data)
     common_modes = np.nanmedian(data, axis=3, keepdims=True)
     data = data.astype(np.float64)
+    gc.collect()
     data -= common_modes
     mean = np.mean(data, axis=2)
     std = np.std(data, axis=2)
@@ -379,6 +381,7 @@ def create_data_file_from_bins(
             f"folder {data_folder}."
         )
         f.attrs["apantias-version"] = __version__
+    # get the workload for each process
     workload_dict = _get_workload_dict(
         bin_files,
         h5_file_process,
@@ -403,6 +406,7 @@ def create_data_file_from_bins(
         "If you wish to process multiple measurements, please provide them separately."
     )
     for bin in workload_dict.keys():
+        _logger.info(f"Start processing {bin}")
         for batch_index, batch in enumerate(workload_dict[bin]):
             for process_index, [offset, counts, h5_group] in enumerate(batch):
                 p = multiprocessing.Process(
@@ -422,16 +426,17 @@ def create_data_file_from_bins(
                 )
                 processes.append(p)
                 p.start()
-            _logger.info(f"Waiting for batch {batch_index} of {bin} to finish")
             for p in processes:
                 p.join()
-            _logger.info(f"batch {batch_index} of total {len(workload_dict[bin])} done")
+            _logger.info(f"batch {batch_index+1}/{len(workload_dict[bin])} done")
 
     # loop through the dict to find the final shape and names of all datasets across the .h5 files
+    # [[name1,[shape[0],shape[1]..]],...]
     datasets = []
     for bin in workload_dict.keys():
         for batch_index, batch in enumerate(workload_dict[bin]):
             for process_index, [offset, counts, h5_group] in enumerate(batch):
+                # get names and shapes of datasets in the group
                 new_datasets = _get_datasets_from_h5(h5_group)
                 if datasets == []:
                     datasets = new_datasets
@@ -446,20 +451,44 @@ def create_data_file_from_bins(
                         else:
                             # increment the shape of the dataset by the new shape across axis 0
                             datasets[i][1][0] += new_shape_frames
-    print(datasets)
-
-
-"""
-TODO: add stuff to virtual datasets
-
-something like this:
-loop over datasets in datasets:
-    layout = h5py.VirtualLayout(shape="shape from the list")
-    for n in range(batches+processes+bins):
-        vsource = h5py.VirtualSource(f"{n}.h5", "data", shape=(100,))
-        layout[n*100:(n+1)*100] = vsource
-
-# Add virtual dataset to VDS file
-with h5py.File("VDS.h5", "w") as f:
-    f.create_virtual_dataset("vdata", layout, fillvalue=-1)
-"""
+    # the datsets_dict contains the names of all datasets present in the .h5 files of the processes,
+    # the final shape (sum of all shapes across axis 0) and the sources of the datasets
+    datasets_dict = {}
+    for dataset in datasets:
+        dataset_name = dataset[0]
+        datasets_dict[dataset_name] = {
+            "name": dataset[0],
+            "final_shape": dataset[1],
+            "sources": [],
+        }
+    for bin in workload_dict.keys():
+        for batch_index, batch in enumerate(workload_dict[bin]):
+            for process_index, [offset, counts, h5_group] in enumerate(batch):
+                for dataset_name in datasets_dict.keys():
+                    datasets_dict[dataset_name]["sources"].append(
+                        f"{h5_group}{dataset_name}"
+                    )
+    _logger.info("Creating virtual dataset.")
+    # create virtual datasets
+    for dataset in datasets_dict.values():
+        name = dataset["name"]
+        sources = dataset["sources"]
+        final_shape = tuple(dataset["final_shape"])
+        # get type of first dataset
+        dtype = h5py.File(sources[0].split(".h5")[0] + ".h5", "r")[
+            sources[0].split(".h5")[1]
+        ].dtype
+        layout = h5py.VirtualLayout(shape=final_shape, dtype=dtype)
+        with h5py.File(h5_file_virtual, "a") as f:
+            start_index = 0
+            for source in sources:
+                source_h5 = source.split(".h5")[0] + ".h5"
+                source_dataset = source.split(".h5")[1]
+                sh = h5py.File(source_h5, "r")[source_dataset].shape
+                end_index = start_index + sh[0]
+                vsource = h5py.VirtualSource(source_h5, source_dataset, shape=sh)
+                layout[start_index:end_index, ...] = vsource
+                start_index = end_index
+            f.create_virtual_dataset(name, layout, fillvalue=-1)
+    _logger.info("Virtual dataset created.")
+    # TODO: create averages from the virtual dataset
