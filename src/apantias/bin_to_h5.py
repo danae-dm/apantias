@@ -633,3 +633,28 @@ def create_data_file_from_bins(
                 start_index = end_index
             f.create_virtual_dataset(name, layout, fillvalue=-1)
     _logger.info("Virtual dataset created.")
+    _logger.info("Calculating averages over frames.")
+    for dataset in vds_dict.values():
+        with h5py.File(h5_file_virtual, "a") as f:
+            name = dataset["name"]
+            # skip raw_data, loading it would take too much ram in most instances
+            if name == "raw_data":
+                continue
+            source = np.array(f[name])
+            if source.dtype == np.bool_:
+                new_name = name + "_sum_frames"
+                if new_name in f:
+                    continue
+                _logger.info(f"Summing for {name}")
+                # calculate the sum
+                # TODO parallelize this sometime
+                sum = np.sum(source, axis=0)
+                f.create_dataset(new_name, data=sum)
+            else:
+                new_name = name + "_mean_frames"
+                if new_name in f:
+                    continue
+                _logger.info(f"Calculating mean for {name}")
+                averages = utils.nanmean(source, axis=0)
+                f.create_dataset(new_name, data=averages)
+    _logger.info("Averages over frames calculated.")
