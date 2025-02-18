@@ -17,7 +17,12 @@ Planned structure of the analysis.h5 output file:
 datasets: ~
 groups: /
 /1_offnoi
-    /1_slopes
+    /1_nrep_data
+        ~signal_values
+            # raw signals, averaged over nreps, after common mode correction
+        ~slope_values
+            # slope values (simple linear fit) of the raw signals
+    /2_slopes
         ~slope_fit
             # slope values from precal are fitted pixel wise with a gaussian
         ~bad_slopes_mask
@@ -26,7 +31,7 @@ groups: /
             # count of number of bad slopes per pixel
         ~signal_values
             # raw signals after common mode correction, bad slopes are set to nan
-    /2_outliers
+    /3_outliers
         ~outliers_fit
             # signal values after common mode correction and bad slopes removed are fitted pixel wise with a gaussian
         ~outliers_mask
@@ -35,12 +40,12 @@ groups: /
             # count of number of outliers per pixel
         ~signal_values
             # signal values after removing bad slopes and outliers
-    /3_fit
+    /4_fit
         ~fit_1_peak
         # signal values after common mode correction, bad slopes removed and outliers removed are fitted pixel wise with a gaussian
         ~fit_2_peak
         # double gauss
-    /4_final
+    /5_final
         ~offset
             # offset value from the gaussian fit
         ~noise
@@ -49,7 +54,12 @@ groups: /
             # raw signals after common mode correction, bad slopes removed, outliers removed and applied offset
 
 /2_filter
-    /1_slopes
+    /1_nrep_data
+        ~signal_values
+            # raw signals, averaged over nreps, after common mode correction and offset from offnoi step subtracted
+        ~slope_values
+            # slope values (simple linear fit) of the raw signals
+    /2_slopes
         ~slope_fit
             # slope values from precal are fitted pixel wise with a gaussian
         ~bad_slopes_mask
@@ -59,7 +69,7 @@ groups: /
         ~signal_values
             # raw signals after common mode correction, bad slopes are set to nan
         ~signal_values_offset_corrected
-    /2_outliers
+    /3_outliers
         ~outliers_fit
             # signal values after common mode correction and bad slopes removed are fitted pixel wise with a gaussian
         ~outliers_mask
@@ -68,7 +78,7 @@ groups: /
             # count of number of outliers per pixel
         ~signal_values
             # signal values after removing bad slopes and outliers
-    /3_events
+    /4_events
         ~event_map
             # event map is calculated from the signal values, the noise values from the offnoi step and the thresholds from the params file
         ~event_map_counts

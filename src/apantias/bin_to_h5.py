@@ -525,7 +525,7 @@ def create_data_file_from_bins(
                 p.start()
             _logger.info(
                 f"batch {batch_index+1}/{len(workload_dict[bin])} started, "
-                f"{available_cpu_cores} processes running."
+                f"{available_cpu_cores} processes are running."
             )
             while processes:
                 for p in processes:
@@ -573,7 +573,6 @@ def create_data_file_from_bins(
                 sum = np.sum(source, axis=0)
                 f.create_dataset(name + "_sum_frames", data=sum)
             else:
-                _logger.info(f"Calculating mean for {name}")
                 averages = utils.nanmean(source, axis=0)
                 f.create_dataset(name + "_mean_frames", data=averages)
     _logger.info("Averages over frames calculated.")
@@ -658,3 +657,11 @@ def create_data_file_from_bins(
                 averages = utils.nanmean(source, axis=0)
                 f.create_dataset(new_name, data=averages)
     _logger.info("Averages over frames calculated.")
+    _logger.info("Preprocessing of measurment data finished.")
+    _logger.info(f"Data is stored in {h5_file_virtual}")
+    _logger.info(f"Data is stored in {data_folder}")
+    _logger.info(
+        "DO NOT move the data folder, the virtual dataset will not work anymore."
+    )
+    _logger.info("You can move the .h5 file to any location.")
+    _logger.info("\n")
