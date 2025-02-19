@@ -6,10 +6,10 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import os
 import gc
 
-from . import logger
 from . import utils
+from .logger import global_logger
 
-_logger = logger.Logger(__name__, "info").get_logger()
+_logger = global_logger
 
 
 def read_data_chunk_from_bin(

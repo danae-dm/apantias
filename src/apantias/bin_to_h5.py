@@ -285,23 +285,23 @@ def _write_raw_data_prelim_preproc(
         raw_data_std = np.std(data, axis=2)
         _write_data_to_h5(h5_group + "raw_data_mean_nreps", raw_data_mean)
         _write_data_to_h5(h5_group + "raw_data_std_nreps", raw_data_std)
-        del raw_data_mean, raw_data_std
-        gc.collect()
         common_modes = np.median(data, axis=3, keepdims=True)
         data = data.astype(np.float64)
-        gc.collect()
         data -= common_modes
+        _write_data_to_h5(h5_group + "raw_data_common_modes", common_modes)
+        del raw_data_mean, raw_data_std, common_modes
+        gc.collect()
         mean = np.mean(data, axis=2)
         std = np.std(data, axis=2)
         median = np.median(data, axis=2)
         x = np.arange(data.shape[2])
         slopes = np.apply_along_axis(lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data)
-        _write_data_to_h5(h5_group + "prelim_common_modes", common_modes)
+
         _write_data_to_h5(h5_group + "prelim_mean_nreps", mean)
         _write_data_to_h5(h5_group + "prelim_median_nreps", median)
         _write_data_to_h5(h5_group + "prelim_std_nreps", std)
         _write_data_to_h5(h5_group + "prelim_slope_nreps", slopes)
-        del data, common_modes, mean, std, slopes
+        del data, mean, std, slopes
         gc.collect()
     except Exception as e:
         _logger.error(f"{process_index} {e}")
@@ -316,9 +316,15 @@ def _write_raw_data_prelim_preproc(
             dark_frame_offset = _read_data_from_h5(ext_dark_frame_h5)
             data -= dark_frame_offset[np.newaxis, :, np.newaxis, :]
             data = data[:, :, ignore_first_nreps:, :]
+            raw_data_mean = np.mean(data, axis=2)
+            raw_data_std = np.std(data, axis=2)
+            _write_data_to_h5(h5_group + "ext_raw_data_mean_nreps", raw_data_mean)
+            _write_data_to_h5(h5_group + "ext_raw_data_std_nreps", raw_data_std)
             common_modes = np.median(data, axis=3, keepdims=True)
-            gc.collect()
             data -= common_modes
+            _write_data_to_h5(h5_group + "ext_common_modes", common_modes)
+            del raw_data_mean, raw_data_std, common_modes
+            gc.collect()
             mean = np.mean(data, axis=2)
             std = np.std(data, axis=2)
             median = np.median(data, axis=2)
@@ -326,57 +332,17 @@ def _write_raw_data_prelim_preproc(
             slopes = np.apply_along_axis(
                 lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data
             )
-            _write_data_to_h5(h5_group + "ext_common_modes", common_modes)
             _write_data_to_h5(h5_group + "ext_mean_nreps", mean)
             _write_data_to_h5(h5_group + "ext_median_nreps", median)
             _write_data_to_h5(h5_group + "ext_std_nreps", std)
             _write_data_to_h5(h5_group + "ext_slope_nreps", slopes)
-            del data, common_modes, mean, std, slopes
+            del data, mean, std, slopes
             gc.collect()
         except Exception as e:
             _logger.error(f"{process_index} {e}")
             raise e
         finally:
             gc.collect()
-
-
-def _second_preproc(
-    h5_group,
-    ignore_first_nreps,
-    ext_dark_frame_h5,
-    batch_index,
-    process_index,
-) -> None:
-    """ "
-    Preprocessing step where data from averages over all frames is needed.
-    """
-    try:
-        data = _read_data_from_h5(h5_group + "raw_data")
-        data = data[:, :, ignore_first_nreps:, :]
-        data = data.astype(np.float64)
-        self_frame_offset = _read_data_from_h5(ext_dark_frame_h5)
-        data -= self_frame_offset[np.newaxis, :, np.newaxis, :]
-        common_modes = np.median(data, axis=3, keepdims=True)
-        del self_frame_offset
-        gc.collect()
-        data -= common_modes
-        mean = np.mean(data, axis=2)
-        std = np.std(data, axis=2)
-        median = np.median(data, axis=2)
-        x = np.arange(data.shape[2])
-        slopes = np.apply_along_axis(lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data)
-        _write_data_to_h5(h5_group + "self_common_modes", common_modes)
-        _write_data_to_h5(h5_group + "self_mean_nreps", mean)
-        _write_data_to_h5(h5_group + "self_median_nreps", median)
-        _write_data_to_h5(h5_group + "self_std_nreps", std)
-        _write_data_to_h5(h5_group + "self_slope_nreps", slopes)
-        del data, common_modes, mean, std, slopes
-        gc.collect()
-    except Exception as e:
-        _logger.error(f"{process_index} {e}")
-        raise e
-    finally:
-        gc.collect()
 
 
 def create_data_file_from_bins(
@@ -386,7 +352,6 @@ def create_data_file_from_bins(
     row_size: int = 64,
     key_ints: int = 3,
     ignore_first_nreps: int = 3,
-    polarity: int = -1,
     offset: int = 8,
     available_cpu_cores: int = 4,
     available_ram_gb: int = 16,
@@ -476,6 +441,13 @@ def create_data_file_from_bins(
             f"folder {data_folder}."
         )
         f.attrs["apantias-version"] = __version__
+        for key, value in attributes.items():
+            f.attrs[key] = value
+        if ext_dark_frame_h5 is None:
+            f.attrs["ext_dark_frame_offset"] = "None"
+        else:
+            f.attrs["ext_dark_frame_offset"] = ext_dark_frame_h5
+
     # get the workload dictionary for each process
     workload_dict = _get_workload_dict(
         bin_files,
@@ -576,92 +548,10 @@ def create_data_file_from_bins(
                 averages = utils.nanmean(source, axis=0)
                 f.create_dataset(name + "_mean_frames", data=averages)
     _logger.info("Averages over frames calculated.")
-    _logger.info("Starting second preprocessing step.")
-    # set the offset from the previous step
-    ext_dark_frame_h5 = f"{h5_file_virtual}/prelim_mean_nreps_mean_frames"
-    for bin in workload_dict.keys():
-        _logger.info(f"Start processing {bin}")
-        for batch_index, batch in enumerate(workload_dict[bin]):
-            processes = []
-            for process_index, [offset, counts, h5_group] in enumerate(batch):
-                p = multiprocessing.Process(
-                    target=_second_preproc,
-                    args=(
-                        h5_group,
-                        ignore_first_nreps,
-                        ext_dark_frame_h5,
-                        batch_index,
-                        process_index,
-                    ),
-                )
-                processes.append(p)
-                p.start()
-            _logger.info(
-                f"batch {batch_index+1}/{len(workload_dict[bin])} started, "
-                f"{available_cpu_cores} processes running."
-            )
-            while processes:
-                for p in processes:
-                    if not p.is_alive():
-                        p.join()
-                        processes.remove(p)
-    # update the vds dict
-    vds_dict = _get_vds_dict(workload_dict)
-    _logger.info("Creating virtual dataset.")
-    # create virtual datasets
-    for dataset in vds_dict.values():
-        name = dataset["name"]
-        sources = dataset["sources"]
-        final_shape = tuple(dataset["final_shape"])
-        # get type of first dataset
-        dtype = h5py.File(sources[0].split(".h5")[0] + ".h5", "r")[
-            sources[0].split(".h5")[1]
-        ].dtype
-        layout = h5py.VirtualLayout(shape=final_shape, dtype=dtype)
-        with h5py.File(h5_file_virtual, "a") as f:
-            if name in f:
-                continue
-            start_index = 0
-            for source in sources:
-                source_h5 = source.split(".h5")[0] + ".h5"
-                source_dataset = source.split(".h5")[1]
-                sh = h5py.File(source_h5, "r")[source_dataset].shape
-                end_index = start_index + sh[0]
-                vsource = h5py.VirtualSource(source_h5, source_dataset, shape=sh)
-                layout[start_index:end_index, ...] = vsource
-                start_index = end_index
-            f.create_virtual_dataset(name, layout, fillvalue=-1)
-    _logger.info("Virtual dataset created.")
-    _logger.info("Calculating averages over frames.")
-    for dataset in vds_dict.values():
-        with h5py.File(h5_file_virtual, "a") as f:
-            name = dataset["name"]
-            # skip raw_data, loading it would take too much ram in most instances
-            if name == "raw_data":
-                continue
-            source = np.array(f[name])
-            if source.dtype == np.bool_:
-                new_name = name + "_sum_frames"
-                if new_name in f:
-                    continue
-                _logger.info(f"Summing for {name}")
-                # calculate the sum
-                # TODO parallelize this sometime
-                sum = np.sum(source, axis=0)
-                f.create_dataset(new_name, data=sum)
-            else:
-                new_name = name + "_mean_frames"
-                if new_name in f:
-                    continue
-                _logger.info(f"Calculating mean for {name}")
-                averages = utils.nanmean(source, axis=0)
-                f.create_dataset(new_name, data=averages)
-    _logger.info("Averages over frames calculated.")
     _logger.info("Preprocessing of measurment data finished.")
     _logger.info(f"Data is stored in {h5_file_virtual}")
     _logger.info(f"Data is stored in {data_folder}")
     _logger.info(
-        "DO NOT move the data folder, the virtual dataset will not work anymore."
+        "DO NOT move the data folder, if you do the virtual dataset will not work anymore."
     )
-    _logger.info("You can move the .h5 file to any location.")
-    _logger.info("\n")
+    _logger.info("You can move the .h5 file to any location.\n")

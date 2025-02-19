@@ -5,12 +5,12 @@ from numba import njit, prange
 from typing import List, Tuple
 import gc
 
-from . import logger
 from . import fitting
 from . import display
 from . import utils
+from .logger import global_logger
 
-_logger = logger.Logger(__name__, "info").get_logger()
+_logger = global_logger
 
 
 def exclude_mips_and_bad_frames(

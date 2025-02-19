@@ -5,11 +5,10 @@ import numpy as np
 from numba import njit, prange
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from . import logger
 from . import fitting
+from .logger import global_logger
 
-
-_logger = logger.Logger(__name__, "info").get_logger()
+_logger = global_logger
 
 
 def get_avg_over_nreps(data: np.ndarray) -> np.ndarray:

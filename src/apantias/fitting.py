@@ -5,10 +5,10 @@ from scipy.optimize import curve_fit
 import numpy as np
 from numba import njit, prange
 
-from . import logger
 from . import utils
+from .logger import global_logger
 
-_logger = logger.Logger(__name__, "info").get_logger()
+_logger = global_logger
 
 
 def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:

@@ -2,10 +2,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 
-from . import logger
 from . import fitting
+from .logger import global_logger
 
-_logger = logger.Logger(__name__, "info").get_logger()
+_logger = global_logger
 
 
 def draw_hist(

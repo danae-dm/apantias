@@ -2,13 +2,12 @@ import os
 import fnmatch
 import json
 
-from . import logger
+from .logger import global_logger
+
+_logger = global_logger
 
 
 class Params:
-
-    _logger = logger.Logger(__name__, "info").get_logger()
-
     """
     To change/add parameters, edit/add them here.
     1) Add the parameter to the common_params, offnoi_params, filter_params, or gain_params dictionaries.
@@ -16,6 +15,7 @@ class Params:
     3) Add the parameter to the required_params list if it has no default value and is required.
     Also change the load() function in the RoanSteps class.
     """
+
     common_params = {
         "common_results_dir": "",  # str
         "common_available_cpus": 16,  # int
