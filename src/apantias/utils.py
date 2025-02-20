@@ -74,6 +74,20 @@ def apply_slope_fit_along_frames(data):
     return output
 
 
+def split_h5_path(path: str) -> tuple:
+    """
+    Splits the h5_path into the directory and the filename.
+    Example path: /path/to/file.h5/group1/dataset1
+    Args:
+        path: str
+    Returns:
+        tuple: (directory, filename)
+    """
+    h5_file = path.split(".h5")[0] + ".h5"
+    dataset_path = path.split(".h5")[1]
+    return h5_file, dataset_path
+
+
 def nanmedian(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray:
     """
     The equivalent to np.nanmedian(data, axis=axis, keepdims=keepdims).

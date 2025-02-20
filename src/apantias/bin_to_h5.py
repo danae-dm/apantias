@@ -24,15 +24,18 @@ def _get_workload_dict(
     initial_offset,
 ) -> dict:
     """
-    Returns a dictionary with the workload for each process. It looks at the size if the bin files and
-    assigns bits of the file to each process. Each process has available_ram/available_cpu_cores ram to work with.
-    The workload is a list of #available_cpu_cores tuples with the offset and the number of uint16 values to read.
+    Returns a dictionary with the workload for each process. It looks at the size if the bin files
+    and assigns batches of the file to each process. Each process has
+    available_ram/available_cpu_cores*x ram to work with. Where x has to be tweaked, so everything
+    fits into memory. If the preprocessing is expanded, this number has to be adjusted.
+    The workload is a list of #available_cpu_cores lists with the offset and the number of
+    uint16 values to read.
     If the file is larger than available_ram, the file is loaded in multiple "batches".
     It also assigns a group name to each batch. The group name is used to write the data to the h5 file.
     {
         'bin_file1': [
-            [(offset1, counts1, group), (offset2, counts2, group), ...],  # batch 1 of available_cpu_cores processes
-            [(offset1, counts1, group), (offset2, counts2, group), ...],  # batch 2 of available_cpu_cores processes, if needed
+            [(offset1, counts1, group), (offset2, counts2, group), ...],  # batch 1 of processes0
+            [(offset1, counts1, group), (offset2, counts2, group), ...],  # batch 2 of process1, if needed
             ...
         ],
         'bin_file2': [                                      # same for the next bin file
@@ -43,9 +46,9 @@ def _get_workload_dict(
         ...
         Args:
             bin_files: list of absolute paths to the bin files
-            available_ram: available ram per process in bytes
+            h5_file_process: list of absolute paths to the h5 files for each process
+            available_ram_gb: available ram per process in bytes
             available_cpu_cores: number of available cpu cores
-            rows_read_per_process: number of rows to read per process
             row_size: size of a row in bytes
             key_ints: number of key integers
             offset: offset in bytes to start reading
@@ -205,7 +208,7 @@ def _read_data_from_bin(
 
 
 def _write_data_to_h5(path, data) -> None:
-    """ "
+    """
     Writes data to a h5 file.
     Takes the full path of a dataset: /scratch/some_folder/data.h5/some_group/some_dataset
     Args:
@@ -213,8 +216,7 @@ def _write_data_to_h5(path, data) -> None:
         data: the data to write
         exists_error: if True, raises an error if the dataset already exists, if false it does nothing
     """
-    h5_file = path.split(".h5")[0] + ".h5"
-    dataset_path = path.split(".h5")[1]
+    h5_file, dataset_path = utils.split_h5_path(path)
     with h5py.File(h5_file, "a") as f:
         path_parts = dataset_path.strip("/").split("/")
         groups = path_parts[:-1]
@@ -234,8 +236,7 @@ def _write_data_to_h5(path, data) -> None:
 
 
 def _read_data_from_h5(path: str) -> np.ndarray:
-    h5_file = path.split(".h5")[0] + ".h5"
-    dataset_path = path.split(".h5")[1]
+    h5_file, dataset_path = utils.split_h5_path(path)
     with h5py.File(h5_file, "r") as f:
         data = f[dataset_path][:]
     return data
@@ -249,8 +250,7 @@ def _get_datasets_from_h5(path: str):
     Returns:
         datasets: list of datasets and its shapes in the group
     """
-    h5_file = path.split(".h5")[0] + ".h5"
-    group_path = path.split(".h5")[1]
+    h5_file, group_path = utils.split_h5_path(path)
     with h5py.File(h5_file, "r") as f:
         datasets = []
         group = f[group_path]
@@ -370,8 +370,8 @@ def create_data_file_from_bins(
             test_data = np.fromfile(
                 bin_file,
                 dtype="uint16",
-                # load three times of 1000 and load 20 frames, times two because uint16 is 2 bytes
-                count=column_size * raw_row_size * 3 * 1000 * 10 * 2,
+                # load some frames,
+                count=column_size * raw_row_size * 1000 * 40,
                 offset=8,
             )
             test_data = test_data.reshape(-1, raw_row_size)
@@ -424,7 +424,7 @@ def create_data_file_from_bins(
     h5_file_process = [
         os.path.join(data_folder, f"data_{i}.h5") for i in range(available_cpu_cores)
     ]
-    h5_file_virtual = os.path.join(working_folder, f"{bin_name}.h5")
+
     for file in h5_file_process:
         with h5py.File(file, "w") as f:
             f.attrs["info"] = (
@@ -435,6 +435,7 @@ def create_data_file_from_bins(
             )
             f.attrs["apantias-version"] = __version__
     # and one for the virtual datasets
+    h5_file_virtual = os.path.join(working_folder, f"{bin_name}.h5")
     with h5py.File(h5_file_virtual, "w") as f:
         f.attrs["info"] = (
             "This file contains virtual datasets to access the data from the"
@@ -458,7 +459,7 @@ def create_data_file_from_bins(
         key_ints,
         offset,
     )
-    _logger.info("Starting first preprocessing step.")
+    _logger.info("Starting preprocessing step.")
     _logger.info("These .bin files will be processed:")
     for bin in bin_files:
         _logger.info(f"{bin} of size {(os.path.getsize(bin) / (1024**3)):.2f} GB")
@@ -527,7 +528,9 @@ def create_data_file_from_bins(
                 vsource = h5py.VirtualSource(source_h5, source_dataset, shape=sh)
                 layout[start_index:end_index, ...] = vsource
                 start_index = end_index
-            f.create_virtual_dataset(name, layout, fillvalue=-1)
+            # fillvalue = -1 mean, that if the source dataset is not present, the value is np.nan
+            # so if the absolute path to the source file changes, the value will be np.nan
+            f.create_virtual_dataset(name, layout, fillvalue=np.nan)
     _logger.info("Virtual dataset created.")
     # create averages along axis=0 from the virtual dataset
     _logger.info("Calculating averages over frames.")
@@ -540,7 +543,7 @@ def create_data_file_from_bins(
             source = np.array(f[name])
             if source.dtype == np.bool_:
                 _logger.info(f"Summing for {name}")
-                # calculate the sum
+                # if its a boolean array, sum it up
                 # TODO parallelize this sometime
                 sum = np.sum(source, axis=0)
                 f.create_dataset(name + "_sum_frames", data=sum)

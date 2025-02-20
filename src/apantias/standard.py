@@ -97,53 +97,32 @@ groups: /
 """
 
 
-class RoanSteps:
+class Analysis:
 
     def __init__(self, prm_file: str) -> None:
         self.prm_file = prm_file
-        self.analysis_file_created = False
-        _logger.info(f"RoanSteps initialized with parameter file: {prm_file}")
-        _logger.info("To run the analysis steps, call:")
-        _logger.info("calc_offnoi_step()")
-        _logger.info("calc_filter_step()")
-        _logger.info("calc_gain_step()")
-        _logger.info(
-            "If a external offsetmap or noisemap is used, make sure the path in the params file is set. And start with the filter step."
-        )
-        _logger.info("")
-
-    def load(self, prm_file: str) -> None:
-        # load parameter file
         self.params = params.Params(prm_file)
+        _logger.info(f"APANTIAS Instance initialized with parameter file: {prm_file}")
+        self.params_dict = self.params.print_contents()
+        _logger.info("")
+        # load values of parameter file
         self.params_dict = self.params.get_dict()
+        self.results_dir = self.params_dict["results_dir"]
+        self.data_h5_file = self.params_dict["data_h5_file"]
+        self.darkframe_dset = self.params_dict["darkframe_dset"]
+        self.available_cpus = self.params_dict["available_cpus"]
+        self.available_ram_gb = self.params_dict["available_ram_gb"]
+        self.custom_attributes = self.params_dict["custom_attributes"]
+        self.nframes_eval = self.params_dict["nframes_eval"]
+        self.nreps_eval = self.params_dict["nreps_eval"]
+        self.thres_bad_slopes = self.params_dict["thres_bad_slopes"]
+        self.thres_event_prim = self.params_dict["thres_event_prim"]
+        self.thres_event_sec = self.params_dict["thres_event_sec"]
+        self.ext_offsetmap = self.params_dict["ext_offsetmap"]
+        self.ext_noisemap = self.params_dict["ext_noisemap"]
+        self.polarity = self.params_dict["polarity"]
 
-        # polarity is from the old code, im not quite sure why it is -1
-        self.polarity = -1
-
-        # common parameters from params file
-        self.results_dir = self.params_dict["common_results_dir"]
-        self.available_cpus = self.params_dict["common_available_cpus"]
-        self.mem_per_cpu_gb = self.params_dict["common_mem_per_cpu_gb"]
-        self.attributes_dict = self.params_dict["common_attributes"]
-        self.ram_available = self.available_cpus * self.mem_per_cpu_gb
-
-        # offnoi parameters from params file
-        self.offnoi_data_file = self.params_dict["offnoi_data_file"]
-        self.offnoi_nframes_eval = self.params_dict["offnoi_nframes_eval"]
-        self.offnoi_nreps_eval = self.params_dict["offnoi_nreps_eval"]
-        self.offnoi_comm_mode = self.params_dict["offnoi_comm_mode"]
-        self.offnoi_thres_bad_slopes = self.params_dict["offnoi_thres_bad_slopes"]
-
-        # filter parameters from params file
-        self.filter_data_file = self.params_dict["filter_data_file"]
-        self.filter_nframes_eval = self.params_dict["filter_nframes_eval"]
-        self.filter_nreps_eval = self.params_dict["filter_nreps_eval"]
-        self.filter_comm_mode = self.params_dict["filter_comm_mode"]
-        self.filter_thres_event_prim = self.params_dict["filter_thres_event_prim"]
-        self.filter_thres_event_sec = self.params_dict["filter_thres_event_sec"]
-        self.filter_thres_bad_slopes = self.params_dict["filter_thres_bad_slopes"]
-        self.filter_ext_offsetmap = self.params_dict["filter_ext_offsetmap"]
-        self.filter_ext_noisemap = self.params_dict["filter_ext_noisemap"]
+        # TODO:continue here
 
         # get parameters from data_h5 file
         total_frames_offnoi, column_size_offnoi, row_size_offnoi, nreps_offnoi = (
