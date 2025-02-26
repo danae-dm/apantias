@@ -210,103 +210,9 @@ def display_file_structure(file_path: str) -> None:
         file.visititems(print_structure)
 
 
-def get_params_from_data_file(file_path: str) -> Tuple[int, int, int, int]:
-    """
-    Get the parameters from the data h5 file.
-    """
-    with h5py.File(file_path, "r") as file:
-        total_frames = file["data"].shape[0]
-        column_size = file["data"].attrs["column_size"]
-        row_size = file["data"].attrs["row_size"]
-        nreps = file["data"].attrs["nreps"]
-    return total_frames, column_size, row_size, nreps
-
-
-def create_analysis_file(
-    output_folder: str,
-    output_filename: str,
-    offnoi_data_file: str,
-    filter_data_file: str,
-    parameter_file_contents: dict,
-    attributes_dict: dict,
-) -> None:
-    """
-    Create an analysis h5 file with offnoi/filter/gain groups.
-    An existing data file must be provided for offnoi and filter.
-    The parameter file contents are saved as a json string.
-    """
-
-    output_file = os.path.join(output_folder, output_filename)
-    if os.path.exists(output_file):
-        raise Exception(f"File {output_file} already exists. Please delete")
-    # raise excption when data files dont exist
-    if os.path.exists(offnoi_data_file) == False:
-        _logger.error(f"File {offnoi_data_file} does not exist.")
-        raise Exception(f"File {offnoi_data_file} does not exist.")
-    if os.path.exists(filter_data_file) == False:
-        _logger.error(f"File {filter_data_file} does not exist.")
-        raise Exception(f"File {filter_data_file} does not exist.")
-    # create the hdf5 file
-    with h5py.File(output_file, "w") as f:
-        if attributes_dict:  # an empty dict evaluates to False
-            f.attrs["description"] = (
-                "This file contains the results of the analysis.\n No additional information has been provided in the parameter file."
-            )
-        else:
-            for key, value in attributes_dict.items():
-                f.attrs[key] = value
-        f.create_group("1_offnoi")
-        f["1_offnoi"].attrs["data"] = offnoi_data_file
-        f["1_offnoi"].attrs[
-            "description"
-        ] = "This group contains the results of the offset noise analysis."
-        with h5py.File(offnoi_data_file, "r") as offnoi_data_file:
-            f["1_offnoi"].attrs["bin_files"] = offnoi_data_file["data"].attrs[
-                "bin_files"
-            ]
-            f["1_offnoi"].attrs["column_size"] = offnoi_data_file["data"].attrs[
-                "column_size"
-            ]
-            f["1_offnoi"].attrs["row_size"] = offnoi_data_file["data"].attrs["row_size"]
-            f["1_offnoi"].attrs["nreps"] = offnoi_data_file["data"].attrs["nreps"]
-            f["1_offnoi"].attrs["total_frames"] = offnoi_data_file["data"].shape[0]
-
-        f.create_group("2_filter")
-        f["2_filter"].attrs["data"] = filter_data_file
-        f["2_filter"].attrs[
-            "description"
-        ] = "This group contains the results of the filter analysis."
-        with h5py.File(filter_data_file, "r") as filter_data_file:
-            f["2_filter"].attrs["bin_files"] = filter_data_file["data"].attrs[
-                "bin_files"
-            ]
-            f["2_filter"].attrs["column_size"] = filter_data_file["data"].attrs[
-                "column_size"
-            ]
-            f["2_filter"].attrs["row_size"] = filter_data_file["data"].attrs["row_size"]
-            f["2_filter"].attrs["nreps"] = filter_data_file["data"].attrs["nreps"]
-            f["2_filter"].attrs["total_frames"] = filter_data_file["data"].shape[0]
-
-        f.create_group("3_gain")
-        f["3_gain"].attrs[
-            "description"
-        ] = "This group contains the results of the gain analysis."
-        f.create_group("parameter_json")
-
-        f["parameter_json"].attrs[
-            "description"
-        ] = "This group contains the parameter file used for the analysis."
-        f.create_dataset(
-            "parameter_json/parameter_file",
-            data=repr(parameter_file_contents),
-            dtype=h5py.special_dtype(vlen=str),
-        )
-        _logger.info(f"Initialized empty file: {output_file}")
-
-
 def get_data_from_file(
-    file_path: str,
-    dataset_path: str,
+    path: str,
+    dataset_path: str = None,
     slice: str = None,
 ) -> np.ndarray:
     """
@@ -319,6 +225,11 @@ def get_data_from_file(
     Returns:
         data: np.ndarray
     """
+    if dataset_path is None:
+        file_path, dataset_path = utils.split_h5_path(file_path)
+    else:
+        file_path = path
+        dataset_path = dataset_path
     if slice is not None:
         slices = utils.parse_numpy_slicing(slice)
     else:
@@ -343,8 +254,8 @@ def get_data_from_file(
     return data
 
 
-def add_array_to_file(
-    file_path: str, dataset_path: str, data: np.ndarray, attributes: dict = None
+def add_array(
+    path: str, data: np.ndarray, dataset_path: str = None, attributes: dict = None
 ) -> None:
     """
     Adds an array to a Dataset. If the dataset exists, the array is appended.
@@ -357,13 +268,16 @@ def add_array_to_file(
         data: Data to save.
         attributes: Attributes to save.
     """
+    if dataset_path is None:
+        file_path, dataset_path = utils.split_h5_path(file_path)
+    else:
+        file_path = path
+        dataset_path = dataset_path
     with h5py.File(file_path, "a", libver="latest") as file:
         # Split the dataset path into groups and dataset name
         parts = dataset_path.split("/")
         groups = parts[:-1]
         dataset_name = parts[-1]
-        print(dataset_name)
-
         # Create groups if they do not exist
         current_group = file
         for group in groups:
@@ -371,10 +285,8 @@ def add_array_to_file(
                 current_group = current_group.create_group(group)
             else:
                 current_group = current_group[group]
-        print(current_group)
         # Check if the dataset already exists
         if dataset_name not in current_group:
-            print("?")
             # Create the new dataset in the group
             current_dataset = current_group.create_dataset(
                 dataset_name,
@@ -394,10 +306,8 @@ def add_array_to_file(
             raise Exception(
                 f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({current_dataset.shape[1:]})"
             )
-        print(f"old shape: {current_dataset.shape}")
         current_dataset.resize(current_dataset.shape[0] + data.shape[0], axis=0)
         current_dataset[-data.shape[0] :] = data
-        print(f"new shape: {current_dataset.shape}")
         if attributes:
             for key, value in attributes.items():
                 current_dataset.attrs[key] = value
@@ -434,3 +344,55 @@ def write_array_to_dataset(
                 dataset_name, data=data, chunks=(1, *data.shape[1:])
             )
             current_group[dataset_name] = data
+
+
+def _get_params_from_data_file(
+    file_path: str, darkframe_offset=False
+) -> Tuple[int, int, int, int]:
+    """
+    Get the parameters from the data h5 file.
+    """
+    with h5py.File(file_path, "r") as file:
+        if darkframe_offset:
+            total_frames = file["ext_common_modes"].shape[0]
+            column_size = file["ext_mean_nreps"].shape[2]
+            row_size = file["ext_common_modes"].shape[1]
+            nreps = file["ext_common_modes"].shape[2]
+        else:
+            total_frames = file["prelim_common_modes"].shape[0]
+            column_size = file["prelim_mean_nreps"].shape[2]
+            row_size = file["prelim_common_modes"].shape[1]
+            nreps = file["prelim_common_modes"].shape[2]
+    return total_frames, column_size, row_size, nreps
+
+
+def _create_analysis_file(
+    output_folder: str,
+    output_filename: str,
+    parameter_file_contents: dict,
+    attributes_dict: dict,
+) -> None:
+    """
+    Create an analysis h5 file with offnoi/filter/gain groups.
+    An existing data file must be provided for offnoi and filter.
+    The parameter file contents are saved as a json string.
+    """
+
+    output_file = os.path.join(output_folder, output_filename)
+    if os.path.exists(output_file):
+        raise Exception(f"File {output_file} already exists. Please delete")
+    # create the hdf5 file
+    with h5py.File(output_file, "w") as f:
+        if attributes_dict:  # an empty dict evaluates to False
+            f.attrs["description"] = (
+                "This file contains the results of the analysis.\n No additional information has been provided in the parameter file."
+            )
+        else:
+            for key, value in attributes_dict.items():
+                f.attrs[key] = value
+        f.create_group("0_infos")
+        f.create_dataset(
+            "0_infos/parameter_json",
+            data=repr(parameter_file_contents),
+            dtype=h5py.special_dtype(vlen=str),
+        )

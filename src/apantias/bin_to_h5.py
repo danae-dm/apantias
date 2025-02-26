@@ -442,8 +442,9 @@ def create_data_file_from_bins(
             f"folder {data_folder}."
         )
         f.attrs["apantias-version"] = __version__
-        for key, value in attributes.items():
-            f.attrs[key] = value
+        if attributes is not None:
+            for key, value in attributes.items():
+                f.attrs[key] = value
         if ext_dark_frame_h5 is None:
             f.attrs["ext_dark_frame_offset"] = "None"
         else:

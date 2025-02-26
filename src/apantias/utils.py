@@ -709,7 +709,7 @@ def parse_numpy_slicing(slicing_str: str) -> list:
     return slices
 
 
-def process_row(func, row_data, row, *args, **kwargs):
+def process_batch(func, row_data, *args, **kwargs):
     """
     Helper function to apply a function to a row of data.
     """
@@ -717,11 +717,11 @@ def process_row(func, row_data, row, *args, **kwargs):
     def func_with_args(data):
         return func(data, *args, **kwargs)
 
-    row_results = np.apply_along_axis(func_with_args, axis=0, arr=row_data)
-    return row, row_results
+    batch_results = np.apply_along_axis(func_with_args, axis=0, arr=row_data)
+    return batch_results
 
 
-def parallel_pixelwise(data, func, *args, **kwargs) -> np.ndarray:
+def apply_pixelwise(data, func, cores, *args, **kwargs) -> np.ndarray:
     """
     Helper function to apply a function to each pixel in a 3D numpy array in parallel.
     Data must have shape (n,row,col). The function is applied to [:,row,col].
@@ -729,12 +729,14 @@ def parallel_pixelwise(data, func, *args, **kwargs) -> np.ndarray:
     The passed function must accept a 1D array as input and must have a 1D array as output.
     The passed function must have a data parameter, which is the first argument.
     """
+    # TODO: Rewrite this using multiprocessing. Pass the available cpus to the function
     # check data consistency
     if data.ndim != 3:
         raise ValueError("Data must be a 3D array.")
     # try the passed function and check return value
     try:
         result = func(data[:, 0, 0], *args, **kwargs)
+        result_shape = result.shape
     except Exception as e:
         _logger.error(f"Error when trying to apply the function: {e}")
     if not isinstance(result, np.ndarray):
@@ -742,28 +744,43 @@ def parallel_pixelwise(data, func, *args, **kwargs) -> np.ndarray:
     if result.ndim != 1:
         raise ValueError("Function must return a 1D numpy array.")
     # initialize results, now that we know what the function returns
-    results = np.zeros((data.shape[1], data.shape[2], result.shape[0]))
 
+    if cores == 1:
+        return func(data, *args, **kwargs)
+
+    rows_per_process = []
+    for i in range(cores):
+        rows_per_process.append(data.shape[1] // cores)
+        if i == cores - 1:
+            rows_per_process[i] += data.shape[1] % cores
+    results = np.zeros((result_shape[0], data.shape[1], data.shape[2]))
     with ProcessPoolExecutor() as executor:
         futures = []
-        for row in range(data.shape[1]):
+        for i in range(cores):
             # copy the data of one row and submit it to the executor
             # this is necessary to avoid memory issues
-            row_data = np.copy(data[:, row, :])
+            process_data = data[
+                :, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :
+            ]
             futures.append(
-                executor.submit(process_row, func, row_data, row, *args, **kwargs)
+                executor.submit(
+                    process_batch, func, process_data.copy(), *args, **kwargs
+                )
             )
-            _logger.debug(f"Submitted row {row} to the executor.")
+            _logger.debug(f"Submitted row {i} to the executor.")
         total_futures = len(futures)
         completed_futures = 0
         for future in as_completed(futures):
             try:
-                row, row_results = future.result()
-                results[row] = row_results.T
+                batch_results = future.result()
+                results[
+                    :, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :
+                ] = batch_results
                 completed_futures += 1
                 _logger.debug(
-                    f"Completed row {row} ({completed_futures}/{total_futures})"
+                    f"Completed row {i} ({completed_futures}/{total_futures})"
                 )
             except Exception as e:
-                _logger.error(f"Error processing column {row}: {e}")
+                _logger.error(f"Error processing column {i}: {e}")
+                raise e
     return results
