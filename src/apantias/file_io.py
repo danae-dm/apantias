@@ -226,7 +226,7 @@ def get_data_from_file(
         data: np.ndarray
     """
     if dataset_path is None:
-        file_path, dataset_path = utils.split_h5_path(file_path)
+        file_path, dataset_path = utils.split_h5_path(path)
     else:
         file_path = path
         dataset_path = dataset_path
