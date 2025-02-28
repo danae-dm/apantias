@@ -151,11 +151,14 @@ class Default(Analysis):
 
     def calculate(self):
         _logger.info("Start calculating bad slopes map")
-        slopes = io.get_data_from_file(self.data_h5, "/prelim_slope_nreps")
-        fitted = fit.get_pixelwise_fit(slopes, peaks=1)
+        slopes = io.get_data_from_file(self.data_h5, "preproc_slope_nreps")
+        fitted = utils.apply_pixelwise(
+            slopes, fit.fit_gauss_to_hist, self.available_cpus
+        )
+        print(fitted.shape)
         _logger.info("Finished fitting")
-        lower_bound = fitted[:, :, 1] - self.thres_bad_slopes * np.abs(fitted[:, :, 2])
-        upper_bound = fitted[:, :, 1] + self.thres_bad_slopes * np.abs(fitted[:, :, 2])
+        lower_bound = fitted[1, :, :] - self.thres_bad_slopes * np.abs(fitted[2, :, :])
+        upper_bound = fitted[1, :, :] + self.thres_bad_slopes * np.abs(fitted[2, :, :])
         bad_slopes_mask = (slopes < lower_bound) | (slopes > upper_bound)
         output_info = {
             "info": "slope values from nrep_data step are fitted pixel wise with a gaussian"
@@ -180,7 +183,6 @@ class Default(Analysis):
             attributes=output_info,
         )
         failed_fits = np.sum(np.isnan(fitted[:, :, 1]))
-        print(failed_fits)
         if failed_fits > 0:
             _logger.warning(
                 f"Failed fits: {failed_fits} ({failed_fits/(self.column_size*self.row_size)*100:.2f}%)"

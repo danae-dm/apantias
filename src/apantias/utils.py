@@ -4,11 +4,35 @@ import os
 import numpy as np
 from numba import njit, prange
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from scipy import stats
 
 from . import fitting
 from .logger import global_logger
 
 _logger = global_logger
+
+
+def shapiro(data, axis):
+    result_shape = list(data.shape)
+    result_shape.pop(axis)
+    result = np.zeros(result_shape, dtype=float)
+
+    # Iterate over the slices along the specified axis
+    it = np.nditer(result, flags=["multi_index"])
+    while not it.finished:
+        # Get the slice indices
+        idx = list(it.multi_index)
+        idx.insert(axis, slice(None))
+
+        # Perform the Shapiro-Wilk test
+        shapiro_stat, shapiro_p_value = stats.shapiro(data[tuple(idx)])
+
+        # Determine if the slice follows a normal distribution
+        result[it.multi_index] = shapiro_p_value
+
+        it.iternext()
+
+    return result
 
 
 def get_avg_over_nreps(data: np.ndarray) -> np.ndarray:
@@ -753,6 +777,7 @@ def apply_pixelwise(data, func, cores, *args, **kwargs) -> np.ndarray:
         rows_per_process.append(data.shape[1] // cores)
         if i == cores - 1:
             rows_per_process[i] += data.shape[1] % cores
+    print(rows_per_process)
     results = np.zeros((result_shape[0], data.shape[1], data.shape[2]))
     with ProcessPoolExecutor() as executor:
         futures = []
@@ -770,9 +795,13 @@ def apply_pixelwise(data, func, cores, *args, **kwargs) -> np.ndarray:
             _logger.debug(f"Submitted row {i} to the executor.")
         total_futures = len(futures)
         completed_futures = 0
-        for future in as_completed(futures):
+        for i, future in enumerate(as_completed(futures)):
             try:
                 batch_results = future.result()
+                print(f"Batch results shape: {batch_results.shape}")
+                print(
+                    f"Wrote to index {sum(rows_per_process[:i])} to {sum(rows_per_process[: i + 1])}"
+                )
                 results[
                     :, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :
                 ] = batch_results

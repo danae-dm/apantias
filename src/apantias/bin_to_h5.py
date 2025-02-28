@@ -385,12 +385,14 @@ def _preprocess(
         _write_data_to_h5(h5_group + "preproc_common_modes", common_modes)
         del offset, common_modes
         gc.collect()
+        shapiro = utils.shapiro(data, axis=2)
         mean = np.mean(data, axis=2)
         std = np.std(data, axis=2)
         median = np.median(data, axis=2)
         # TODO: Slopes are slow when calculated like this, maybe use numba?
         x = np.arange(data.shape[2])
         slopes = np.apply_along_axis(lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data)
+        _write_data_to_h5(h5_group + "preproc_shapiro", shapiro)
         _write_data_to_h5(h5_group + "preproc_mean_nreps", mean)
         _write_data_to_h5(h5_group + "preproc_median_nreps", median)
         _write_data_to_h5(h5_group + "preproc_std_nreps", std)

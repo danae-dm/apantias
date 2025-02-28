@@ -151,16 +151,6 @@ def process_row(data, row, peaks):
     return row, result
 
 
-def get_pixelwise_fit(data: np.ndarray, peaks: int) -> np.ndarray:
-    # apply the function to every pixel
-    if peaks not in [1, 2]:
-        raise ValueError("Peaks must be 1 or 2")
-    if peaks == 1:
-        return utils.parallel_pixelwise(data, fit_gauss_to_hist)
-    if peaks == 2:
-        return utils.parallel_pixelwise(data, fit_2_gauss_to_hist)
-
-
 def get_fit_over_frames(data: np.ndarray, peaks: int) -> np.ndarray:
     """
     fits a gaussian for every pixel. The fitting is done over the

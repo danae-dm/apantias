@@ -346,23 +346,15 @@ def write_array_to_dataset(
             current_group[dataset_name] = data
 
 
-def _get_params_from_data_file(
-    file_path: str, darkframe_offset=False
-) -> Tuple[int, int, int, int]:
+def _get_params_from_data_file(file_path: str) -> Tuple[int, int, int, int]:
     """
     Get the parameters from the data h5 file.
     """
     with h5py.File(file_path, "r") as file:
-        if darkframe_offset:
-            total_frames = file["ext_common_modes"].shape[0]
-            column_size = file["ext_mean_nreps"].shape[2]
-            row_size = file["ext_common_modes"].shape[1]
-            nreps = file["ext_common_modes"].shape[2]
-        else:
-            total_frames = file["prelim_common_modes"].shape[0]
-            column_size = file["prelim_mean_nreps"].shape[2]
-            row_size = file["prelim_common_modes"].shape[1]
-            nreps = file["prelim_common_modes"].shape[2]
+        total_frames = file["preproc_common_modes"].shape[0]
+        column_size = file["preproc_mean_nreps"].shape[2]
+        row_size = file["preproc_common_modes"].shape[1]
+        nreps = file["preproc_common_modes"].shape[2]
     return total_frames, column_size, row_size, nreps
 
 
