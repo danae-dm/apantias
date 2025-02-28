@@ -7,9 +7,6 @@ import os
 import gc
 
 from . import utils
-from .logger import global_logger
-
-_logger = global_logger
 
 
 def read_data_chunk_from_bin(
@@ -73,7 +70,6 @@ def read_data_chunk_from_bin(
     diff = np.diff(frames, axis=0)
     valid_frames_position = np.nonzero(diff == rows_per_frame)[1]
     if len(valid_frames_position) == 0:
-        _logger.warning("No valid frames found in chunk!")
         return None, offset
     valid_frames = frames.T[valid_frames_position]
     frame_start_indices = valid_frames[:, 0]
@@ -116,12 +112,10 @@ def create_data_file_from_bins(
     output_file = os.path.join(output_folder, output_filename)
     # check if h5 file already exists
     if os.path.exists(output_file):
-        _logger.error(f"File {output_file} already exists. Please delete")
         raise Exception(f"File {output_file} already exists. Please delete")
     # check if bin files exist
     for bin_file in bin_files:
         if not os.path.exists(bin_file):
-            _logger.error(f"File {bin_file} does not exist")
             raise Exception(f"File {bin_file} does not exist")
     # create the hdf5 file
     with h5py.File(output_file, "w") as f:
@@ -144,7 +138,6 @@ def create_data_file_from_bins(
         if attributes:
             for key, value in attributes.items():
                 dataset.attrs[key] = value
-        _logger.info(f"Initialized empty file: {output_file}")
 
         for bin_file in bin_files:
             file_size = os.path.getsize(bin_file)
@@ -156,9 +149,6 @@ def create_data_file_from_bins(
                 (available_ram_gb * 1024 * 1024 * 1024 / frame_size_bytes) * 0.3
             )
             chunk_size = (frames_to_read * frame_size_bytes) / (1024 * 1024 * 1024)
-            _logger.info(
-                f"Loading file: {bin_file}\n size: {file_size_gb:.2f} GB\n estimated frames: {estimated_frames:.1f}\n chunk size: {chunk_size:.2f} GB"
-            )
             offset = 8
             while offset != -1:  # get_data returns -1 as offset when EOF is reached
                 try:
@@ -172,22 +162,16 @@ def create_data_file_from_bins(
                         offset,
                     )
                 except Exception as e:
-                    _logger.error(e)
-                    _logger.error(f"Deleting file: {output_file}")
-                    # delete the h5 file
+                    raise Exception(f"Error reading data from bin file: {e}")
+                finally:
                     os.remove(output_file)
-                    break
                 offset = new_offset
                 if new_data is not None:
                     dataset.resize(dataset.shape[0] + new_data.shape[0], axis=0)
                     # Append the new data
                     dataset[-new_data.shape[0] :] = new_data
                     frames_loaded = dataset.shape[0]
-                    _logger.info(
-                        f"progress: {frames_loaded}/{estimated_frames:.0f} frames loaded ({frames_loaded/estimated_frames:.2%})"
-                    )
         dataset.attrs["total_frames"] = dataset.shape[0]
-        _logger.info(f"Finished loading data from bin files to {output_file}")
 
 
 def display_file_structure(file_path: str) -> None:
@@ -239,9 +223,6 @@ def get_data_from_file(
         dataset = file[dataset_path]
         if slices is not None:
             if dataset.ndim != len(slices):
-                _logger.error(
-                    f"Dataset has {dataset.ndim} dimensions, but {len(slices)} slices were provided."
-                )
                 raise Exception(
                     f"Dataset has {dataset.ndim} dimensions, but {len(slices)} slices were provided."
                 )
@@ -292,7 +273,6 @@ def add_array(
                 dataset_name,
                 shape=(0, *data.shape[1:]),
                 maxshape=(None, *data.shape[1:]),
-                chunks=True,
                 dtype=data.dtype,
             )
         else:
@@ -300,9 +280,6 @@ def add_array(
 
         # append data to existing dataset
         if current_dataset.shape[1:] != data.shape[1:]:
-            _logger.error(
-                f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({current_dataset.shape[1:]})"
-            )
             raise Exception(
                 f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({current_dataset.shape[1:]})"
             )
@@ -311,39 +288,6 @@ def add_array(
         if attributes:
             for key, value in attributes.items():
                 current_dataset.attrs[key] = value
-
-
-def write_array_to_dataset(
-    file_path: str,
-    dataset_path: str,
-    data: np.ndarray,
-) -> None:
-    """
-    Writes an array to a new Dataset.
-    Args:
-        file_path: Path to the HDF5 file.
-        dataset_path: Name of the dataset.
-        data: Data to save.
-    """
-    with h5py.File(file_path, "w") as file:
-        # check if the dataset already exists
-        parts = dataset_path.split("/")
-        groups = parts[:-1]
-        dataset_name = parts[-1]
-        # check if the dataset already exists
-        if dataset_path not in file:
-            # Create groups if they do not exist
-            current_group = file
-            for group in groups:
-                if group not in current_group:
-                    current_group = current_group.create_group(group)
-                else:
-                    current_group = current_group[group]
-            # Create the new dataset in the group
-            current_group.create_dataset(
-                dataset_name, data=data, chunks=(1, *data.shape[1:])
-            )
-            current_group[dataset_name] = data
 
 
 def _get_params_from_data_file(file_path: str) -> Tuple[int, int, int, int]:

@@ -7,9 +7,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from scipy import stats
 
 from . import fitting
-from .logger import global_logger
-
-_logger = global_logger
 
 
 def shapiro(data, axis):
@@ -44,7 +41,6 @@ def get_avg_over_nreps(data: np.ndarray) -> np.ndarray:
         np.array in shape (nframes, column_size, row_size)
     """
     if np.ndim(data) != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     return nanmean(data, axis=2)
 
@@ -83,7 +79,6 @@ def apply_slope_fit_along_frames(data):
         3D np.array (frame,row,col) with slope value
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_0_size = data.shape[0]
     axis_1_size = data.shape[1]
@@ -165,8 +160,7 @@ def nanmedian(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray
             else:
                 return _nanmedian_4d_axis3(data)
     else:
-        _logger.error("Data has wrong dimensions")
-        return
+        raise ValueError("Data has wrong dimensions")
 
 
 def nanmean(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray:
@@ -222,8 +216,7 @@ def nanmean(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray:
             else:
                 return _nanmean_4d_axis3(data)
     else:
-        _logger.error("Data has wrong dimensions")
-        return
+        raise ValueError("Data has wrong dimensions")
 
 
 @njit(parallel=True)
@@ -236,7 +229,6 @@ def _nanmedian_4d_axis0(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_1_size = data.shape[1]
     axis_2_size = data.shape[2]
@@ -260,7 +252,6 @@ def _nanmedian_4d_axis1(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_0_size = data.shape[0]
     axis_2_size = data.shape[2]
@@ -284,7 +275,6 @@ def _nanmedian_4d_axis2(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_0_size = data.shape[0]
     axis_1_size = data.shape[1]
@@ -308,7 +298,6 @@ def _nanmedian_4d_axis3(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_0_size = data.shape[0]
     axis_1_size = data.shape[1]
@@ -332,7 +321,6 @@ def _nanmedian_3d_axis0(data: np.ndarray) -> np.ndarray:
         2D np.array
     """
     if data.ndim != 3:
-        _logger.error("Input data is not a 3D array.")
         raise ValueError("Input data is not a 3D array.")
     axis_1_size = data.shape[1]
     axis_2_size = data.shape[2]
@@ -354,7 +342,6 @@ def _nanmedian_3d_axis1(data: np.ndarray) -> np.ndarray:
         2D np.array
     """
     if data.ndim != 3:
-        _logger.error("Input data is not a 3D array.")
         raise ValueError("Input data is not a 3D array.")
     axis_0_size = data.shape[0]
     axis_2_size = data.shape[2]
@@ -376,7 +363,6 @@ def _nanmedian_3d_axis2(data: np.ndarray) -> np.ndarray:
         2D np.array
     """
     if data.ndim != 3:
-        _logger.error("Input data is not a 3D array.")
         raise ValueError("Input data is not a 3D array.")
     axis_0_size = data.shape[0]
     axis_1_size = data.shape[1]
@@ -398,7 +384,6 @@ def _nanmedian_2d_axis0(data: np.ndarray) -> np.ndarray:
         1D np.array
     """
     if data.ndim != 2:
-        _logger.error("Input data is not a 2D array.")
         raise ValueError("Input data is not a 2D array.")
     axis_1_size = data.shape[1]
     output = np.zeros(axis_1_size)
@@ -418,7 +403,6 @@ def _nanmedian_2d_axis1(data: np.ndarray) -> np.ndarray:
         1D np.array
     """
     if data.ndim != 2:
-        _logger.error("Input data is not a 2D array.")
         raise ValueError("Input data is not a 2D array.")
     axis_0_size = data.shape[0]
     output = np.zeros(axis_0_size)
@@ -438,7 +422,6 @@ def _nanmean_4d_axis0(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_1_size = data.shape[1]
     axis_2_size = data.shape[2]
@@ -462,7 +445,6 @@ def _nanmean_4d_axis1(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_0_size = data.shape[0]
     axis_2_size = data.shape[2]
@@ -486,7 +468,6 @@ def _nanmean_4d_axis2(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_0_size = data.shape[0]
     axis_1_size = data.shape[1]
@@ -510,7 +491,6 @@ def _nanmean_4d_axis3(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_0_size = data.shape[0]
     axis_1_size = data.shape[1]
@@ -534,7 +514,6 @@ def _nanmean_3d_axis0(data: np.ndarray) -> np.ndarray:
         2D np.array
     """
     if data.ndim != 3:
-        _logger.error("Input data is not a 3D array.")
         raise ValueError("Input data is not a 3D array.")
     axis_1_size = data.shape[1]
     axis_2_size = data.shape[2]
@@ -556,7 +535,6 @@ def _nanmean_3d_axis1(data: np.ndarray) -> np.ndarray:
         2D np.array
     """
     if data.ndim != 3:
-        _logger.error("Input data is not a 3D array.")
         raise ValueError("Input data is not a 3D array.")
     axis_0_size = data.shape[0]
     axis_2_size = data.shape[2]
@@ -578,7 +556,6 @@ def _nanmean_3d_axis2(data: np.ndarray) -> np.ndarray:
         2D np.array
     """
     if data.ndim != 3:
-        _logger.error("Input data is not a 3D array.")
         raise ValueError("Input data is not a 3D array.")
     axis_0_size = data.shape[0]
     axis_1_size = data.shape[1]
@@ -600,7 +577,6 @@ def _nanmean_2d_axis0(data: np.ndarray) -> np.ndarray:
         1D np.array
     """
     if data.ndim != 2:
-        _logger.error("Input data is not a 2D array.")
         raise ValueError("Input data is not a 2D array.")
     axis_1_size = data.shape[1]
     output = np.zeros(axis_1_size)
@@ -620,7 +596,6 @@ def _nanmean_2d_axis1(data: np.ndarray) -> np.ndarray:
         1D np.array
     """
     if data.ndim != 2:
-        _logger.error("Input data is not a 2D array.")
         raise ValueError("Input data is not a 2D array.")
     axis_0_size = data.shape[0]
     output = np.zeros(axis_0_size)
@@ -762,7 +737,7 @@ def apply_pixelwise(data, func, cores, *args, **kwargs) -> np.ndarray:
         result = func(data[:, 0, 0], *args, **kwargs)
         result_shape = result.shape
     except Exception as e:
-        _logger.error(f"Error when trying to apply the function: {e}")
+        raise ValueError(f"Error applying function to data: {e}")
     if not isinstance(result, np.ndarray):
         raise ValueError("Function must return a numpy array.")
     if result.ndim != 1:
@@ -792,7 +767,6 @@ def apply_pixelwise(data, func, cores, *args, **kwargs) -> np.ndarray:
                     process_batch, func, process_data.copy(), *args, **kwargs
                 )
             )
-            _logger.debug(f"Submitted row {i} to the executor.")
         total_futures = len(futures)
         completed_futures = 0
         for i, future in enumerate(as_completed(futures)):
@@ -806,10 +780,6 @@ def apply_pixelwise(data, func, cores, *args, **kwargs) -> np.ndarray:
                     :, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :
                 ] = batch_results
                 completed_futures += 1
-                _logger.debug(
-                    f"Completed row {i} ({completed_futures}/{total_futures})"
-                )
             except Exception as e:
-                _logger.error(f"Error processing column {i}: {e}")
                 raise e
     return results

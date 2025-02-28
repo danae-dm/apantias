@@ -6,9 +6,6 @@ import numpy as np
 from numba import njit, prange
 
 from . import utils
-from .logger import global_logger
-
-_logger = global_logger
 
 
 def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
@@ -52,7 +49,6 @@ def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
             ]
         )
     except:
-        _logger.debug("Fitting for this histogram failed. Returning NaNs.")
         return np.array([np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
 
 
@@ -122,7 +118,6 @@ def fit_2_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
             ]
         )
     except:
-        _logger.debug("Fitting for this histogram failed. Returning NaNs.")
         return np.array(
             [
                 np.nan,
@@ -169,10 +164,8 @@ def get_fit_over_frames(data: np.ndarray, peaks: int) -> np.ndarray:
         index 5: error_sigma
     """
     if data.ndim != 3:
-        _logger.error("Data is not a 3D array")
         raise ValueError("Data is not a 3D array")
     if peaks not in [1, 2]:
-        _logger.error("Peaks must be 1 or 2")
         raise ValueError("Peaks must be 1 or 2")
 
     # apply the function to every frame

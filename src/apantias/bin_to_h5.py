@@ -8,8 +8,8 @@ import gc
 
 from . import file_io as io
 from . import utils
-from .logger import global_logger
 from . import __version__
+from .logger import global_logger
 
 _logger = global_logger
 
@@ -171,7 +171,6 @@ def _avg_frames(h5_file, vds_dict):
                 continue
             source = np.array(f[name])
             if source.dtype == np.bool_:
-                _logger.info(f"Summing for {name}")
                 # if its a boolean array, sum it up
                 # TODO parallelize this sometime
                 sum = np.sum(source, axis=0)
@@ -352,7 +351,6 @@ def _process_raw_data(
         del raw_data_mean, raw_data_std, data
         gc.collect()
     except Exception as e:
-        _logger.error(f"{process_index} {e}")
         raise e
     finally:
         gc.collect()
@@ -400,7 +398,6 @@ def _preprocess(
         del data, mean, std, slopes
         gc.collect()
     except Exception as e:
-        _logger.error(f"{process_index} {e}")
         raise e
     finally:
         gc.collect()

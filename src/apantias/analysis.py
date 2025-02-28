@@ -8,9 +8,6 @@ import gc
 from . import fitting
 from . import display
 from . import utils
-from .logger import global_logger
-
-_logger = global_logger
 
 
 def exclude_mips_and_bad_frames(
@@ -35,10 +32,7 @@ def exclude_mips_and_bad_frames(
     # TODO: rethink this. Its quite expensive to calculate the median/mean twice.
     # maybe just keep the more restrictive of the two?
     if np.ndim(data) != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
-    _logger.info(f"Excluding bad frames due to MIPS, threshold: {thres_mips}")
-    _logger.info(f"Excluding bad frames, threshold: {thres_bad_frames}")
     median = utils.nanmedian(data, axis=3)
     median = utils.nanmedian(median, axis=2)
     median = utils.nanmedian(median, axis=1)
@@ -47,8 +41,6 @@ def exclude_mips_and_bad_frames(
         data < median[:, np.newaxis, np.newaxis, np.newaxis] - thres_mips
     )
     mips_mask = np.any(mips_mask, axis=(1, 2, 3))
-    _logger.info(f"Excluded {np.sum(mips_mask)} frames due to mips")
-    _logger.debug(f"Indices: {np.where(mips_mask)[0]}")
     # calculate bad frames mask
     mean = utils.nanmean(data, axis=3)
     mean = utils.nanmean(mean, axis=2)
@@ -57,8 +49,6 @@ def exclude_mips_and_bad_frames(
     lower_bound = fit[1] - thres_bad_frames * np.abs(fit[2])
     upper_bound = fit[1] + thres_bad_frames * np.abs(fit[2])
     bad_frames_mask = (mean < lower_bound) | (mean > upper_bound)
-    _logger.info(f"Excluded {np.sum(bad_frames_mask)} bad frames")
-    _logger.debug(f"Indices: {np.where(bad_frames_mask)[0]}")
     mask = mips_mask | bad_frames_mask
     return data[~mask]
 
@@ -72,12 +62,8 @@ def get_slopes(data: np.ndarray) -> np.ndarray:
         slopes: np.array (nframes, column_size, row_size) with the slope values
     """
     if np.ndim(data) != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
-    _logger.info("Calculating slope values")
     slopes = utils.apply_slope_fit_along_frames(data)
-    _logger.info("Finished calculating slope values")
-    _logger.debug(f"Shape of slopes: {slopes.shape}")
     return slopes
 
 
@@ -90,16 +76,13 @@ def correct_common_mode(data: np.ndarray) -> None:
         np.array in shape (nframes, column_size, nreps, row_size)
     """
     if data.ndim != 4:
-        _logger.error("Data is not a 4D array")
         raise ValueError("Data is not a 4D array")
-    _logger.info("Starting common mode correction.")
     # Iterate over the nframes dimension
     # Calculate the median for one frame
     # median_common = analysis_funcs.parallel_nanmedian_4d_axis3(data)
     # Subtract the median from the frame in-place
     median_common = utils.nanmedian(data, axis=3, keepdims=True)
     data -= median_common
-    _logger.info("Data is corrected for common mode.")
 
 
 @njit(parallel=True)
