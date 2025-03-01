@@ -22,7 +22,6 @@ class Params:
         "available_ram_gb": 2,  # int
         "custom_attributes": {},  # dict
         "nframes_eval": [0, -1, 1],  # list of ints
-        "nreps_eval": [0, -1, 1],  # list of ints
         "thres_bad_slopes": 3,  # float
         "thres_event_prim": 3,  # float
         "thres_event_sec": 3,  # float
@@ -40,7 +39,6 @@ class Params:
         "available_ram_gb": int,  # int
         "custom_attributes": dict,  # dict
         "nframes_eval": list,  # list of ints
-        "nreps_eval": list,  # list of ints
         "thres_bad_slopes": (int, float),  # float
         "thres_event_prim": (int, float),  # float
         "thres_event_sec": (int, float),  # float

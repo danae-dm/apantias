@@ -116,7 +116,6 @@ class Analysis:
         self.available_ram_gb = self.params_dict["available_ram_gb"]
         self.custom_attributes = self.params_dict["custom_attributes"]
         self.nframes_eval = self.params_dict["nframes_eval"]
-        self.nreps_eval = self.params_dict["nreps_eval"]
         self.thres_bad_slopes = self.params_dict["thres_bad_slopes"]
         self.thres_event_prim = self.params_dict["thres_event_prim"]
         self.thres_event_sec = self.params_dict["thres_event_sec"]

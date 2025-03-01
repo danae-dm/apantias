@@ -5,6 +5,7 @@ import numpy as np
 from numba import njit, prange
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from scipy import stats
+from sklearn.cluster import DBSCAN
 
 from . import fitting
 
@@ -783,3 +784,16 @@ def apply_pixelwise(data, func, cores, *args, **kwargs) -> np.ndarray:
             except Exception as e:
                 raise e
     return results
+
+
+def dbscan_outliers(data, eps, min_samples, inline=False):
+    db = DBSCAN(eps=eps, min_samples=min_samples)
+    labels = db.fit_predict(data.reshape(-1, 1))
+    if labels.shape != data.shape:
+        labels = labels.reshape(data.shape)
+    if not inline:
+        copy = data.copy()
+        copy[labels == -1] = np.nan
+        return copy
+    else:
+        data[labels == -1] = np.nan

@@ -343,7 +343,7 @@ def _process_raw_data(
         )
         _write_data_to_h5(h5_group + "raw_data", data)
         # if process_index == 0:
-        data = data[:, :, ignore_first_nreps:nreps_eval, :]
+        data = data[:, :, ignore_first_nreps:, :]
         raw_data_mean = np.mean(data, axis=2)
         raw_data_std = np.std(data, axis=2)
         _write_data_to_h5(h5_group + "raw_data_mean_nreps", raw_data_mean)
@@ -369,7 +369,7 @@ def _preprocess(
     # read data from bin file, multiple processes can read from the same file
     try:
         data = _read_data_from_h5(h5_group + "raw_data")
-        data = data[:, :, ignore_first_nreps:nreps_eval, :]
+        data = data[:, :, ignore_first_nreps:, :]
         data = data.astype(np.float64)
         if ext_dark_frame_dset is not None:
             offset = _read_data_from_h5(ext_dark_frame_dset)
@@ -395,8 +395,30 @@ def _preprocess(
         _write_data_to_h5(h5_group + "preproc_median_nreps", median)
         _write_data_to_h5(h5_group + "preproc_std_nreps", std)
         _write_data_to_h5(h5_group + "preproc_slope_nreps", slopes)
-        del data, mean, std, slopes
+        del shapiro, mean, std, median, slopes
         gc.collect()
+        for item in nreps_eval:
+            s = slice(item[0], item[1], item[2])
+            data_sclice = data[:, :, s, :]
+            print(data_sclice.shape)
+            shapiro = utils.shapiro(data_sclice, axis=2)
+            mean = np.mean(data_sclice, axis=2)
+            std = np.std(data_sclice, axis=2)
+            median = np.median(data_sclice, axis=2)
+            x = np.arange(data_sclice.shape[2])
+            slopes = np.apply_along_axis(
+                lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data_sclice
+            )
+            _write_data_to_h5(h5_group + f"{s}_preproc_shapiro", shapiro)
+            _write_data_to_h5(h5_group + f"{s}_preproc_mean_nreps", mean)
+            _write_data_to_h5(h5_group + f"{s}_preproc_median_nreps", median)
+            _write_data_to_h5(h5_group + f"{s}_preproc_std_nreps", std)
+            _write_data_to_h5(h5_group + f"{s}_preproc_slope_nreps", slopes)
+            del data_sclice, shapiro, mean, std, median, slopes
+            gc.collect()
+        del data
+        gc.collect()
+
     except Exception as e:
         raise e
     finally:
@@ -414,7 +436,7 @@ def create_data_file_from_bins(
     available_cpu_cores: int = 4,
     available_ram_gb: int = 16,
     ext_dark_frame_h5: str = None,
-    nreps_eval: int = None,
+    nreps_eval: List[List[int]] = [],
     attributes: dict = None,
 ) -> None:
     # check if folder, bin files exist and calculate nreps and make sure they are all the same
