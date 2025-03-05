@@ -24,39 +24,38 @@ def _get_workload_dict(
     initial_offset,
 ) -> dict:
     """
-    Returns a dictionary with the workload for each process. It looks at the size if the bin files
-    and assigns batches of the file to each process. Each process has
-    available_ram/available_cpu_cores*x ram to work with. Where x has to be tweaked, so everything
-    fits into memory. If the preprocessing is expanded, this number has to be adjusted.
-    The workload is a list of #available_cpu_cores lists with the offset and the number of
-    uint16 values to read.
-    If the file is larger than available_ram, the file is loaded in multiple "batches".
-    It also assigns a group name to each batch. The group name is used to write the data to the h5 file.
+    calculates and returns a dictionary that defines the workload for each process when reading
+    binary files and writing to HDF5 files. It divides the binary files into batches that fit into
+    the available RAM and assigns each batch to a process. Each process gets a portion of the file
+    to read, along with an offset and the number of values to read.
+
     {
-        'bin_file1': [
-            [(offset1, counts1, group), (offset2, counts2, group), ...],  # batch 1 of processes0
-            [(offset1, counts1, group), (offset2, counts2, group), ...],  # batch 2 of process1, if needed
-            ...
-        ],
-        'bin_file2': [                                      # same for the next bin file
-            [(offset1, counts1, group), (offset2, counts2, group), ...],
-            [(offset1, counts1, group), (offset2, counts2, group), ...],
-            ...
-        ],
+    'bin_file1': [
+        [(offset1, counts1, group1), (offset2, counts2, group2), ...],  # Batch 1 for process 0
+        [(offset1, counts1, group1), (offset2, counts2, group2), ...],  # Batch 2 for process 1, if needed
         ...
-        Args:
-            bin_files: list of absolute paths to the bin files
-            h5_file_process: list of absolute paths to the h5 files for each process
-            available_ram_gb: available ram per process in bytes
-            available_cpu_cores: number of available cpu cores
-            row_size: size of a row in bytes
-            key_ints: number of key integers
-            offset: offset in bytes to start reading
-        Returns:
-            workload_dict: dictionary with the workload for each process
+    ],
+    'bin_file2': [
+        [(offset1, counts1, group1), (offset2, counts2, group2), ...],
+        [(offset1, counts1, group1), (offset2, counts2, group2), ...],
+        ...
+    ],
+    ...
+    }
+    Args:
+        bin_files: List of absolute paths to the binary files.
+        h5_file_process: List of absolute paths to the HDF5 files for each process.
+        available_ram_gb: Available RAM per process in gigabytes.
+        available_cpu_cores: Number of available CPU cores.
+        row_size: Size of a row in bytes.
+        key_ints: Number of key integers.
+        initial_offset: Offset in bytes to start reading.
+    Returns:
+        workload_dict: dictionary with the workload for each process
     """
-    # 20% of available ram, this number can be tweaked later to improve performance
-    available_ram = int((available_ram_gb * 1024 * 1024 * 1024) * 0.13)
+    # 5% of available ram, this number can be tweaked later to improve performance
+    # Note: when using np.mean (or np.median) instead of np.mean this value can be doubled.
+    available_ram = int((available_ram_gb * 1024 * 1024 * 1024) * 0.12)
     available_ram_per_process = int(available_ram / available_cpu_cores)
     rows_read_per_process = int(available_ram_per_process / ((row_size + key_ints) * 2))
     workload_dict = {}
@@ -96,17 +95,18 @@ def _get_workload_dict(
     return workload_dict
 
 
-def _get_vds_dict(workload_dict: dict, old_dict: dict = None) -> dict:
+def _get_vds_list(workload_dict: List, old_list: List = None) -> List:
     """
-    Creates a dictionary used for the creation of virtual datasets. (vds)
+    Creates a list used for the creation of virtual datasets. (vds)
     The vds_dict contains the names of all datasets present in the .h5 files of the processes,
     the final shape (sum of all shapes across axis 0) and the sources of the datasets.
     Example:
-    {
+    [
         "name" : "common_modes",
         "final_shape" : [1000,64,200,1],
         "sources" : ["path/file.h5/group/dataset_name",...]}
-    }
+        ...
+    ]
     If old_dict is provided, the datasets in old_dict are ignored and not added to the new dict.
     """
     datasets = []
@@ -130,44 +130,48 @@ def _get_vds_dict(workload_dict: dict, old_dict: dict = None) -> dict:
                             datasets[i][1][0] += new_shape_frames
     # the datsets_dict contains the names of all datasets present in the .h5 files of the processes,
     # the final shape (sum of all shapes across axis 0) and the sources of the datasets
-    vds_dict = {}
+    vds_list = []
     for dataset in datasets:
         dataset_name = dataset[0]
-        if old_dict is not None:
-            if dataset_name not in old_dict.keys():
-                vds_dict[dataset_name] = {
-                    "name": dataset[0],
+        if old_list is not None:
+            # check if datset_name is in the old_list
+            if not any(d.get("name") == dataset_name for d in old_list):
+                vds_list.append(
+                    {
+                        "name": dataset_name,
+                        "final_shape": dataset[1],
+                        "sources": [],
+                    }
+                )
+        else:
+            vds_list.append(
+                {
+                    "name": dataset_name,
                     "final_shape": dataset[1],
                     "sources": [],
                 }
-        else:
-            vds_dict[dataset_name] = {
-                "name": dataset[0],
-                "final_shape": dataset[1],
-                "sources": [],
-            }
+            )
     # add the sources
     for bin in workload_dict.keys():
         for batch_index, batch in enumerate(workload_dict[bin]):
             for process_index, [offset, counts, h5_group] in enumerate(batch):
-                for dataset_name in vds_dict.keys():
-                    vds_dict[dataset_name]["sources"].append(
-                        f"{h5_group}{dataset_name}"
-                    )
-    return vds_dict
+                for dataset_info in vds_list:
+                    name = dataset_info["name"]
+                    dataset_info["sources"].append(f"{h5_group}{name}")
+    return vds_list
 
 
-def _avg_frames(h5_file, vds_dict):
+def _avg_frames(h5_file, vds_list):
     """
     Creates averages over frames for all datasets in the vds_dict.
     If the type is boolean it calculates the sum over the frames.
     Except for the raw_data dataset, it is skipped because it would take too much ram.
     """
-    for dataset in vds_dict.values():
+    for dataset in vds_list:
         with h5py.File(h5_file, "a") as f:
             name = dataset["name"]
             # skip raw_data, loading it would take too much ram in most instances
-            if name == "raw_data":
+            if name == "raw_data" or name == "raw_offset":
                 continue
             source = np.array(f[name])
             if source.dtype == np.bool_:
@@ -180,11 +184,11 @@ def _avg_frames(h5_file, vds_dict):
                 f.create_dataset(name + "_mean_frames", data=averages)
 
 
-def _create_vds(h5_file, vds_dict):
+def _create_vds(h5_file, vds_list):
     """
     Iterates through the datasets in the vds_dict and creates virtual datasets in the h5 file.
     """
-    for dataset in vds_dict.values():
+    for dataset in vds_list:
         name = dataset["name"]
         sources = dataset["sources"]
         final_shape = tuple(dataset["final_shape"])
@@ -198,14 +202,24 @@ def _create_vds(h5_file, vds_dict):
             for source in sources:
                 source_h5 = source.split(".h5")[0] + ".h5"
                 source_dataset = source.split(".h5")[1]
-                sh = h5py.File(source_h5, "r")[source_dataset].shape
+                with h5py.File(source_h5, "r") as source_f:
+                    sh = source_f[source_dataset].shape
                 end_index = start_index + sh[0]
                 vsource = h5py.VirtualSource(source_h5, source_dataset, shape=sh)
                 layout[start_index:end_index, ...] = vsource
                 start_index = end_index
-            # fillvalue = -1 means, that if the source dataset is not present, the value is np.nan
+            # fillvalue = np.nan means, that if the source dataset is not present, the value is np.nan
             # so if the absolute path to the source file changes, the value will be np.nan
-            f.create_virtual_dataset(name, layout, fillvalue=np.nan)
+            if "slice" in name:
+                group_name = name.split("_", 1)[0]
+                dset_name = name.split("_", 1)[1]
+                if group_name not in f:
+                    group = f.create_group(group_name)
+                else:
+                    group = f[group_name]
+                group.create_virtual_dataset(dset_name, layout, fillvalue=np.nan)
+            else:
+                f.create_virtual_dataset(name, layout, fillvalue=np.nan)
 
 
 def _read_data_from_bin(
@@ -344,11 +358,15 @@ def _process_raw_data(
         _write_data_to_h5(h5_group + "raw_data", data)
         # if process_index == 0:
         data = data[:, :, ignore_first_nreps:, :]
+        raw_offset = np.mean(data, axis=0, keepdims=True)
         raw_data_mean = np.mean(data, axis=2)
+        raw_data_median = np.median(data, axis=2)
         raw_data_std = np.std(data, axis=2)
+        _write_data_to_h5(h5_group + "raw_offset", raw_offset)
         _write_data_to_h5(h5_group + "raw_data_mean_nreps", raw_data_mean)
         _write_data_to_h5(h5_group + "raw_data_std_nreps", raw_data_std)
-        del raw_data_mean, raw_data_std, data
+        _write_data_to_h5(h5_group + "raw_data_median_nreps", raw_data_median)
+        del raw_data_mean, raw_data_median, raw_data_std, data
         gc.collect()
     except Exception as e:
         raise e
@@ -374,10 +392,8 @@ def _preprocess(
         if ext_dark_frame_dset is not None:
             offset = _read_data_from_h5(ext_dark_frame_dset)
         else:
-            offset = _read_data_from_h5(
-                h5_file_virtual + "raw_data_mean_nreps_mean_frames"
-            )
-        data -= offset[np.newaxis, :, np.newaxis, :]
+            offset = _read_data_from_h5(h5_file_virtual + "raw_offset")
+        data -= offset
         common_modes = np.median(data, axis=3, keepdims=True)
         data -= common_modes
         _write_data_to_h5(h5_group + "preproc_common_modes", common_modes)
@@ -399,22 +415,21 @@ def _preprocess(
         gc.collect()
         for item in nreps_eval:
             s = slice(item[0], item[1], item[2])
-            data_sclice = data[:, :, s, :]
-            print(data_sclice.shape)
-            shapiro = utils.shapiro(data_sclice, axis=2)
-            mean = np.mean(data_sclice, axis=2)
-            std = np.std(data_sclice, axis=2)
-            median = np.median(data_sclice, axis=2)
-            x = np.arange(data_sclice.shape[2])
+            data_slice = data[:, :, s, :]
+            shapiro = utils.shapiro(data_slice, axis=2)
+            mean = np.mean(data_slice, axis=2)
+            std = np.std(data_slice, axis=2)
+            median = np.median(data_slice, axis=2)
+            x = np.arange(data_slice.shape[2])
             slopes = np.apply_along_axis(
-                lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data_sclice
+                lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data_slice
             )
             _write_data_to_h5(h5_group + f"{s}_preproc_shapiro", shapiro)
             _write_data_to_h5(h5_group + f"{s}_preproc_mean_nreps", mean)
             _write_data_to_h5(h5_group + f"{s}_preproc_median_nreps", median)
             _write_data_to_h5(h5_group + f"{s}_preproc_std_nreps", std)
             _write_data_to_h5(h5_group + f"{s}_preproc_slope_nreps", slopes)
-            del data_sclice, shapiro, mean, std, median, slopes
+            del data_slice, shapiro, mean, std, median, slopes
             gc.collect()
         del data
         gc.collect()
@@ -493,7 +508,7 @@ def create_data_file_from_bins(
                     "not match ({column_size}, {row_size}) of the bin files"
                 )
     # leave one core for the main process
-    available_cpu_cores -= 1
+    # available_cpu_cores -= 1
     # create folders:
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     bin_name = os.path.basename(bin_files[0]).split(".")[0]
@@ -590,12 +605,12 @@ def create_data_file_from_bins(
                         p.join()
                         processes.remove(p)
     _logger.info("Raw Data processed.")
-    vds_dict = _get_vds_dict(workload_dict)
+    vds_list = _get_vds_list(workload_dict)
     _logger.info("Creating virtual dataset.")
-    _create_vds(h5_file_virtual, vds_dict)
+    _create_vds(h5_file_virtual, vds_list)
     _logger.info("Virtual dataset created.")
     _logger.info("Calculating averages over frames.")
-    _avg_frames(h5_file_virtual, vds_dict)
+    _avg_frames(h5_file_virtual, vds_list)
     _logger.info("Averages over frames calculated.")
     _logger.info("Processing of Raw Data finished.")
     _logger.info("Start preprocessing.")
@@ -629,12 +644,12 @@ def create_data_file_from_bins(
                         p.join()
                         processes.remove(p)
     _logger.info("Preprocessing finished.")
-    vds_dict = _get_vds_dict(workload_dict, vds_dict)
+    new_vds_list = _get_vds_list(workload_dict, vds_list)
     _logger.info("Creating virtual dataset.")
-    _create_vds(h5_file_virtual, vds_dict)
+    _create_vds(h5_file_virtual, new_vds_list)
     _logger.info("Virtual dataset created.")
     _logger.info("Calculating averages over frames.")
-    _avg_frames(h5_file_virtual, vds_dict)
+    _avg_frames(h5_file_virtual, new_vds_list)
     _logger.info("Averages over frames calculated.")
     _logger.info(f"Final Dataset is stored in {h5_file_virtual}")
     _logger.info(f"Data is stored in {data_folder}")

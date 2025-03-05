@@ -787,6 +787,12 @@ def apply_pixelwise(data, func, cores, *args, **kwargs) -> np.ndarray:
 
 
 def dbscan_outliers(data, eps, min_samples, inline=False):
+    """
+    i tested this for some pixel histograms and it works well
+    eps=1 and min_samples=2 seems to work well
+    that means a pixel is considered an outlier if it is not part of a cluster of at least 2 pixels
+    (including itself, min_samples=2) that are within a distance of 1 (eps) from each other
+    """
     db = DBSCAN(eps=eps, min_samples=min_samples)
     labels = db.fit_predict(data.reshape(-1, 1))
     if labels.shape != data.shape:

@@ -186,3 +186,10 @@ class Default(Analysis):
             _logger.warning(
                 f"Failed fits: {failed_fits} ({failed_fits/(self.column_size*self.row_size)*100:.2f}%)"
             )
+        """
+        #TODO: dbscan of every pixel histogram to find outliers
+        save the map of the scan
+        fit a single gaussian to determine (2nd) offset and noise
+        Create Event map
+        Create fitting for gain map: delete the noise peak and try to fit the signals.
+        """
