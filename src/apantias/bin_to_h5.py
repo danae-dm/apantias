@@ -141,6 +141,7 @@ def _get_vds_list(workload_dict: List, old_list: List = None) -> List:
                         "name": dataset_name,
                         "final_shape": dataset[1],
                         "sources": [],
+                        "attributes": dataset[2]
                     }
                 )
         else:
@@ -149,6 +150,7 @@ def _get_vds_list(workload_dict: List, old_list: List = None) -> List:
                     "name": dataset_name,
                     "final_shape": dataset[1],
                     "sources": [],
+                    "attributes": dataset[2]
                 }
             )
     # add the sources
@@ -164,24 +166,37 @@ def _get_vds_list(workload_dict: List, old_list: List = None) -> List:
 def _avg_frames(h5_file, vds_list):
     """
     Creates averages over frames for all datasets in the vds_dict.
-    If the type is boolean it calculates the sum over the frames.
-    Except for the raw_data dataset, it is skipped because it would take too much ram.
+    The information which calculation to perform is in the attributes of the dset.
+    "avg" : mean/median/std/sum/weighted
+    "axis" : axis over which mean/median/std/sum
+    "weight" : weighted avg is always over frames, so axis is not needed
+    "group" : if it should be saved in a separate group in the virtualdset
     """
     for dataset in vds_list:
         with h5py.File(h5_file, "a") as f:
             name = dataset["name"]
+            avg = dataset["attributes"]["avg"]
             # skip raw_data, loading it would take too much ram in most instances
-            if name == "raw_data" or name == "raw_offset":
+            if avg == False:
                 continue
+            if "slice" in name:
+                group_name = name.split("_", 1)[0]
+                dset_name = name.split("_", 1)[1]
+                name = f"{group_name}/{dset_name}"
             source = np.array(f[name])
-            if source.dtype == np.bool_:
-                # if its a boolean array, sum it up
-                # TODO parallelize this sometime
+            if avg =="sum":
                 sum = np.sum(source, axis=0)
                 f.create_dataset(name + "_sum_frames", data=sum)
-            else:
-                averages = utils.nanmean(source, axis=0)
-                f.create_dataset(name + "_mean_frames", data=averages)
+            elif avg == "mean":	
+                average = utils.nanmean(source, axis=0)
+                f.create_dataset(name + "_mean_frames", data=average)
+            elif avg == "median":
+                median = np.median(source, axis=0)
+                f.create_dataset(name + "_median_frames", data=median)	
+            elif avg == "weighted":
+                total_frames = f["raw_data"].shape[0]
+                weighted_avg = np.sum(source, axis=0)/total_frames
+                f.create_dataset(name + "_weighted_frames", data=weighted_avg)
 
 
 def _create_vds(h5_file, vds_list):
@@ -203,7 +218,9 @@ def _create_vds(h5_file, vds_list):
                 source_h5 = source.split(".h5")[0] + ".h5"
                 source_dataset = source.split(".h5")[1]
                 with h5py.File(source_h5, "r") as source_f:
-                    sh = source_f[source_dataset].shape
+                    dset = source_f[source_dataset]
+                    sh = dset.shape
+                    attributes = dict(dset.attrs)
                 end_index = start_index + sh[0]
                 vsource = h5py.VirtualSource(source_h5, source_dataset, shape=sh)
                 layout[start_index:end_index, ...] = vsource
@@ -217,9 +234,13 @@ def _create_vds(h5_file, vds_list):
                     group = f.create_group(group_name)
                 else:
                     group = f[group_name]
-                group.create_virtual_dataset(dset_name, layout, fillvalue=np.nan)
+                dset = group.create_virtual_dataset(dset_name, layout, fillvalue=np.nan)
+                for key, value in attributes.items():
+                    dset.attrs[key] = value	
             else:
-                f.create_virtual_dataset(name, layout, fillvalue=np.nan)
+                dset = f.create_virtual_dataset(name, layout, fillvalue=np.nan)
+                for key, value in attributes.items():
+                    dset.attrs[key] = value
 
 
 def _read_data_from_bin(
@@ -281,7 +302,7 @@ def _read_data_from_bin(
     return inp_data
 
 
-def _write_data_to_h5(path, data) -> None:
+def _write_data_to_h5(path, data, attributes=None) -> None:
     """
     Writes data to a h5 file.
     Takes the full path of a dataset: /scratch/some_folder/data.h5/some_group/some_dataset
@@ -307,6 +328,9 @@ def _write_data_to_h5(path, data) -> None:
             dataset = current_group.create_dataset(
                 dataset, dtype=data.dtype, data=data, chunks=None
             )
+            if attributes is not None:
+                for key, value in attributes.items():
+                    dataset.attrs[key] = value
 
 
 def _read_data_from_h5(path: str) -> np.ndarray:
@@ -330,7 +354,7 @@ def _get_datasets_from_h5(path: str):
         group = f[group_path]
         for name, item in group.items():
             if isinstance(item, h5py.Dataset):
-                datasets.append([name, list(item.shape)])
+                datasets.append([name, list(item.shape), dict(item.attrs)])
     return datasets
 
 
@@ -350,22 +374,22 @@ def _process_raw_data(
     nreps_eval,
 ) -> None:
     # read data from bin file, multiple processes can read from the same file
+    # write the avg attribute to the dset to determine what to average later in the vds
     try:
-        # if process_index == 0:
         data = _read_data_from_bin(
             bin, column_size, row_size, key_ints, nreps, offset, counts
         )
-        _write_data_to_h5(h5_group + "raw_data", data)
-        # if process_index == 0:
+        _write_data_to_h5(h5_group + "raw_data", data, {"avg":"False"})
         data = data[:, :, ignore_first_nreps:, :]
-        raw_offset = np.mean(data, axis=0, keepdims=True)
+        #raw_set is multiplied with #frames to calculated the weighted average later
+        raw_offset = np.mean(data, axis=0, keepdims=True)*data.shape[0]
         raw_data_mean = np.mean(data, axis=2)
         raw_data_median = np.median(data, axis=2)
         raw_data_std = np.std(data, axis=2)
-        _write_data_to_h5(h5_group + "raw_offset", raw_offset)
-        _write_data_to_h5(h5_group + "raw_data_mean_nreps", raw_data_mean)
-        _write_data_to_h5(h5_group + "raw_data_std_nreps", raw_data_std)
-        _write_data_to_h5(h5_group + "raw_data_median_nreps", raw_data_median)
+        _write_data_to_h5(h5_group + "raw_offset", raw_offset, {"avg": "weighted"})
+        _write_data_to_h5(h5_group + "raw_data_mean_nreps", raw_data_mean, {"avg": "mean"})
+        _write_data_to_h5(h5_group + "raw_data_std_nreps", raw_data_std, {"avg": "mean"})
+        _write_data_to_h5(h5_group + "raw_data_median_nreps", raw_data_median, {"avg": "mean"})
         del raw_data_mean, raw_data_median, raw_data_std, data
         gc.collect()
     except Exception as e:
@@ -392,31 +416,36 @@ def _preprocess(
         if ext_dark_frame_dset is not None:
             offset = _read_data_from_h5(ext_dark_frame_dset)
         else:
-            offset = _read_data_from_h5(h5_file_virtual + "raw_offset")
+            offset = _read_data_from_h5(h5_file_virtual + "raw_offset_weighted_frames")
         data -= offset
         common_modes = np.median(data, axis=3, keepdims=True)
         data -= common_modes
-        _write_data_to_h5(h5_group + "preproc_common_modes", common_modes)
+        _write_data_to_h5(h5_group + "preproc_common_modes", common_modes, {"avg": "mean"})
         del offset, common_modes
         gc.collect()
-        shapiro = utils.shapiro(data, axis=2)
+        if data.shape[2] >50:
+            shapiro = utils.shapiro(data, axis=2)
+            _write_data_to_h5(h5_group + "preproc_shapiro", shapiro, {"avg": "mean"})
+            del shapiro
         mean = np.mean(data, axis=2)
         std = np.std(data, axis=2)
         median = np.median(data, axis=2)
         # TODO: Slopes are slow when calculated like this, maybe use numba?
         x = np.arange(data.shape[2])
         slopes = np.apply_along_axis(lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data)
-        _write_data_to_h5(h5_group + "preproc_shapiro", shapiro)
-        _write_data_to_h5(h5_group + "preproc_mean_nreps", mean)
-        _write_data_to_h5(h5_group + "preproc_median_nreps", median)
-        _write_data_to_h5(h5_group + "preproc_std_nreps", std)
-        _write_data_to_h5(h5_group + "preproc_slope_nreps", slopes)
-        del shapiro, mean, std, median, slopes
+        _write_data_to_h5(h5_group + "preproc_mean_nreps", mean, {"avg": "mean"})
+        _write_data_to_h5(h5_group + "preproc_median_nreps", median, {"avg": "mean"})
+        _write_data_to_h5(h5_group + "preproc_std_nreps", std, {"avg": "mean"})
+        _write_data_to_h5(h5_group + "preproc_slope_nreps", slopes, {"avg": "mean"})
+        del mean, std, median, slopes
         gc.collect()
         for item in nreps_eval:
             s = slice(item[0], item[1], item[2])
             data_slice = data[:, :, s, :]
-            shapiro = utils.shapiro(data_slice, axis=2)
+            if data_slice.shape[2] > 50:
+                shapiro = utils.shapiro(data_slice, axis=2)
+                _write_data_to_h5(h5_group + f"{s}_preproc_shapiro", shapiro, {"avg": "mean"})
+                del shapiro
             mean = np.mean(data_slice, axis=2)
             std = np.std(data_slice, axis=2)
             median = np.median(data_slice, axis=2)
@@ -424,12 +453,11 @@ def _preprocess(
             slopes = np.apply_along_axis(
                 lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data_slice
             )
-            _write_data_to_h5(h5_group + f"{s}_preproc_shapiro", shapiro)
-            _write_data_to_h5(h5_group + f"{s}_preproc_mean_nreps", mean)
-            _write_data_to_h5(h5_group + f"{s}_preproc_median_nreps", median)
-            _write_data_to_h5(h5_group + f"{s}_preproc_std_nreps", std)
-            _write_data_to_h5(h5_group + f"{s}_preproc_slope_nreps", slopes)
-            del data_slice, shapiro, mean, std, median, slopes
+            _write_data_to_h5(h5_group + f"{s}_preproc_mean_nreps", mean, {"avg": "mean"})
+            _write_data_to_h5(h5_group + f"{s}_preproc_median_nreps", median, {"avg": "mean"})
+            _write_data_to_h5(h5_group + f"{s}_preproc_std_nreps", std, {"avg": "mean"})
+            _write_data_to_h5(h5_group + f"{s}_preproc_slope_nreps", slopes, {"avg": "mean"})
+            del data_slice, mean, std, median, slopes
             gc.collect()
         del data
         gc.collect()
@@ -599,11 +627,8 @@ def create_data_file_from_bins(
                 f"batch {batch_index+1}/{len(workload_dict[bin])} started, "
                 f"{available_cpu_cores} processes are running."
             )
-            while processes:
-                for p in processes:
-                    if not p.is_alive():
-                        p.join()
-                        processes.remove(p)
+            for p in processes:
+                p.join()
     _logger.info("Raw Data processed.")
     vds_list = _get_vds_list(workload_dict)
     _logger.info("Creating virtual dataset.")
@@ -638,11 +663,8 @@ def create_data_file_from_bins(
                 f"batch {batch_index+1}/{len(workload_dict[bin])} started, "
                 f"{available_cpu_cores} processes are running."
             )
-            while processes:
-                for p in processes:
-                    if not p.is_alive():
-                        p.join()
-                        processes.remove(p)
+            for p in processes:
+                p.join()
     _logger.info("Preprocessing finished.")
     new_vds_list = _get_vds_list(workload_dict, vds_list)
     _logger.info("Creating virtual dataset.")
