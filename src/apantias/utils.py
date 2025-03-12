@@ -3,7 +3,7 @@ import os
 
 import numpy as np
 from numba import njit, prange
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, wait
 from scipy import stats
 from sklearn.cluster import DBSCAN
 
@@ -111,6 +111,7 @@ def split_h5_path(path: str) -> tuple:
 def nanmedian(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray:
     """
     The equivalent to np.nanmedian(data, axis=axis, keepdims=keepdims).
+    Runs in parallel using numba.
     """
     if data.ndim == 2:
         if axis == 0:
@@ -167,6 +168,7 @@ def nanmedian(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray
 def nanmean(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray:
     """
     The equivalent to np.nanmean(data, axis=axis, keepdims=keepdims).
+    Runs in parallel using numba.
     """
     if data.ndim == 2:
         if axis == 0:
@@ -721,7 +723,7 @@ def process_batch(func, row_data, *args, **kwargs):
     return batch_results
 
 
-def apply_pixelwise(data, func, cores, *args, **kwargs) -> np.ndarray:
+def apply_pixelwise(cores, data, func, *args, **kwargs) -> np.ndarray:
     """
     Helper function to apply a function to each pixel in a 3D numpy array in parallel.
     Data must have shape (n,row,col). The function is applied to [:,row,col].
@@ -729,14 +731,13 @@ def apply_pixelwise(data, func, cores, *args, **kwargs) -> np.ndarray:
     The passed function must accept a 1D array as input and must have a 1D array as output.
     The passed function must have a data parameter, which is the first argument.
     """
-    # TODO: Rewrite this using multiprocessing. Pass the available cpus to the function
-    # check data consistency
     if data.ndim != 3:
         raise ValueError("Data must be a 3D array.")
     # try the passed function and check return value
     try:
         result = func(data[:, 0, 0], *args, **kwargs)
         result_shape = result.shape
+        result_type = result.dtype
     except Exception as e:
         raise ValueError(f"Error applying function to data: {e}")
     if not isinstance(result, np.ndarray):
@@ -744,17 +745,11 @@ def apply_pixelwise(data, func, cores, *args, **kwargs) -> np.ndarray:
     if result.ndim != 1:
         raise ValueError("Function must return a 1D numpy array.")
     # initialize results, now that we know what the function returns
-
     if cores == 1:
         return func(data, *args, **kwargs)
 
-    rows_per_process = []
-    for i in range(cores):
-        rows_per_process.append(data.shape[1] // cores)
-        if i == cores - 1:
-            rows_per_process[i] += data.shape[1] % cores
-    print(rows_per_process)
-    results = np.zeros((result_shape[0], data.shape[1], data.shape[2]))
+    rows_per_process = divide_evenly(data.shape[1], cores)
+    results = np.zeros((result_shape[0], data.shape[1], data.shape[2]), dtype=result_type)
     with ProcessPoolExecutor() as executor:
         futures = []
         for i in range(cores):
@@ -768,19 +763,15 @@ def apply_pixelwise(data, func, cores, *args, **kwargs) -> np.ndarray:
                     process_batch, func, process_data.copy(), *args, **kwargs
                 )
             )
-        total_futures = len(futures)
-        completed_futures = 0
-        for i, future in enumerate(as_completed(futures)):
+        #wait for all futures to be done
+        done, not_done = wait(futures)
+        # Process the results in the order they were submitted
+        for i, future in enumerate(futures):
             try:
                 batch_results = future.result()
-                print(f"Batch results shape: {batch_results.shape}")
-                print(
-                    f"Wrote to index {sum(rows_per_process[:i])} to {sum(rows_per_process[: i + 1])}"
-                )
                 results[
                     :, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :
                 ] = batch_results
-                completed_futures += 1
             except Exception as e:
                 raise e
     return results
@@ -798,8 +789,21 @@ def dbscan_outliers(data, eps, min_samples, inline=False):
     if labels.shape != data.shape:
         labels = labels.reshape(data.shape)
     if not inline:
-        copy = data.copy()
-        copy[labels == -1] = np.nan
-        return copy
+        return (labels == -1)
     else:
         data[labels == -1] = np.nan
+
+def divide_evenly(number, parts):
+    """
+    Divides an integer number evenly into a set of integers.
+    Args:
+        number: The integer number to be divided.
+        parts: The number of parts to divide into.
+    Returns:
+        A list of integers representing the divided parts.
+    """
+    quotient, remainder = divmod(number, parts)
+    result = [quotient] * parts
+    for i in range(remainder):
+        result[i] += 1
+    return result

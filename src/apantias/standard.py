@@ -15,89 +15,6 @@ from . import file_io as io
 from .logger import global_logger
 
 _logger = global_logger
-"""
-Planned structure of the analysis.h5 output file:
-datasets: ~
-groups: /
-/1_offnoi
-    /1_nrep_data
-        ~signal_values
-            # raw signals, averaged over nreps, after common mode correction
-        ~slope_values
-            # slope values (simple linear fit) of the raw signals
-    /2_slopes
-        ~slope_fit
-            # slope values from precal are fitted pixel wise with a gaussian
-        ~bad_slopes_mask
-            # mask of bad slopes is calculated from the pixelwise fit and the threshold from the params file
-        ~bad_slopes_count
-            # count of number of bad slopes per pixel
-        ~signal_values
-            # raw signals after common mode correction, bad slopes are set to nan
-    /3_outliers
-        ~outliers_fit
-            # signal values after common mode correction and bad slopes removed are fitted pixel wise with a gaussian
-        ~outliers_mask
-            # mask of outliers is calculated from the pixelwise fit and the threshold from the params file
-        ~outliers_count
-            # count of number of outliers per pixel
-        ~signal_values
-            # signal values after removing bad slopes and outliers
-    /4_fit
-        ~fit_1_peak
-        # signal values after common mode correction, bad slopes removed and outliers removed are fitted pixel wise with a gaussian
-        ~fit_2_peak
-        # double gauss
-    /5_final
-        ~offset
-            # offset value from the gaussian fit
-        ~noise
-            # noise value from the gaussian fit
-        ~signal_values
-            # raw signals after common mode correction, bad slopes removed, outliers removed and applied offset
-
-/2_filter
-    /1_nrep_data
-        ~signal_values
-            # raw signals, averaged over nreps, after common mode correction and offset from offnoi step subtracted
-        ~slope_values
-            # slope values (simple linear fit) of the raw signals
-    /2_slopes
-        ~slope_fit
-            # slope values from precal are fitted pixel wise with a gaussian
-        ~bad_slopes_mask
-            # mask of bad slopes is calculated from the pixelwise fit and the threshold from the params file
-        ~bad_slopes_count
-            # count of number of bad slopes per pixel
-        ~signal_values
-            # raw signals after common mode correction, bad slopes are set to nan
-        ~signal_values_offset_corrected
-    /3_outliers
-        ~outliers_fit
-            # signal values after common mode correction and bad slopes removed are fitted pixel wise with a gaussian
-        ~outliers_mask
-            # mask of outliers is calculated from the pixelwise fit and the threshold from the params file
-        ~outliers_count
-            # count of number of outliers per pixel
-        ~signal_values
-            # signal values after removing bad slopes and outliers
-    /4_events
-        ~event_map
-            # event map is calculated from the signal values, the noise values from the offnoi step and the thresholds from the params file
-        ~event_map_counts
-            # count of number of events per pixel
-        ~event_details
-            #TODO: implement pandas table with event details
-        ~bleedthrough
-            #TODO: implement bleedthrough calculation
-/3_gain
-    /fit_with_noise
-        #TODO: Move simple 2 Gauss fit from filter step to here
-    /signal_fit
-        #TODO: somehow cut noise and fit a gaussian to the signal values
-
-"""
-
 
 class Analysis:
 
@@ -151,10 +68,9 @@ class Default(Analysis):
     def calculate(self):
         _logger.info("Start calculating bad slopes map")
         slopes = io.get_data_from_file(self.data_h5, "preproc_slope_nreps")
-        fitted = utils.apply_pixelwise(
-            slopes, fit.fit_gauss_to_hist, self.available_cpus
+        fitted = utils.apply_pixelwise(self.available_cpus,
+            slopes, fit.fit_gauss_to_hist
         )
-        print(fitted.shape)
         _logger.info("Finished fitting")
         lower_bound = fitted[1, :, :] - self.thres_bad_slopes * np.abs(fitted[2, :, :])
         upper_bound = fitted[1, :, :] + self.thres_bad_slopes * np.abs(fitted[2, :, :])
@@ -186,10 +102,73 @@ class Default(Analysis):
             _logger.warning(
                 f"Failed fits: {failed_fits} ({failed_fits/(self.column_size*self.row_size)*100:.2f}%)"
             )
+        _logger.info("Loading Pixel Data")
+        data = io.get_data_from_file(self.data_h5, "preproc_mean_nreps")
+        _logger.info("Removing outliers")
+        #remove outliers (note that dbscan cannot deal with nans!)
+        outlier_mask = utils.apply_pixelwise(self.available_cpus,data,utils.dbscan_outliers,2,2)
+        data[outlier_mask] = np.nan
+        output_info = {
+            "info": "Outliers detected by DBScan"
+        }
+        io.add_array(
+            self.out_h5, outlier_mask, "2_offnoi/outlier_mask", attributes=output_info
+        )
+        sum_outliers = np.sum(outlier_mask)
+        _logger.warning(
+            f"Signals removed due to bad slopes: {sum_outliers} ({sum_outliers/(outlier_mask.size)*100:.2f}%)"
+        )
+        #set bad slopes to nan
+        _logger.info("Removing bad slopes")
+        data[bad_slopes_mask] = np.nan
+        sum_bad_slopes = np.sum(bad_slopes_mask)
+        _logger.warning(
+            f"Signals removed due to bad slopes: {sum_bad_slopes} ({sum_bad_slopes/(bad_slopes_mask.size)*100:.2f}%)"
+        )
+        #fit noise peak
+        _logger.info("Fitting pixelwise")
+        fitted = utils.apply_pixelwise(self.available_cpus,
+            data, fit.fit_gauss_to_hist
+        )
+        output_info = {
+            "info": "pixel data without outliers and bad slopes is fitted with a gaussian"
+        }
+        io.add_array(
+            self.out_h5, fitted, "2_offnoi/fit_parameters", attributes=output_info
+        )
+        offset = fitted[1]
+        noise = fitted[2]
+        _logger.info("Subtracting second offset")
+        data -= offset[np.newaxis,:,:]
+        output_info = {
+            "info": "pixel data without outliers and bad slopes after second offset correction"
+        }
+        io.add_array(
+            self.out_h5, data, "2_offnoi/pixel_data", attributes=output_info
+        )
+        _logger.info("Start Calculating event_map")
+        structure = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
+        event_map = an.group_pixels(
+            data,
+            self.thres_event_prim,
+            self.thres_event_sec,
+            noise,
+            structure,
+        )
+        event_counts = event_map > 0
+        event_counts_sum = np.sum(event_counts, axis=0)
+        io.add_array(self.out_h5, event_map, "3_filter/event_map")
+        io.add_array(self.out_h5, event_counts, "3_filter/event_counts")
+        io.add_array(self.out_h5, event_counts_sum, "3_filter/event_counts_sum")
+        _logger.info("Start Fitting Gain")
+        fitted = utils.apply_pixelwise(self.available_cpus,
+            data, fit.fit_2_gauss_to_hist
+        )
+        io.add_array(
+            self.out_h5, fitted, "4_gain/fit_parameters"
+        )
+        _logger.info("Analysis finished")
         """
-        #TODO: dbscan of every pixel histogram to find outliers
-        save the map of the scan
-        fit a single gaussian to determine (2nd) offset and noise
-        Create Event map
+        #TODO:
         Create fitting for gain map: delete the noise peak and try to fit the signals.
         """

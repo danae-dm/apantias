@@ -7,6 +7,7 @@ import os
 import gc
 
 from . import utils
+from . import __version__
 
 
 def read_data_chunk_from_bin(
@@ -330,5 +331,10 @@ def _create_analysis_file(
         f.create_dataset(
             "0_infos/parameter_json",
             data=repr(parameter_file_contents),
+            dtype=h5py.special_dtype(vlen=str),
+        )
+        f.create_dataset(
+            "0_infos/apantias_version",
+            data=repr(__version__),
             dtype=h5py.special_dtype(vlen=str),
         )

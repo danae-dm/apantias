@@ -17,7 +17,7 @@ class Params:
     parameters = {
         "results_dir": "",  # str
         "data_h5_file": "",  # str
-        "darkframe_dset": 0,  # int
+        "darkframe_dset": "",  # int
         "available_cpus": 16,  # int
         "available_ram_gb": 2,  # int
         "custom_attributes": {},  # dict
@@ -34,7 +34,7 @@ class Params:
     params_types = {
         "results_dir": str,  # str
         "data_h5_file": str,  # str
-        "darkframe_dset": int,  # str
+        "darkframe_dset": str,  # str
         "available_cpus": int,  # int
         "available_ram_gb": int,  # int
         "custom_attributes": dict,  # dict

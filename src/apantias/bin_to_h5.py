@@ -15,13 +15,13 @@ _logger = global_logger
 
 
 def _get_workload_dict(
-    bin_files,
-    h5_file_process,
-    available_ram_gb,
-    available_cpu_cores,
-    row_size,
-    key_ints,
-    initial_offset,
+    bin_files: List,
+    h5_file_process: List,
+    available_ram_gb: int,
+    available_cpu_cores: int,
+    row_size: int,
+    key_ints: int,
+    initial_offset: int,
 ) -> dict:
     """
     calculates and returns a dictionary that defines the workload for each process when reading
@@ -53,9 +53,10 @@ def _get_workload_dict(
     Returns:
         workload_dict: dictionary with the workload for each process
     """
-    # 5% of available ram, this number can be tweaked later to improve performance
+    # 10% of available ram will be used to load raw_data from the bin file.
+    # it is converted from uint16 to float64, which is 4 times the size
     # Note: when using np.mean (or np.median) instead of np.mean this value can be doubled.
-    available_ram = int((available_ram_gb * 1024 * 1024 * 1024) * 0.12)
+    available_ram = int((available_ram_gb * 1024 * 1024 * 1024) * 0.1)
     available_ram_per_process = int(available_ram / available_cpu_cores)
     rows_read_per_process = int(available_ram_per_process / ((row_size + key_ints) * 2))
     workload_dict = {}
@@ -92,6 +93,15 @@ def _get_workload_dict(
                     # set the new offset in bytes
                     current_offset += counts * 2
         workload_dict[bin] = bin_list
+    #No complete frames can be found if there is too little data left in the last batch
+    #Therefore, the last batch is removed if it contains less than 50% of data
+    for bin in workload_dict.keys():
+        first_count = workload_dict[bin][0][0][1]
+        last_count = workload_dict[bin][-1][0][1]
+        if last_count/first_count < 0.5:
+            #remove the last batch
+            workload_dict[bin].pop()
+
     return workload_dict
 
 
@@ -177,7 +187,7 @@ def _avg_frames(h5_file, vds_list):
             name = dataset["name"]
             avg = dataset["attributes"]["avg"]
             # skip raw_data, loading it would take too much ram in most instances
-            if avg == False:
+            if avg == "False":
                 continue
             if "slice" in name:
                 group_name = name.split("_", 1)[0]
@@ -187,7 +197,7 @@ def _avg_frames(h5_file, vds_list):
             if avg =="sum":
                 sum = np.sum(source, axis=0)
                 f.create_dataset(name + "_sum_frames", data=sum)
-            elif avg == "mean":	
+            elif avg == "mean":
                 average = utils.nanmean(source, axis=0)
                 f.create_dataset(name + "_mean_frames", data=average)
             elif avg == "median":
@@ -288,7 +298,7 @@ def _read_data_from_bin(
     diff = np.diff(frames, axis=0)
     valid_frames_position = np.nonzero(diff == rows_per_frame)[1]
     if len(valid_frames_position) == 0:
-        raise ValueError("No valid frames found in chunk!")
+        raise ValueError("No valid frames found")
     valid_frames = frames.T[valid_frames_position]
     frame_start_indices = valid_frames[:, 0]
     frame_end_indices = valid_frames[:, 1]
@@ -390,7 +400,7 @@ def _process_raw_data(
         _write_data_to_h5(h5_group + "raw_data_mean_nreps", raw_data_mean, {"avg": "mean"})
         _write_data_to_h5(h5_group + "raw_data_std_nreps", raw_data_std, {"avg": "mean"})
         _write_data_to_h5(h5_group + "raw_data_median_nreps", raw_data_median, {"avg": "mean"})
-        del raw_data_mean, raw_data_median, raw_data_std, data
+        del raw_offset, raw_data_mean, raw_data_median, raw_data_std, data
         gc.collect()
     except Exception as e:
         raise e
