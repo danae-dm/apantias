@@ -18,7 +18,8 @@ dependencies = [
     "scipy",
     "seaborn",
     "h5py",
-    "numba"
+    "numba",
+    "scikit_learn"
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

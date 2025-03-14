@@ -258,7 +258,7 @@ def _read_data_from_bin(
     column_size: int,
     row_size: int,
     key_ints: int,
-    nreps: int,
+    nreps: int, 
     offset: int,
     counts: int,
 ) -> np.ndarray:
@@ -572,8 +572,10 @@ def create_data_file_from_bins(
     h5_file_virtual = os.path.join(working_folder, f"{bin_name}.h5")
     with h5py.File(h5_file_virtual, "w") as f:
         f.attrs["info"] = (
-            "This file contains virtual datasets to access the data from the"
-            f"folder {data_folder}."
+            "This file contains virtual datasets to access the data from the "
+            f"folder {data_folder}. You can move this file, but the data in it"
+            "is linked to the data folder. If the folder is moved there will be"
+            "no data available in the file."
         )
         f.attrs["apantias-version"] = __version__
         if attributes is not None:

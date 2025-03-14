@@ -1,6 +1,5 @@
 import gc
 import os
-import psutil
 from datetime import datetime
 
 import numpy as np
@@ -104,27 +103,31 @@ class Default(Analysis):
             )
         _logger.info("Loading Pixel Data")
         data = io.get_data_from_file(self.data_h5, "preproc_mean_nreps")
-        _logger.info("Removing outliers")
-        #remove outliers (note that dbscan cannot deal with nans!)
-        outlier_mask = utils.apply_pixelwise(self.available_cpus,data,utils.dbscan_outliers,2,2)
-        data[outlier_mask] = np.nan
-        output_info = {
-            "info": "Outliers detected by DBScan"
-        }
-        io.add_array(
-            self.out_h5, outlier_mask, "2_offnoi/outlier_mask", attributes=output_info
-        )
-        sum_outliers = np.sum(outlier_mask)
-        _logger.warning(
-            f"Signals removed due to bad slopes: {sum_outliers} ({sum_outliers/(outlier_mask.size)*100:.2f}%)"
-        )
-        #set bad slopes to nan
         _logger.info("Removing bad slopes")
         data[bad_slopes_mask] = np.nan
         sum_bad_slopes = np.sum(bad_slopes_mask)
         _logger.warning(
             f"Signals removed due to bad slopes: {sum_bad_slopes} ({sum_bad_slopes/(bad_slopes_mask.size)*100:.2f}%)"
         )
+        _logger.info("Removing outliers")
+        fitted = utils.apply_pixelwise(self.available_cpus,
+            data, fit.fit_gauss_to_hist
+        )
+        lower_bound = fitted[1, :, :] - 5 * np.abs(fitted[2, :, :])
+        outlier_mask = (data < lower_bound)
+        data[outlier_mask] = np.nan
+        output_info = {
+            "info": "Outliers detected by fitting a gauss."
+        }
+        io.add_array(
+            self.out_h5, outlier_mask, "2_offnoi/outlier_mask", attributes=output_info
+        )
+        sum_outliers = np.sum(outlier_mask)
+        _logger.warning(
+            f"Signals removed due to outliers: {sum_outliers} ({sum_outliers/(outlier_mask.size)*100:.2f}%)"
+        )
+        #set bad slopes to nan
+        
         #fit noise peak
         _logger.info("Fitting pixelwise")
         fitted = utils.apply_pixelwise(self.available_cpus,
@@ -168,7 +171,3 @@ class Default(Analysis):
             self.out_h5, fitted, "4_gain/fit_parameters"
         )
         _logger.info("Analysis finished")
-        """
-        #TODO:
-        Create fitting for gain map: delete the noise peak and try to fit the signals.
-        """
