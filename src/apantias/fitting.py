@@ -136,46 +136,6 @@ def fit_2_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
         )
 
 
-def process_row(data, row, peaks):
-    if peaks not in [1, 2]:
-        raise ValueError("Peaks must be 1 or 2")
-    if peaks == 1:
-        result = np.apply_along_axis(fit_gauss_to_hist, axis=0, arr=data)
-    if peaks == 2:
-        result = np.apply_along_axis(fit_2_gauss_to_hist, axis=0, arr=data)
-    return row, result
-
-
-def get_fit_over_frames(data: np.ndarray, peaks: int) -> np.ndarray:
-    """
-    fits a gaussian for every pixel. The fitting is done over the
-    histogram of the pixel values from all frames using the scipy
-    curve_fit method.
-
-    Args:
-        data: in shape (nframes, column_size, row_size)
-    Returns:
-        np.array in shape (6, rows, columns)
-        index 0: amplitude
-        index 1: mean
-        index 2: sigma
-        index 3: error_amplitude
-        index 4: error_mean
-        index 5: error_sigma
-    """
-    if data.ndim != 3:
-        raise ValueError("Data is not a 3D array")
-    if peaks not in [1, 2]:
-        raise ValueError("Peaks must be 1 or 2")
-
-    # apply the function to every frame
-    if peaks == 1:
-        output = np.apply_along_axis(fit_gauss_to_hist, axis=0, arr=data)
-    if peaks == 2:
-        output = np.apply_along_axis(fit_2_gauss_to_hist, axis=0, arr=data)
-    return output
-
-
 def gaussian(x: float, a: float, mu: float, sigma: float) -> float:
     return a * np.exp(-((x - mu) ** 2) / (2 * sigma**2))
 

@@ -67,42 +67,21 @@ class Default(Analysis):
     def calculate(self):
         _logger.info("Start calculating bad slopes map")
         slopes = io.get_data_from_file(self.data_h5, "preproc_slope_nreps")
-        fitted = utils.apply_pixelwise(self.available_cpus,
-            slopes, fit.fit_gauss_to_hist
-        )
+        fitted = utils.apply_pixelwise(self.available_cpus, slopes, fit.fit_gauss_to_hist)
         _logger.info("Finished fitting")
         lower_bound = fitted[1, :, :] - self.thres_bad_slopes * np.abs(fitted[2, :, :])
         upper_bound = fitted[1, :, :] + self.thres_bad_slopes * np.abs(fitted[2, :, :])
         bad_slopes_mask = (slopes < lower_bound) | (slopes > upper_bound)
-        output_info = {
-            "info": "slope values from nrep_data step are fitted pixel wise with a gaussian"
-        }
-        io.add_array(
-            self.out_h5, fitted, "1_slopes/fit_parameters", attributes=output_info
-        )
-        output_info = {
-            "info": "mask of bad slopes is calculated from the pixelwise fit"
-        }
-        io.add_array(
-            self.out_h5,
-            bad_slopes_mask,
-            "1_slopes/bad_slopes_mask",
-            attributes=output_info,
-        )
-        output_info = {"info": "count of number of bad slopes per pixel"}
-        io.add_array(
-            self.out_h5,
-            np.sum(bad_slopes_mask, axis=0),
-            "1_slopes/bad_slopes_count",
-            attributes=output_info,
-        )
+        io.add_array(self.out_h5, fitted, "1_clean/slope_fit_parameters")
+        io.add_array(self.out_h5, bad_slopes_mask, "1_clean/bad_slopes_mask")
+        io.add_array(self.out_h5, np.sum(bad_slopes_mask, axis=0), "1_clean/bad_slopes_count")
         failed_fits = np.sum(np.isnan(fitted[:, :, 1]))
         if failed_fits > 0:
             _logger.warning(
                 f"Failed fits: {failed_fits} ({failed_fits/(self.column_size*self.row_size)*100:.2f}%)"
             )
-        _logger.info("Loading Pixel Data")
         data = io.get_data_from_file(self.data_h5, "preproc_mean_nreps")
+        io.add_array(self.out_h5, data, "1_clean/raw_pixel_data")
         _logger.info("Removing bad slopes")
         data[bad_slopes_mask] = np.nan
         sum_bad_slopes = np.sum(bad_slopes_mask)
@@ -110,45 +89,22 @@ class Default(Analysis):
             f"Signals removed due to bad slopes: {sum_bad_slopes} ({sum_bad_slopes/(bad_slopes_mask.size)*100:.2f}%)"
         )
         _logger.info("Removing outliers")
-        fitted = utils.apply_pixelwise(self.available_cpus,
-            data, fit.fit_gauss_to_hist
-        )
+        fitted = utils.apply_pixelwise(self.available_cpus, data, fit.fit_gauss_to_hist)
         lower_bound = fitted[1, :, :] - 5 * np.abs(fitted[2, :, :])
         outlier_mask = (data < lower_bound)
         data[outlier_mask] = np.nan
-        output_info = {
-            "info": "Outliers detected by fitting a gauss."
-        }
-        io.add_array(
-            self.out_h5, outlier_mask, "2_offnoi/outlier_mask", attributes=output_info
-        )
+        io.add_array( self.out_h5, data, "1_clean/cleaned_pixel_data")
+        io.add_array( self.out_h5, outlier_mask, "1_clean/outlier_mask")
         sum_outliers = np.sum(outlier_mask)
-        _logger.warning(
-            f"Signals removed due to outliers: {sum_outliers} ({sum_outliers/(outlier_mask.size)*100:.2f}%)"
-        )
-        #set bad slopes to nan
-        
-        #fit noise peak
+        _logger.warning(f"Signals removed due to outliers: {sum_outliers} ({sum_outliers/(outlier_mask.size)*100:.2f}%)")
         _logger.info("Fitting pixelwise")
-        fitted = utils.apply_pixelwise(self.available_cpus,
-            data, fit.fit_gauss_to_hist
-        )
-        output_info = {
-            "info": "pixel data without outliers and bad slopes is fitted with a gaussian"
-        }
-        io.add_array(
-            self.out_h5, fitted, "2_offnoi/fit_parameters", attributes=output_info
-        )
+        fitted = utils.apply_pixelwise(self.available_cpus, data, fit.fit_gauss_to_hist)
+        io.add_array(self.out_h5, fitted, "2_offnoi/fit_parameters")
         offset = fitted[1]
         noise = fitted[2]
         _logger.info("Subtracting second offset")
         data -= offset[np.newaxis,:,:]
-        output_info = {
-            "info": "pixel data without outliers and bad slopes after second offset correction"
-        }
-        io.add_array(
-            self.out_h5, data, "2_offnoi/pixel_data", attributes=output_info
-        )
+        io.add_array(self.out_h5, data, "2_offnoi/pixel_data")
         _logger.info("Start Calculating event_map")
         structure = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
         event_map = an.group_pixels(
