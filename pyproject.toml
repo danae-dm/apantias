@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "apantias"
-version = "1.1.6"
+version = "2.0.0"
 authors = [
   { name="Florian Heinrich", email="florianheinrich@gmx.at" },
 ]
@@ -18,7 +18,8 @@ dependencies = [
     "scipy",
     "seaborn",
     "h5py",
-    "numba"
+    "numba",
+    "scikit_learn"
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

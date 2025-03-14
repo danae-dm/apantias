@@ -3,13 +3,34 @@ import os
 
 import numpy as np
 from numba import njit, prange
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, wait
+from scipy import stats
+from sklearn.cluster import DBSCAN
 
-from . import logger
 from . import fitting
 
 
-_logger = logger.Logger(__name__, "info").get_logger()
+def shapiro(data, axis):
+    result_shape = list(data.shape)
+    result_shape.pop(axis)
+    result = np.zeros(result_shape, dtype=float)
+
+    # Iterate over the slices along the specified axis
+    it = np.nditer(result, flags=["multi_index"])
+    while not it.finished:
+        # Get the slice indices
+        idx = list(it.multi_index)
+        idx.insert(axis, slice(None))
+
+        # Perform the Shapiro-Wilk test
+        shapiro_stat, shapiro_p_value = stats.shapiro(data[tuple(idx)])
+
+        # Determine if the slice follows a normal distribution
+        result[it.multi_index] = shapiro_p_value
+
+        it.iternext()
+
+    return result
 
 
 def get_avg_over_nreps(data: np.ndarray) -> np.ndarray:
@@ -21,7 +42,6 @@ def get_avg_over_nreps(data: np.ndarray) -> np.ndarray:
         np.array in shape (nframes, column_size, row_size)
     """
     if np.ndim(data) != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     return nanmean(data, axis=2)
 
@@ -60,7 +80,6 @@ def apply_slope_fit_along_frames(data):
         3D np.array (frame,row,col) with slope value
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_0_size = data.shape[0]
     axis_1_size = data.shape[1]
@@ -75,9 +94,24 @@ def apply_slope_fit_along_frames(data):
     return output
 
 
+def split_h5_path(path: str) -> tuple:
+    """
+    Splits the h5_path into the directory and the filename.
+    Example path: /path/to/file.h5/group1/dataset1
+    Args:
+        path: str
+    Returns:
+        tuple: (directory, filename)
+    """
+    h5_file = path.split(".h5")[0] + ".h5"
+    dataset_path = path.split(".h5")[1]
+    return h5_file, dataset_path
+
+
 def nanmedian(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray:
     """
     The equivalent to np.nanmedian(data, axis=axis, keepdims=keepdims).
+    Runs in parallel using numba.
     """
     if data.ndim == 2:
         if axis == 0:
@@ -128,13 +162,13 @@ def nanmedian(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray
             else:
                 return _nanmedian_4d_axis3(data)
     else:
-        _logger.error("Data has wrong dimensions")
-        return
+        raise ValueError("Data has wrong dimensions")
 
 
 def nanmean(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray:
     """
     The equivalent to np.nanmean(data, axis=axis, keepdims=keepdims).
+    Runs in parallel using numba.
     """
     if data.ndim == 2:
         if axis == 0:
@@ -185,8 +219,7 @@ def nanmean(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray:
             else:
                 return _nanmean_4d_axis3(data)
     else:
-        _logger.error("Data has wrong dimensions")
-        return
+        raise ValueError("Data has wrong dimensions")
 
 
 @njit(parallel=True)
@@ -199,7 +232,6 @@ def _nanmedian_4d_axis0(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_1_size = data.shape[1]
     axis_2_size = data.shape[2]
@@ -223,7 +255,6 @@ def _nanmedian_4d_axis1(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_0_size = data.shape[0]
     axis_2_size = data.shape[2]
@@ -247,7 +278,6 @@ def _nanmedian_4d_axis2(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_0_size = data.shape[0]
     axis_1_size = data.shape[1]
@@ -271,7 +301,6 @@ def _nanmedian_4d_axis3(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_0_size = data.shape[0]
     axis_1_size = data.shape[1]
@@ -295,7 +324,6 @@ def _nanmedian_3d_axis0(data: np.ndarray) -> np.ndarray:
         2D np.array
     """
     if data.ndim != 3:
-        _logger.error("Input data is not a 3D array.")
         raise ValueError("Input data is not a 3D array.")
     axis_1_size = data.shape[1]
     axis_2_size = data.shape[2]
@@ -317,7 +345,6 @@ def _nanmedian_3d_axis1(data: np.ndarray) -> np.ndarray:
         2D np.array
     """
     if data.ndim != 3:
-        _logger.error("Input data is not a 3D array.")
         raise ValueError("Input data is not a 3D array.")
     axis_0_size = data.shape[0]
     axis_2_size = data.shape[2]
@@ -339,7 +366,6 @@ def _nanmedian_3d_axis2(data: np.ndarray) -> np.ndarray:
         2D np.array
     """
     if data.ndim != 3:
-        _logger.error("Input data is not a 3D array.")
         raise ValueError("Input data is not a 3D array.")
     axis_0_size = data.shape[0]
     axis_1_size = data.shape[1]
@@ -361,7 +387,6 @@ def _nanmedian_2d_axis0(data: np.ndarray) -> np.ndarray:
         1D np.array
     """
     if data.ndim != 2:
-        _logger.error("Input data is not a 2D array.")
         raise ValueError("Input data is not a 2D array.")
     axis_1_size = data.shape[1]
     output = np.zeros(axis_1_size)
@@ -381,7 +406,6 @@ def _nanmedian_2d_axis1(data: np.ndarray) -> np.ndarray:
         1D np.array
     """
     if data.ndim != 2:
-        _logger.error("Input data is not a 2D array.")
         raise ValueError("Input data is not a 2D array.")
     axis_0_size = data.shape[0]
     output = np.zeros(axis_0_size)
@@ -401,7 +425,6 @@ def _nanmean_4d_axis0(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_1_size = data.shape[1]
     axis_2_size = data.shape[2]
@@ -425,7 +448,6 @@ def _nanmean_4d_axis1(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_0_size = data.shape[0]
     axis_2_size = data.shape[2]
@@ -449,7 +471,6 @@ def _nanmean_4d_axis2(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_0_size = data.shape[0]
     axis_1_size = data.shape[1]
@@ -473,7 +494,6 @@ def _nanmean_4d_axis3(data: np.ndarray) -> np.ndarray:
         3D np.array
     """
     if data.ndim != 4:
-        _logger.error("Input data is not a 4D array.")
         raise ValueError("Input data is not a 4D array.")
     axis_0_size = data.shape[0]
     axis_1_size = data.shape[1]
@@ -497,7 +517,6 @@ def _nanmean_3d_axis0(data: np.ndarray) -> np.ndarray:
         2D np.array
     """
     if data.ndim != 3:
-        _logger.error("Input data is not a 3D array.")
         raise ValueError("Input data is not a 3D array.")
     axis_1_size = data.shape[1]
     axis_2_size = data.shape[2]
@@ -519,7 +538,6 @@ def _nanmean_3d_axis1(data: np.ndarray) -> np.ndarray:
         2D np.array
     """
     if data.ndim != 3:
-        _logger.error("Input data is not a 3D array.")
         raise ValueError("Input data is not a 3D array.")
     axis_0_size = data.shape[0]
     axis_2_size = data.shape[2]
@@ -541,7 +559,6 @@ def _nanmean_3d_axis2(data: np.ndarray) -> np.ndarray:
         2D np.array
     """
     if data.ndim != 3:
-        _logger.error("Input data is not a 3D array.")
         raise ValueError("Input data is not a 3D array.")
     axis_0_size = data.shape[0]
     axis_1_size = data.shape[1]
@@ -563,7 +580,6 @@ def _nanmean_2d_axis0(data: np.ndarray) -> np.ndarray:
         1D np.array
     """
     if data.ndim != 2:
-        _logger.error("Input data is not a 2D array.")
         raise ValueError("Input data is not a 2D array.")
     axis_1_size = data.shape[1]
     output = np.zeros(axis_1_size)
@@ -583,7 +599,6 @@ def _nanmean_2d_axis1(data: np.ndarray) -> np.ndarray:
         1D np.array
     """
     if data.ndim != 2:
-        _logger.error("Input data is not a 2D array.")
         raise ValueError("Input data is not a 2D array.")
     axis_0_size = data.shape[0]
     output = np.zeros(axis_0_size)
@@ -696,7 +711,7 @@ def parse_numpy_slicing(slicing_str: str) -> list:
     return slices
 
 
-def process_row(func, row_data, row, *args, **kwargs):
+def process_batch(func, row_data, *args, **kwargs):
     """
     Helper function to apply a function to a row of data.
     """
@@ -704,11 +719,11 @@ def process_row(func, row_data, row, *args, **kwargs):
     def func_with_args(data):
         return func(data, *args, **kwargs)
 
-    row_results = np.apply_along_axis(func_with_args, axis=0, arr=row_data)
-    return row, row_results
+    batch_results = np.apply_along_axis(func_with_args, axis=0, arr=row_data)
+    return batch_results
 
 
-def parallel_pixelwise(data, func, *args, **kwargs) -> np.ndarray:
+def apply_pixelwise(cores, data, func, *args, **kwargs) -> np.ndarray:
     """
     Helper function to apply a function to each pixel in a 3D numpy array in parallel.
     Data must have shape (n,row,col). The function is applied to [:,row,col].
@@ -716,41 +731,79 @@ def parallel_pixelwise(data, func, *args, **kwargs) -> np.ndarray:
     The passed function must accept a 1D array as input and must have a 1D array as output.
     The passed function must have a data parameter, which is the first argument.
     """
-    # check data consistency
     if data.ndim != 3:
         raise ValueError("Data must be a 3D array.")
     # try the passed function and check return value
     try:
         result = func(data[:, 0, 0], *args, **kwargs)
+        result_shape = result.shape
+        result_type = result.dtype
     except Exception as e:
-        _logger.error(f"Error when trying to apply the function: {e}")
+        raise ValueError(f"Error applying function to data: {e}")
     if not isinstance(result, np.ndarray):
         raise ValueError("Function must return a numpy array.")
     if result.ndim != 1:
         raise ValueError("Function must return a 1D numpy array.")
     # initialize results, now that we know what the function returns
-    results = np.zeros((data.shape[1], data.shape[2], result.shape[0]))
+    if cores == 1:
+        return func(data, *args, **kwargs)
 
+    rows_per_process = divide_evenly(data.shape[1], cores)
+    results = np.zeros((result_shape[0], data.shape[1], data.shape[2]), dtype=result_type)
     with ProcessPoolExecutor() as executor:
         futures = []
-        for row in range(data.shape[1]):
+        for i in range(cores):
             # copy the data of one row and submit it to the executor
             # this is necessary to avoid memory issues
-            row_data = np.copy(data[:, row, :])
+            process_data = data[
+                :, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :
+            ]
             futures.append(
-                executor.submit(process_row, func, row_data, row, *args, **kwargs)
-            )
-            _logger.debug(f"Submitted row {row} to the executor.")
-        total_futures = len(futures)
-        completed_futures = 0
-        for future in as_completed(futures):
-            try:
-                row, row_results = future.result()
-                results[row] = row_results.T
-                completed_futures += 1
-                _logger.debug(
-                    f"Completed row {row} ({completed_futures}/{total_futures})"
+                executor.submit(
+                    process_batch, func, process_data.copy(), *args, **kwargs
                 )
+            )
+        #wait for all futures to be done
+        done, not_done = wait(futures)
+        # Process the results in the order they were submitted
+        for i, future in enumerate(futures):
+            try:
+                batch_results = future.result()
+                results[
+                    :, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :
+                ] = batch_results
             except Exception as e:
-                _logger.error(f"Error processing column {row}: {e}")
+                raise e
     return results
+
+
+def dbscan_outliers(data, eps, min_samples, inline=False):
+    """
+    i tested this for some pixel histograms and it works well
+    eps=1 and min_samples=2 seems to work well
+    that means a pixel is considered an outlier if it is not part of a cluster of at least 2 pixels
+    (including itself, min_samples=2) that are within a distance of 1 (eps) from each other
+    """
+    db = DBSCAN(eps=eps, min_samples=min_samples)
+    labels = db.fit_predict(data.reshape(-1, 1))
+    if labels.shape != data.shape:
+        labels = labels.reshape(data.shape)
+    if not inline:
+        return (labels == -1)
+    else:
+        data[labels == -1] = np.nan
+
+def divide_evenly(number, parts):
+    """
+    Divides an integer number evenly into a set of integers.
+    Args:
+        number: The integer number to be divided.
+        parts: The number of parts to divide into.
+    Returns:
+        A list of integers representing the divided parts.
+    """
+    quotient, remainder = divmod(number, parts)
+    result = [quotient] * parts
+    for i in range(remainder):
+        result[i] += 1
+    return result

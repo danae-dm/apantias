@@ -5,10 +5,7 @@ from scipy.optimize import curve_fit
 import numpy as np
 from numba import njit, prange
 
-from . import logger
 from . import utils
-
-_logger = logger.Logger(__name__, "info").get_logger()
 
 
 def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
@@ -52,7 +49,6 @@ def fit_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
             ]
         )
     except:
-        _logger.debug("Fitting for this histogram failed. Returning NaNs.")
         return np.array([np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
 
 
@@ -122,7 +118,6 @@ def fit_2_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
             ]
         )
     except:
-        _logger.debug("Fitting for this histogram failed. Returning NaNs.")
         return np.array(
             [
                 np.nan,
@@ -139,58 +134,6 @@ def fit_2_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
                 np.nan,
             ]
         )
-
-
-def process_row(data, row, peaks):
-    if peaks not in [1, 2]:
-        raise ValueError("Peaks must be 1 or 2")
-    if peaks == 1:
-        result = np.apply_along_axis(fit_gauss_to_hist, axis=0, arr=data)
-    if peaks == 2:
-        result = np.apply_along_axis(fit_2_gauss_to_hist, axis=0, arr=data)
-    return row, result
-
-
-def get_pixelwise_fit(data: np.ndarray, peaks: int) -> np.ndarray:
-    # apply the function to every pixel
-    if peaks not in [1, 2]:
-        raise ValueError("Peaks must be 1 or 2")
-    if peaks == 1:
-        return utils.parallel_pixelwise(data, fit_gauss_to_hist)
-    if peaks == 2:
-        return utils.parallel_pixelwise(data, fit_2_gauss_to_hist)
-
-
-def get_fit_over_frames(data: np.ndarray, peaks: int) -> np.ndarray:
-    """
-    fits a gaussian for every pixel. The fitting is done over the
-    histogram of the pixel values from all frames using the scipy
-    curve_fit method.
-
-    Args:
-        data: in shape (nframes, column_size, row_size)
-    Returns:
-        np.array in shape (6, rows, columns)
-        index 0: amplitude
-        index 1: mean
-        index 2: sigma
-        index 3: error_amplitude
-        index 4: error_mean
-        index 5: error_sigma
-    """
-    if data.ndim != 3:
-        _logger.error("Data is not a 3D array")
-        raise ValueError("Data is not a 3D array")
-    if peaks not in [1, 2]:
-        _logger.error("Peaks must be 1 or 2")
-        raise ValueError("Peaks must be 1 or 2")
-
-    # apply the function to every frame
-    if peaks == 1:
-        output = np.apply_along_axis(fit_gauss_to_hist, axis=0, arr=data)
-    if peaks == 2:
-        output = np.apply_along_axis(fit_2_gauss_to_hist, axis=0, arr=data)
-    return output
 
 
 def gaussian(x: float, a: float, mu: float, sigma: float) -> float:

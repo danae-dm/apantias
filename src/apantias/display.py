@@ -2,10 +2,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 
-from . import logger
 from . import fitting
-
-_logger = logger.Logger(__name__, "info").get_logger()
 
 
 def draw_hist(
@@ -47,7 +44,6 @@ def draw_heatmap(
         **kwargs: is passed to plt.hist
     """
     if data.ndim != 2:
-        _logger.error("Input data is not a 2D array.")
         raise ValueError("Input data is not a 2D array.")
     plt.clf()
     cmap = kwargs.get("cmap", "coolwarm")

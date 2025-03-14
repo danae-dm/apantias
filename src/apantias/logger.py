@@ -1,6 +1,6 @@
 import logging
-import time
 import sys
+
 
 """
 levels:
@@ -19,7 +19,7 @@ class CustomFormatter(logging.Formatter):
     red = "\x1b[31;20m"
     bold_red = "\x1b[31;1m"
     reset = "\x1b[0m"
-    format = "%(asctime)s - %(levelname)s - %(message)s"
+    format = "%(asctime)s - %(message)s"
 
     FORMATS = {
         logging.DEBUG: grey + format + reset,
@@ -36,7 +36,7 @@ class CustomFormatter(logging.Formatter):
 
 
 class Logger:
-    def __init__(self, logger_name: str, level: str = "info", file_name: str = None):
+    def __init__(self, logger_name: str, level: str = "info"):
         # Create a logger
         self.logger = logging.getLogger(logger_name)
         levels = [
@@ -51,18 +51,6 @@ class Logger:
         level = levels[["debug", "info", "warning", "error", "critical"].index(level)]
         self.logger.setLevel(level)
 
-        if file_name is not None:
-            # Create a file handler
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
-            fh = logging.FileHandler(timestamp + "_" + file_name)
-            fh.setLevel(level)
-            # Add the formatter to the handler
-            fh.setFormatter(CustomFormatter())
-            # Add the handler to the logger
-            self.logger.addHandler(fh)
-            # print to sys.stdout to avoid red background in notebook
-            fh = logging.StreamHandler(sys.stdout)
-
         # Create a console handler
         ch = logging.StreamHandler(sys.stdout)
         ch.setLevel(level)
@@ -73,3 +61,7 @@ class Logger:
 
     def get_logger(self) -> logging.Logger:
         return self.logger
+
+
+# Create a global logger instance to avoid multiple handlers
+global_logger = Logger("apantias", level="info").get_logger()
