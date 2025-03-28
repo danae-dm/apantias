@@ -1,3 +1,9 @@
+"""
+This module provides simple visualization functions for displaying data in a notebook or saving plots.
+It includes utilities for drawing histograms, heatmaps, line graphs, and histograms with Gaussian fits.
+The module leverages Matplotlib and Seaborn for creating visualizations.
+"""
+
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
@@ -83,7 +89,7 @@ def draw_hist_and_gauss_fit(
     Draw a histogram of the data and a gaussian fit
     """
     plt.clf()
-    hist, hist_bins = np.histogram(
+    _, hist_bins = np.histogram(
         data, bins, range=(np.nanmin(data), np.nanmax(data)), density=True
     )
     bin_centers = (hist_bins[:-1] + hist_bins[1:]) / 2

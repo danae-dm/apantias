@@ -1,3 +1,10 @@
+"""
+This module provides various functions and utilities for data analysis,
+including slope calculation, common mode correction, and pixel grouping
+using threshold-based labeling. It leverages Numba for parallel processing
+to optimize performance on large datasets.
+"""
+
 import numpy as np
 from numba import njit, prange
 
@@ -8,9 +15,9 @@ def get_slopes(data: np.ndarray) -> np.ndarray:
     """
     Calculates the slope over nreps for every pixel and frame in parallel using numba.
     Args:
-        data: np.array (nframes, column_size, nreps, row_size)
+        data: (nframes, column_size, nreps, row_size)
     Returns:
-        slopes: np.array (nframes, column_size, row_size)
+        slopes: (nframes, column_size, row_size)
     """
     if np.ndim(data) != 4:
         raise ValueError("Input data is not a 4D array.")
@@ -24,20 +31,22 @@ def correct_common_mode(data: np.ndarray) -> None:
     the row. The median is calculated in parallel using numba.
     Correction is done inline to save memory.
     Args:
-        np.array in shape (nframes, column_size, nreps, row_size)
+        data: (nframes, column_size, nreps, row_size)
     """
     if data.ndim != 4:
         raise ValueError("Data is not a 4D array")
-    # Iterate over the nframes dimension
-    # Calculate the median for one frame
-    # median_common = analysis_funcs.parallel_nanmedian_4d_axis3(data)
-    # Subtract the median from the frame in-place
     median_common = utils.nanmedian(data, axis=3, keepdims=True)
     data -= median_common
 
 
 @njit(parallel=True)
-def group_pixels(data: np.ndarray, primary_threshold: float, secondary_threshold: float, noise_map: np.ndarray, structure: np.ndarray) -> np.ndarray:
+def group_pixels(
+    data: np.ndarray,
+    primary_threshold: float,
+    secondary_threshold: float,
+    noise_map: np.ndarray,
+    structure: np.ndarray,
+) -> np.ndarray:
     """
     Uses the two pass labelling algorithm to group events.
     Pixels over the primary threshold are connected to pixels above the
@@ -47,6 +56,12 @@ def group_pixels(data: np.ndarray, primary_threshold: float, secondary_threshold
     The output is a numpy array of shape (frame,row,col) with zeroes if there
     is no event above the primary threshold. Clustered events are labeled with
     integers beginning with 1.
+    Args:
+        data: (nframes, column_size, row_size)
+        primary_threshold
+        secondary_threshold
+        noise_map: (column_size, row_size)
+        structure: (3,3)
     """
     output = np.zeros(data.shape, dtype=np.uint16)
     for frame_index in prange(data.shape[0]):

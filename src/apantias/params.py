@@ -1,5 +1,6 @@
+"""module description"""
+
 import os
-import fnmatch
 import json
 
 from .logger import global_logger
@@ -67,17 +68,18 @@ class Params:
             raise ValueError("No parameter file provided.")
 
     def update(self, json_path: str) -> None:
+        """Function description"""
         try:
-            with open(json_path) as f:
+            with open(json_path, encoding="utf-8") as f:
                 self.inp_dict = json.load(f)
-        except:
+        except Exception as exc:
             _logger.error("Error loading the parameter file.")
             self.save_default_file()
             _logger.error(
                 "A default parameter file has been saved to the current directory."
             )
             self.param_dict = None
-            raise ValueError("Error loading the parameter file.")
+            raise ValueError("Error loading the parameter file.") from exc
         self.param_dict = self.default_dict.copy()
         # check consistency of the input dict with the default dict
         for key, value in self.inp_dict.items():
@@ -86,7 +88,7 @@ class Params:
                 _logger.error(
                     "A default parameter file has been saved to the current directory."
                 )
-                raise (ValueError(f"{key} is not a valid parameter."))
+                raise ValueError(f"{key} is not a valid parameter.")
             else:
                 self.param_dict[key] = value
         # check for missing parameters, using default if not required
@@ -94,12 +96,13 @@ class Params:
         for key, value in self.param_dict.items():
             if value is None or value == "":
                 if key in self.required_params:
-                    _logger.error(f"{key} is missing in the file.")
+                    _logger.error("%s is missing in the file.", key)
                     _logger.error("Please provide a complete parameter file")
                     self.param_dict = None
                     raise ValueError(f"{key} is missing in the file.")
 
     def check_types(self) -> None:
+        """Function description"""
         for key, value in self.param_dict.items():
             if key not in self.params_types:
                 raise TypeError(f"There is no type defined for {key}.")
@@ -109,35 +112,20 @@ class Params:
                     raise TypeError(f"Expected {key} to be of type {expected_type}.")
 
     def get_dict(self) -> dict:
+        """Function description"""
         return self.param_dict
 
     def print_contents(self) -> None:
+        """Function description"""
         for key, value in self.param_dict.items():
-            _logger.info(f"{key}: {value}")
-
-    def info(self) -> None:
-        _logger.info("The following parameters must be provided:")
-        _logger.info("--common parameters:")
-        for key in self.common_params.keys():
-            _logger.info(key)
-        _logger.info("--offnoi parameters:")
-        for key in self.offnoi_params.keys():
-            _logger.info(key)
-        _logger.info("--filter parameters:")
-        for key in self.filter_params.keys():
-            _logger.info(key)
-        _logger.info("--gain parameters:")
-        for key in self.gain_params.keys():
-            _logger.info(key)
-        _logger.info("required parameters:")
-        for key in self.required_params:
-            _logger.info(key)
+            _logger.info("%s: %s", key, value)
 
     def save_default_file(self, path: str = None) -> None:
+        """Function description"""
         # if no path is provided, save to the current directory
         if path is None:
             path = os.path.join(os.getcwd(), "default_params.json")
         else:
             path = os.path.join(path, "default_params.json")
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(self.default_dict, f, indent=4)

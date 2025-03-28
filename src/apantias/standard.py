@@ -1,4 +1,5 @@
-import gc
+"""module description"""
+
 import os
 from datetime import datetime
 
@@ -15,13 +16,22 @@ from .logger import global_logger
 
 _logger = global_logger
 
+
 class Analysis:
+    """
+    A base class for performing data analysis on HDF5 files.
+
+    This class initializes the analysis environment by loading parameters from a
+    configuration file, extracting metadata from the input HDF5 file, and creating
+    an output HDF5 file for storing analysis results. It provides a foundation for
+    specific analysis workflows by managing parameters, logging, and file handling.
+    """
 
     def __init__(self, prm_file: str) -> None:
         self.prm_file = prm_file
         self.params = params.Params(prm_file)
-        _logger.info(f"APANTIAS Instance initialized with parameter file: {prm_file}")
-        self.params_dict = self.params.print_contents()
+        _logger.info("APANTIAS Instance initialized with parameter file: %s", prm_file)
+        self.params.print_contents()
         _logger.info("")
         # load values of parameter file
         self.params_dict = self.params.get_dict()
@@ -55,30 +65,63 @@ class Analysis:
             self.params_dict,
             self.custom_attributes,
         )
-        _logger.info(f"Created analysis h5 file: {self.results_dir}/{self.out_h5_name}")
+        _logger.info(
+            "Created analysis h5 file: %s/%s", self.results_dir, self.out_h5_name
+        )
 
 
 class Default(Analysis):
-    # inherits from Analysis
+    """ "
+    A default implementation of the Analysis class for processing HDF5 data.
+
+    This class extends the base Analysis class and provides a specific workflow for
+    analyzing HDF5 data. It performs tasks such as calculating bad slopes, removing
+    outliers, subtracting offsets, and generating event maps. The results are stored
+    in an output HDF5 file, organized into different groups for clean and structured
+    analysis.
+
+    Key Features:
+        - Fits Gaussian distributions to pixel data to identify bad slopes.
+        - Removes bad slopes and outliers from the data.
+        - Subtracts offsets and calculates cleaned pixel data.
+        - Generates event maps based on primary and secondary thresholds.
+        - Fits double Gaussian distributions to calculate gain parameters.
+
+    Attributes:
+        Inherits all attributes from the Analysis class.
+
+    Methods:
+        calculate():
+            Executes the default analysis workflow, including bad slope detection,
+            outlier removal, offset subtraction, event map generation, and gain fitting.
+    """
+
     def __init__(self, prm_file: str) -> None:
         super().__init__(prm_file)
         _logger.info("Default analysis initialized")
 
     def calculate(self):
+        """Function description"""
         _logger.info("Start calculating bad slopes map")
         slopes = io.get_data_from_file(self.data_h5, "preproc_slope_nreps")
-        fitted = utils.apply_pixelwise(self.available_cpus, slopes, fit.fit_gauss_to_hist)
+        fitted = utils.apply_pixelwise(
+            self.available_cpus, slopes, fit.fit_gauss_to_hist
+        )
         _logger.info("Finished fitting")
         lower_bound = fitted[1, :, :] - self.thres_bad_slopes * np.abs(fitted[2, :, :])
         upper_bound = fitted[1, :, :] + self.thres_bad_slopes * np.abs(fitted[2, :, :])
         bad_slopes_mask = (slopes < lower_bound) | (slopes > upper_bound)
         io.add_array(self.out_h5, fitted, "1_clean/slope_fit_parameters")
         io.add_array(self.out_h5, bad_slopes_mask, "1_clean/bad_slopes_mask")
-        io.add_array(self.out_h5, np.sum(bad_slopes_mask, axis=0), "1_clean/bad_slopes_count")
+        io.add_array(
+            self.out_h5, np.sum(bad_slopes_mask, axis=0), "1_clean/bad_slopes_count"
+        )
         failed_fits = np.sum(np.isnan(fitted[:, :, 1]))
         if failed_fits > 0:
             _logger.warning(
-                f"Failed fits: {failed_fits} ({failed_fits/(self.column_size*self.row_size)*100:.2f}%)"
+                "Failed fits: %d (%.2f%%)",
+                failed_fits,
+                (failed_fits / (self.column_size * self.row_size) * 100),
             )
         data = io.get_data_from_file(self.data_h5, "preproc_mean_nreps")
         io.add_array(self.out_h5, data, "1_clean/raw_pixel_data")
@@ -86,24 +129,30 @@ class Default(Analysis):
         data[bad_slopes_mask] = np.nan
         sum_bad_slopes = np.sum(bad_slopes_mask)
         _logger.warning(
-            f"Signals removed due to bad slopes: {sum_bad_slopes} ({sum_bad_slopes/(bad_slopes_mask.size)*100:.2f}%)"
+            "Signals removed due to bad slopes: %d (%.2f%%)",
+            sum_bad_slopes,
+            (sum_bad_slopes / (bad_slopes_mask.size) * 100),
         )
         _logger.info("Removing outliers")
         fitted = utils.apply_pixelwise(self.available_cpus, data, fit.fit_gauss_to_hist)
         lower_bound = fitted[1, :, :] - 5 * np.abs(fitted[2, :, :])
-        outlier_mask = (data < lower_bound)
+        outlier_mask = data < lower_bound
         data[outlier_mask] = np.nan
-        io.add_array( self.out_h5, data, "1_clean/cleaned_pixel_data")
-        io.add_array( self.out_h5, outlier_mask, "1_clean/outlier_mask")
+        io.add_array(self.out_h5, data, "1_clean/cleaned_pixel_data")
+        io.add_array(self.out_h5, outlier_mask, "1_clean/outlier_mask")
         sum_outliers = np.sum(outlier_mask)
-        _logger.warning(f"Signals removed due to outliers: {sum_outliers} ({sum_outliers/(outlier_mask.size)*100:.2f}%)")
+        _logger.warning(
+            "Signals removed due to outliers: %d (%.2f%%)",
+            sum_outliers,
+            (sum_outliers / (outlier_mask.size) * 100),
+        )
         _logger.info("Fitting pixelwise")
         fitted = utils.apply_pixelwise(self.available_cpus, data, fit.fit_gauss_to_hist)
         io.add_array(self.out_h5, fitted, "2_offnoi/fit_parameters")
         offset = fitted[1]
         noise = fitted[2]
         _logger.info("Subtracting second offset")
-        data -= offset[np.newaxis,:,:]
+        data -= offset[np.newaxis, :, :]
         io.add_array(self.out_h5, data, "2_offnoi/pixel_data")
         _logger.info("Start Calculating event_map")
         structure = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
@@ -120,10 +169,8 @@ class Default(Analysis):
         io.add_array(self.out_h5, event_counts, "3_filter/event_counts")
         io.add_array(self.out_h5, event_counts_sum, "3_filter/event_counts_sum")
         _logger.info("Start Fitting Gain")
-        fitted = utils.apply_pixelwise(self.available_cpus,
-            data, fit.fit_2_gauss_to_hist
+        fitted = utils.apply_pixelwise(
+            self.available_cpus, data, fit.fit_2_gauss_to_hist
         )
-        io.add_array(
-            self.out_h5, fitted, "4_gain/fit_parameters"
-        )
+        io.add_array(self.out_h5, fitted, "4_gain/fit_parameters")
         _logger.info("Analysis finished")

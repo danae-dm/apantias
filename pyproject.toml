@@ -11,7 +11,7 @@ authors = [
 ]
 description = "Tools for analysis of data from the DANAE experiment on HEPHY"
 readme = "README.md"
-requires-python = ">=3.8,<3.13"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "numpy",
     "matplotlib",
@@ -30,3 +30,26 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/shakamaran/apantias"
 Issues = "https://github.com/shakamaran/apantias/issues"
+
+[tool.pylint]
+# Disable specific checks
+disable = [
+    "R0903",
+    "R0914",
+    "C0301",
+    "W0105",
+    "E1133" # not an iterable error, for numba's prange
+]
+
+# Set the maximum line length (e.g., to match Black's default of 88)
+max-line-length = 88
+
+# Ignore specific directories or files
+ignore = [".github", ".vscode", "dist", "pip-wheel-metadata", "tests", ".gitignore", "LICENSE", "pyproject.toml", "README.md"]
+
+[tool.mypy]
+ignore_missing_imports = true
+strict = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
