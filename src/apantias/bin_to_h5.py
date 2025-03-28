@@ -386,6 +386,7 @@ def _process_raw_data(
     # read data from bin file, multiple processes can read from the same file
     # write the avg attribute to the dset to determine what to average later in the vds
     try:
+        #Sometimes reading takes considerably longer for some processes, i dont know why (yet)
         data = _read_data_from_bin(
             bin, column_size, row_size, key_ints, nreps, offset, counts
         )
@@ -639,6 +640,13 @@ def create_data_file_from_bins(
                 f"batch {batch_index+1}/{len(workload_dict[bin])} started, "
                 f"{available_cpu_cores} processes are running."
             )
+            finished = []
+            while any(p.is_alive() for p in processes):
+                finished_new = [i for i, p in enumerate(processes) if not p.is_alive()]
+                if not (finished == finished_new):
+                    _logger.info(f"Processes finished so far: {finished_new}")
+                    finished = finished_new
+                time.sleep(5)
             for p in processes:
                 p.join()
     _logger.info("Raw Data processed.")
@@ -675,6 +683,13 @@ def create_data_file_from_bins(
                 f"batch {batch_index+1}/{len(workload_dict[bin])} started, "
                 f"{available_cpu_cores} processes are running."
             )
+            finished = []
+            while any(p.is_alive() for p in processes):
+                finished_new = [i for i, p in enumerate(processes) if not p.is_alive()]
+                if not (finished == finished_new):
+                    _logger.info(f"Processes finished so far: {finished_new}")
+                    finished = finished_new
+                time.sleep(5)
             for p in processes:
                 p.join()
     _logger.info("Preprocessing finished.")
