@@ -639,6 +639,13 @@ def create_data_file_from_bins(
                 f"batch {batch_index+1}/{len(workload_dict[bin])} started, "
                 f"{available_cpu_cores} processes are running."
             )
+            finished = []
+            while any(p.is_alive() for p in processes):
+                finished_new = [i for i, p in enumerate(processes) if not p.is_alive()]
+                if not (finished == finished_new):
+                    _logger.info(f"Processes finished so far: {finished_new}")
+                    finished = finished_new
+                time.sleep(5)
             for p in processes:
                 p.join()
     _logger.info("Raw Data processed.")
@@ -675,6 +682,13 @@ def create_data_file_from_bins(
                 f"batch {batch_index+1}/{len(workload_dict[bin])} started, "
                 f"{available_cpu_cores} processes are running."
             )
+            finished = []
+            while any(p.is_alive() for p in processes):
+                finished_new = [i for i, p in enumerate(processes) if not p.is_alive()]
+                if not (finished == finished_new):
+                    _logger.info(f"Processes finished so far: {finished_new}")
+                    finished = finished_new
+                time.sleep(5)
             for p in processes:
                 p.join()
     _logger.info("Preprocessing finished.")
