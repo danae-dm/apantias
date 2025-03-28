@@ -386,6 +386,7 @@ def _process_raw_data(
     # read data from bin file, multiple processes can read from the same file
     # write the avg attribute to the dset to determine what to average later in the vds
     try:
+        #Sometimes reading takes considerably longer for some processes, i dont know why (yet)
         data = _read_data_from_bin(
             bin, column_size, row_size, key_ints, nreps, offset, counts
         )
