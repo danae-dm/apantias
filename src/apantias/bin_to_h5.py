@@ -10,6 +10,7 @@ import time
 import os
 import gc
 
+from typing import Optional
 import h5py
 import numpy as np
 
@@ -129,7 +130,7 @@ def _get_workload_dict(
     return workload_dict
 
 
-def _get_vds_list(workload_dict: list, old_list: list = None) -> list:
+def _get_vds_list(workload_dict: dict, old_list: list = None) -> list:  # type: ignore
     """
     Creates a list used for the creation of virtual datasets (VDS).
 
@@ -173,6 +174,8 @@ def _get_vds_list(workload_dict: list, old_list: list = None) -> list:
             ...
         ]
     """
+    if old_list is None:
+        old_list = []
     datasets = []
     for bin_file in workload_dict.keys():
         for _, batch in enumerate(workload_dict[bin_file]):
@@ -196,7 +199,7 @@ def _get_vds_list(workload_dict: list, old_list: list = None) -> list:
     vds_list = []
     for dataset in datasets:
         dataset_name = dataset[0]
-        if old_list is not None:
+        if old_list:
             # check if datset_name is in the old_list
             if not any(d.get("name") == dataset_name for d in old_list):
                 vds_list.append(
@@ -259,12 +262,9 @@ def _avg_frames(h5_file: str, vds_list: list):
                 median = np.median(source, axis=0)
                 f.create_dataset(name + "_median_frames", data=median)
             elif avg == "weighted":
-                if isinstance(f["raw_data"], h5py.Dataset):
-                    total_frames = f["raw_data"].shape[0]
-                else:
-                    raise ValueError(
-                        "Expected 'raw_data' to be a dataset, but found a group."
-                    )
+                dset = f["raw_data"]
+                assert isinstance(dset, h5py.Dataset)
+                total_frames = dset.shape[0]
                 weighted_avg = np.sum(source, axis=0) / total_frames
                 f.create_dataset(name + "_weighted_frames", data=weighted_avg)
 
@@ -285,10 +285,11 @@ def _create_vds(h5_file: str, vds_list: list):
         sources = dataset["sources"]
         final_shape = tuple(dataset["final_shape"])
         # get type of first dataset
-        dtype = h5py.File(sources[0].split(".h5")[0] + ".h5", "r")[
+        dset = h5py.File(sources[0].split(".h5")[0] + ".h5", "r")[
             sources[0].split(".h5")[1]
-        ].dtype
-        layout = h5py.VirtualLayout(shape=final_shape, dtype=dtype)
+        ]
+        assert isinstance(dset, h5py.Dataset)
+        layout = h5py.VirtualLayout(shape=final_shape, dtype=dset.dtype)
         with h5py.File(h5_file, "a") as f:
             start_index = 0
             for source in sources:
@@ -296,6 +297,7 @@ def _create_vds(h5_file: str, vds_list: list):
                 source_dataset = source.split(".h5")[1]
                 with h5py.File(source_h5, "r") as source_f:
                     dset = source_f[source_dataset]
+                    assert isinstance(dset, h5py.Dataset)
                     sh = dset.shape
                     attributes = dict(dset.attrs)
                 end_index = start_index + sh[0]
@@ -311,6 +313,7 @@ def _create_vds(h5_file: str, vds_list: list):
                     group = f.create_group(group_name)
                 else:
                     group = f[group_name]
+                assert isinstance(group, h5py.Group)
                 dset = group.create_virtual_dataset(dset_name, layout, fillvalue=np.nan)
                 for key, value in attributes.items():
                     dset.attrs[key] = value
@@ -350,7 +353,7 @@ def _read_data_from_bin(
     inp_data = np.fromfile(bin_file, dtype="uint16", count=counts, offset=offset)
     # check if file is at its end
     if inp_data.size == 0:
-        return None
+        raise ValueError(f"File {bin_file} is empty or corrupted")
     # reshape the array into rows -> (#ofRows,67)
     try:
         inp_data = inp_data.reshape(-1, raw_row_size)
@@ -399,18 +402,20 @@ def _write_data_to_h5(path: str, data: np.ndarray, attributes=None) -> None:
         current_group = f
         for group in groups:
             if group not in current_group:
+                assert isinstance(current_group, (h5py.Group, h5py.File))
                 current_group = current_group.create_group(group)
             else:
+                assert isinstance(current_group, (h5py.Group, h5py.File))
                 current_group = current_group[group]
         if dataset in current_group:
             raise ValueError(f"Dataset {dataset} already exists in {h5_file}")
-        else:
-            dataset = current_group.create_dataset(
-                dataset, dtype=data.dtype, data=data, chunks=None
-            )
-            if attributes is not None:
-                for key, value in attributes.items():
-                    dataset.attrs[key] = value
+        assert isinstance(current_group, (h5py.Group, h5py.File))
+        dataset = current_group.create_dataset(
+            dataset, dtype=data.dtype, data=data, chunks=None
+        )
+        if attributes is not None:
+            for key, value in attributes.items():
+                dataset.attrs[key] = value
 
 
 def _read_data_from_h5(path: str) -> np.ndarray:
@@ -425,7 +430,9 @@ def _read_data_from_h5(path: str) -> np.ndarray:
     """
     h5_file, dataset_path = utils.split_h5_path(path)
     with h5py.File(h5_file, "r") as f:
-        data = f[dataset_path][:]
+        data = f[dataset_path]
+        assert isinstance(data, h5py.Dataset)
+        data = data[:]
     return data
 
 
@@ -443,9 +450,10 @@ def _get_datasets_from_h5(path: str) -> list:
     with h5py.File(h5_file, "r") as f:
         datasets = []
         group = f[group_path]
+        assert isinstance(group, (h5py.File, h5py.Group))
         for name, item in group.items():
-            if isinstance(item, h5py.Dataset):
-                datasets.append([name, list(item.shape), dict(item.attrs)])
+            assert isinstance(item, h5py.Dataset)
+            datasets.append([name, list(item.shape), dict(item.attrs)])
     return datasets
 
 
@@ -544,10 +552,12 @@ def _preprocess(
         data = data[:, :, ignore_first_nreps:, :]
         data = data.astype(np.float64)
         if ext_dark_frame_dset is not None:
-            offset = _read_data_from_h5(ext_dark_frame_dset)
+            offset_map = _read_data_from_h5(ext_dark_frame_dset)
         else:
-            offset = _read_data_from_h5(h5_file_virtual + "raw_offset_weighted_frames")
-        data -= offset
+            offset_map = _read_data_from_h5(
+                h5_file_virtual + "raw_offset_weighted_frames"
+            )
+        data -= offset_map
         common_modes = np.median(data, axis=3, keepdims=True)
         data -= common_modes
         _write_data_to_h5(
@@ -623,9 +633,9 @@ def create_data_file_from_bins(
     offset: int = 8,
     available_cpu_cores: int = 4,
     available_ram_gb: int = 16,
-    ext_dark_frame_h5: str = None,
-    nreps_eval: list[list[int]] = None,
-    attributes: dict = None,
+    ext_dark_frame_h5: str = "",
+    nreps_eval: Optional[list[list[int]]] = None,  # Updated to Optional
+    attributes: Optional[dict] = None,  # Updated to Optional
 ) -> None:
     """
     Processes binary data files and converts them into HDF5 format with virtual datasets.
@@ -692,19 +702,15 @@ def create_data_file_from_bins(
             f"Not all bin_file files have the same number of nreps: {nreps_list}"
         )
     # check if external dark frame exists and has the right shape
-    if ext_dark_frame_h5 is not None:
+    if ext_dark_frame_h5 is not "":
         ext_h5_file = ext_dark_frame_h5.split(".h5")[0] + ".h5"
         ext_group_path = ext_dark_frame_h5.split(".h5")[1]
         if not os.path.exists(ext_h5_file):
             raise FileNotFoundError(f'File "{ext_h5_file}" does not exist')
         with h5py.File(ext_h5_file, "r") as f:
-            try:
-                shape = f[ext_group_path].shape
-            except Exception as e:
-                raise ValueError(
-                    f"Could not read shape of external dark frame {ext_dark_frame_h5}: {e}"
-                ) from e
-            if shape[0] != column_size or shape[1] != row_size:
+            dset = f[ext_group_path]
+            assert isinstance(dset, h5py.Dataset)
+            if dset.shape[0] != column_size or dset.shape[1] != row_size:
                 raise ValueError(
                     f"Shape of external dark frame {ext_dark_frame_h5} does"
                     "not match ({column_size}, {row_size}) of the bin_file files"
