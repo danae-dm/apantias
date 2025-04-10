@@ -65,9 +65,7 @@ def draw_heatmap(
         plt.show()
 
 
-def draw_graph(
-    data: np.ndarray, file_name: str = "graph", save_to: Optional[str] = None, **kwargs
-) -> None:
+def draw_graph(data: np.ndarray, file_name: str = "graph", save_to: Optional[str] = None, **kwargs) -> None:
     """
     Draw a graph of the data. If a folder is provided, the plot is saved.
     """
@@ -93,9 +91,7 @@ def draw_hist_and_gauss_fit(
     Draw a histogram of the data and a gaussian fit
     """
     plt.clf()
-    _, hist_bins = np.histogram(
-        data, bins, range=(np.nanmin(data), np.nanmax(data)), density=True
-    )
+    _, hist_bins = np.histogram(data, bins, range=(np.nanmin(data), np.nanmax(data)), density=True)
     bin_centers = (hist_bins[:-1] + hist_bins[1:]) / 2
     plt.hist(data, bins=hist_bins.tolist(), density=True, alpha=0.5)
     plt.plot(bin_centers, fitting.gaussian(bin_centers, amplitude, mean, sigma), "r-")

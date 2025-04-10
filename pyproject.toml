@@ -42,8 +42,8 @@ disable = [
     "E1101", # this is checked by pylance
 ]
 
-# Set the maximum line length (e.g., to match Black's default of 88)
-max-line-length = 88
+[tool.black]
+line-length = 120
 
 # Ignore specific directories or files
 ignore = [".github", ".vscode", "dist", "pip-wheel-metadata", "tests", ".gitignore", "LICENSE", "pyproject.toml", "README.md"]

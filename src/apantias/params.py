@@ -74,9 +74,7 @@ class Params:
         except Exception as exc:
             _logger.error("Error loading the parameter file.")
             self.save_default_file()
-            _logger.error(
-                "A default parameter file has been saved to the current directory."
-            )
+            _logger.error("A default parameter file has been saved to the current directory.")
             self.param_dict = None
             raise ValueError("Error loading the parameter file.") from exc
         self.param_dict = self.default_dict.copy()
@@ -84,9 +82,7 @@ class Params:
         for key, value in self.inp_dict.items():
             if key not in self.default_dict:
                 self.save_default_file()
-                _logger.error(
-                    "A default parameter file has been saved to the current directory."
-                )
+                _logger.error("A default parameter file has been saved to the current directory.")
                 raise ValueError(f"{key} is not a valid parameter.")
             else:
                 self.param_dict[key] = value
