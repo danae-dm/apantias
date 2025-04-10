@@ -141,7 +141,7 @@ def fit_2_gauss_to_hist(data_to_fit: np.ndarray) -> np.ndarray:
         )
 
 
-def gaussian(x: float, a: float, mu: float, sigma: float) -> float:
+def gaussian(x: float | np.ndarray, a: float, mu: float, sigma: float) -> np.ndarray:
     """
     Computes the value of a Gaussian function.
 
@@ -158,8 +158,14 @@ def gaussian(x: float, a: float, mu: float, sigma: float) -> float:
 
 
 def two_gaussians(
-    x: float, a1: float, mu1: float, sigma1: float, a2: float, mu2: float, sigma2: float
-) -> float:
+    x: float | np.ndarray,
+    a1: float,
+    mu1: float,
+    sigma1: float,
+    a2: float,
+    mu2: float,
+    sigma2: float,
+) -> np.ndarray:
     """
     Computes the sum of two Gaussian functions.
 

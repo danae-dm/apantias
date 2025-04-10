@@ -5,6 +5,7 @@ appending data, and managing attributes. The module leverages h5py for efficient
 """
 
 import os
+from typing import Optional
 
 import h5py
 import numpy as np
@@ -44,8 +45,8 @@ def display_file_structure(file_path: str) -> None:
 
 def get_data_from_file(
     path: str,
-    dataset_path: str = None,
-    slicing: str = None,
+    dataset_path: Optional[str] = None,
+    slicing: Optional[str] = None,
 ) -> np.ndarray:
     """
     Retrieves data from a specified dataset in an HDF5 file.
@@ -73,6 +74,7 @@ def get_data_from_file(
 
     with h5py.File(file_path, "r") as file:
         dataset = file[dataset_path]
+        assert isinstance(dataset, h5py.Dataset)
         if slices is not None:
             if dataset.ndim != len(slices):
                 raise ValueError(
@@ -87,7 +89,10 @@ def get_data_from_file(
 
 
 def add_array(
-    path: str, data: np.ndarray, dataset_path: str = None, attributes: dict = None
+    path: str,
+    data: np.ndarray,
+    dataset_path: Optional[str] = None,
+    attributes: Optional[dict] = None,
 ) -> None:
     """
     Adds an array to a dataset in an HDF5 file.
@@ -107,22 +112,25 @@ def add_array(
     """
     if dataset_path is None:
         file_path, dataset_path = utils.split_h5_path(path)
+        parts = dataset_path.split("/")
     else:
         file_path = path
+        parts = dataset_path.split("/")
     with h5py.File(file_path, "a", libver="latest") as file:
         # Split the dataset path into groups and dataset name
-        parts = dataset_path.split("/")
         groups = parts[:-1]
         dataset_name = parts[-1]
         # Create groups if they do not exist
         current_group = file
         for group in groups:
-            if group not in current_group:
+            assert isinstance(current_group, (h5py.File, h5py.Group))
+            if group not in current_group.keys():
                 current_group = current_group.create_group(group)
             else:
                 current_group = current_group[group]
         # Check if the dataset already exists
-        if dataset_name not in current_group:
+        assert isinstance(current_group, (h5py.File, h5py.Group))
+        if dataset_name not in current_group.keys():
             # Create the new dataset in the group
             current_dataset = current_group.create_dataset(
                 dataset_name,
@@ -134,6 +142,7 @@ def add_array(
             current_dataset = current_group[dataset_name]
 
         # append data to existing dataset
+        assert isinstance(current_dataset, h5py.Dataset)
         if current_dataset.shape[1:] != data.shape[1:]:
             raise ValueError(
                 f"Shape of data to add ({data.shape[1:]}) does not match shape of existing dataset ({current_dataset.shape[1:]})"
@@ -160,16 +169,14 @@ def _get_params_from_data_file(file_path: str) -> tuple[int, int, int, int]:
                                    row_size, and nreps.
     """
     with h5py.File(file_path, "r") as file:
-        if isinstance(file["preproc_common_modes"], h5py.Dataset):
-            total_frames = file["preproc_common_modes"].shape[0]
-            row_size = file["preproc_common_modes"].shape[1]
-            nreps = file["preproc_common_modes"].shape[2]
-        else:
-            raise TypeError("preproc_common_modes is not a dataset.")
-        if isinstance(file["preproc_mean_nreps"], h5py.Dataset):
-            column_size = file["preproc_mean_nreps"].shape[2]
-        else:
-            raise TypeError("preproc_mean_nreps is not a dataset.")
+        common_modes = file["preproc_common_modes"]
+        assert isinstance(common_modes, h5py.Dataset)
+        total_frames = common_modes.shape[0]
+        row_size = common_modes.shape[1]
+        nreps = common_modes.shape[2]
+        preproc = file["preproc_mean_nreps"]
+        assert isinstance(preproc, h5py.Dataset)
+        column_size = preproc.shape[2]
     return total_frames, column_size, row_size, nreps
 
 

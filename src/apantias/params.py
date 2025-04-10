@@ -2,6 +2,7 @@
 
 import os
 import json
+from typing import Optional
 
 from .logger import global_logger
 
@@ -50,7 +51,7 @@ class Params:
     # file cannot be loaded if these are missing
     required_params = ["results_dir", "data_h5_file"]
 
-    def __init__(self, json_path: str = None):
+    def __init__(self, json_path: Optional[str] = None):
         self.default_dict = {**self.parameters}
         self.inp_dict = None
         self.param_dict = None
@@ -118,7 +119,7 @@ class Params:
         for key, value in self.param_dict.items():
             _logger.info("%s: %s", key, value)
 
-    def save_default_file(self, path: str = None) -> None:
+    def save_default_file(self, path: Optional[str] = None) -> None:
         """Function description"""
         # if no path is provided, save to the current directory
         if path is None:

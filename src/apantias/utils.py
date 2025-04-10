@@ -30,7 +30,7 @@ def shapiro(data: np.ndarray, axis: int):
     while not it.finished:
         # Get the slice indices
         idx = list(it.multi_index)
-        idx.insert(axis, slice(None))
+        idx.insert(int(axis), slice(None))  # type: ignore
 
         # Perform the Shapiro-Wilk test
         _, shapiro_p_value = stats.shapiro(data[tuple(idx)])
@@ -142,7 +142,7 @@ def apply_slope_fit_along_frames_single(data):
     return output
 
 
-def split_h5_path(path: str) -> tuple:
+def split_h5_path(path: str) -> tuple[str, str]:
     """
     Splits an HDF5 file path into the file path and dataset path.
 
@@ -219,6 +219,7 @@ def nanmedian(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray
                 return _nanmedian_4d_axis3(data)
     else:
         raise ValueError("Data has wrong dimensions")
+    return np.array([])  # Add a default return statement
 
 
 def nanmean(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray:
@@ -283,6 +284,7 @@ def nanmean(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray:
                 return _nanmean_4d_axis3(data)
     else:
         raise ValueError("Data has wrong dimensions")
+    return np.array([])  # Add a default return statement
 
 
 @njit(parallel=True)

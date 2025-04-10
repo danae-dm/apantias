@@ -401,15 +401,14 @@ def _write_data_to_h5(path: str, data: np.ndarray, attributes=None) -> None:
         dataset = path_parts[-1]
         current_group = f
         for group in groups:
-            if group not in current_group:
-                assert isinstance(current_group, (h5py.Group, h5py.File))
+            assert isinstance(current_group, (h5py.Group, h5py.File))
+            if group not in current_group.keys():
                 current_group = current_group.create_group(group)
             else:
-                assert isinstance(current_group, (h5py.Group, h5py.File))
                 current_group = current_group[group]
-        if dataset in current_group:
-            raise ValueError(f"Dataset {dataset} already exists in {h5_file}")
         assert isinstance(current_group, (h5py.Group, h5py.File))
+        if dataset in current_group.keys():
+            raise ValueError(f"Dataset {dataset} already exists in {h5_file}")
         dataset = current_group.create_dataset(
             dataset, dtype=data.dtype, data=data, chunks=None
         )
@@ -633,7 +632,7 @@ def create_data_file_from_bins(
     offset: int = 8,
     available_cpu_cores: int = 4,
     available_ram_gb: int = 16,
-    ext_dark_frame_h5: str = "",
+    ext_dark_frame_h5: Optional[str] = None,
     nreps_eval: Optional[list[list[int]]] = None,
     attributes: Optional[dict] = None,
     polarity: int = -1,
@@ -704,7 +703,7 @@ def create_data_file_from_bins(
             f"Not all bin_file files have the same number of nreps: {nreps_list}"
         )
     # check if external dark frame exists and has the right shape
-    if ext_dark_frame_h5 is not "":
+    if ext_dark_frame_h5 is not None:
         ext_h5_file = ext_dark_frame_h5.split(".h5")[0] + ".h5"
         ext_group_path = ext_dark_frame_h5.split(".h5")[1]
         if not os.path.exists(ext_h5_file):
