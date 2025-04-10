@@ -51,6 +51,7 @@ class Logger:
         ]
         if level not in ["debug", "info", "warning", "error", "critical"]:
             raise ValueError("Invalid level")
+        level = levels[["debug", "info", "warning", "error", "critical"].index(level)]
         self.logger.setLevel(level)
 
         # Create a console handler
