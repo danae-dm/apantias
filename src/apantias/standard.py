@@ -47,7 +47,6 @@ class Analysis:
         self.thres_event_sec = self.params_dict["thres_event_sec"]
         self.ext_offsetmap = self.params_dict["ext_offsetmap"]
         self.ext_noisemap = self.params_dict["ext_noisemap"]
-        self.polarity = self.params_dict["polarity"]
 
         # get parameters from data_h5 file
         self.total_frames, self.column_size, self.row_size, self.nreps = (

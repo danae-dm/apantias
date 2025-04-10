@@ -28,7 +28,6 @@ class Params:
         "thres_event_sec": 3,  # float
         "ext_offsetmap": "",  # str
         "ext_noisemap": "",  # str
-        "polarity": -1,  # int
     }
 
     # types are checked when they are read
@@ -45,7 +44,6 @@ class Params:
         "thres_event_sec": (int, float),  # float
         "ext_offsetmap": str,  # str
         "ext_noisemap": str,  # str
-        "polarity": int,  # int
     }
 
     # required parameters, where there is no default value

@@ -467,6 +467,7 @@ def _process_raw_data(
     offset: int,
     counts: int,
     bin_file: str,
+    polarity: int,
 ) -> None:
     """
     Processes raw binary data and writes it to an HDF5 file.
@@ -485,6 +486,7 @@ def _process_raw_data(
         offset (int): Offset in bytes to start reading the binary file.
         counts (int): Number of uint16 values to read from the binary file.
         bin_file (str): Path to the binary file to process.
+        polarity: default is -1. raw data is multiplied by this value.
 
     Returns:
         None
@@ -495,13 +497,14 @@ def _process_raw_data(
         data = _read_data_from_bin(
             bin_file, column_size, row_size, key_ints, nreps, offset, counts
         )
+        # data is saved to file in uint16 to save space
         _write_data_to_h5(h5_group + "raw_data", data, {"avg": "False"})
         data = data[:, :, ignore_first_nreps:, :]
-        # raw_set is multiplied with #frames to calculated the weighted average later
-        raw_offset = np.mean(data, axis=0, keepdims=True) * data.shape[0]
-        raw_data_mean = np.mean(data, axis=2)
-        raw_data_median = np.median(data, axis=2)
-        raw_data_std = np.std(data, axis=2)
+        # performing the mean automatically casts to float64, multiply by polarity now
+        raw_offset = np.mean(data, axis=0, keepdims=True) * data.shape[0] * polarity
+        raw_data_mean = np.mean(data, axis=2) * polarity
+        raw_data_median = np.median(data, axis=2) * polarity
+        raw_data_std = np.std(data, axis=2) * polarity
         _write_data_to_h5(h5_group + "raw_offset", raw_offset, {"avg": "weighted"})
         _write_data_to_h5(
             h5_group + "raw_data_mean_nreps", raw_data_mean, {"avg": "mean"}
@@ -527,6 +530,7 @@ def _preprocess(
     ext_dark_frame_dset: str,
     offset: int,
     nreps_eval: list,
+    polarity: int,
 ) -> None:
     """
     Preprocesses raw data by applying corrections and calculating statistical metrics.
@@ -543,6 +547,7 @@ def _preprocess(
         ext_dark_frame_dset (str): Path to an external dark frame dataset (optional).
         offset (int): Offset value for data correction.
         nreps_eval (list): List of evaluation ranges for repetitions (optional).
+        polarity: default is -1. raw data is multiplied by this value.
 
     Returns:
         None
@@ -550,7 +555,7 @@ def _preprocess(
     try:
         data = _read_data_from_h5(h5_group + "raw_data")
         data = data[:, :, ignore_first_nreps:, :]
-        data = data.astype(np.float64)
+        data = data.astype(np.float64) * polarity
         if ext_dark_frame_dset is not None:
             offset_map = _read_data_from_h5(ext_dark_frame_dset)
         else:
@@ -572,11 +577,6 @@ def _preprocess(
         mean = np.mean(data, axis=2)
         std = np.std(data, axis=2)
         median = np.median(data, axis=2)
-        """
-        maybe a bit slower, use this again if numba version doesnt work well
-        x = np.arange(data.shape[2])
-        slopes = np.apply_along_axis(lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data)
-        """
         slopes = utils.apply_slope_fit_along_frames_single(data)
         _write_data_to_h5(h5_group + "preproc_mean_nreps", mean, {"avg": "mean"})
         _write_data_to_h5(h5_group + "preproc_median_nreps", median, {"avg": "mean"})
@@ -634,8 +634,9 @@ def create_data_file_from_bins(
     available_cpu_cores: int = 4,
     available_ram_gb: int = 16,
     ext_dark_frame_h5: str = "",
-    nreps_eval: Optional[list[list[int]]] = None,  # Updated to Optional
-    attributes: Optional[dict] = None,  # Updated to Optional
+    nreps_eval: Optional[list[list[int]]] = None,
+    attributes: Optional[dict] = None,
+    polarity: int = -1,
 ) -> None:
     """
     Processes binary data files and converts them into HDF5 format with virtual datasets.
@@ -658,6 +659,7 @@ def create_data_file_from_bins(
         ext_dark_frame_h5 (str): Path to an external dark frame HDF5 file (optional).
         nreps_eval (list[list[int]]): List of evaluation ranges for repetitions (optional).
         attributes (dict): Additional attributes to add to the HDF5 files (optional).
+        polarity: default is -1. raw data is multiplied by this value.
 
     Raises:
         FileNotFoundError: If any of the specified files or folders do not exist.
@@ -715,8 +717,6 @@ def create_data_file_from_bins(
                     f"Shape of external dark frame {ext_dark_frame_h5} does"
                     "not match ({column_size}, {row_size}) of the bin_file files"
                 )
-    # leave one core for the main process
-    # available_cpu_cores -= 1
     # create folders:
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     bin_name = os.path.basename(bin_files[0]).split(".")[0]
@@ -799,6 +799,7 @@ def create_data_file_from_bins(
                         offset_batch,
                         counts,
                         bin_file,
+                        polarity,
                     ),
                 )
                 processes.append(p)
@@ -842,6 +843,7 @@ def create_data_file_from_bins(
                         ext_dark_frame_h5,
                         offset_batch,
                         nreps_eval,
+                        polarity,
                     ),
                 )
                 processes.append(p)
