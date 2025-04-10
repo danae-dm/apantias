@@ -7,6 +7,7 @@ The module leverages Matplotlib and Seaborn for creating visualizations.
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
+from typing import Optional
 
 from . import fitting
 
@@ -14,7 +15,7 @@ from . import fitting
 def draw_hist(
     data: np.ndarray,
     file_name: str = "histogram",
-    save_to: str = None,
+    save_to: Optional[str] = None,
     log: bool = False,
     **kwargs,
 ) -> None:
@@ -39,7 +40,10 @@ def draw_hist(
 
 
 def draw_heatmap(
-    data: np.ndarray, file_name: str = "heatmap", save_to: str = None, **kwargs
+    data: np.ndarray,
+    file_name: str = "heatmap",
+    save_to: Optional[str] = None,
+    **kwargs,
 ) -> None:
     """
     Draw a heatmap of the data. If a folder is provided, the plot is saved.
@@ -62,7 +66,7 @@ def draw_heatmap(
 
 
 def draw_graph(
-    data: np.ndarray, file_name: str = "graph", save_to: str = None, **kwargs
+    data: np.ndarray, file_name: str = "graph", save_to: Optional[str] = None, **kwargs
 ) -> None:
     """
     Draw a graph of the data. If a folder is provided, the plot is saved.
@@ -78,12 +82,12 @@ def draw_graph(
 
 def draw_hist_and_gauss_fit(
     data: np.ndarray,
-    bins: str,
+    bins: int,
     amplitude: float,
     mean: float,
     sigma: float,
-    file_name: str = None,
-    save_to: str = None,
+    file_name: Optional[str] = None,
+    save_to: Optional[str] = None,
 ) -> None:
     """
     Draw a histogram of the data and a gaussian fit
@@ -93,7 +97,7 @@ def draw_hist_and_gauss_fit(
         data, bins, range=(np.nanmin(data), np.nanmax(data)), density=True
     )
     bin_centers = (hist_bins[:-1] + hist_bins[1:]) / 2
-    plt.hist(data, bins=hist_bins, density=True, alpha=0.5)
+    plt.hist(data, bins=hist_bins.tolist(), density=True, alpha=0.5)
     plt.plot(bin_centers, fitting.gaussian(bin_centers, amplitude, mean, sigma), "r-")
     plt.title(f"Fitted parameters:\nMean: {mean:.2f}\nSigma: {sigma:.2f}")
     plt.xlabel("Value")

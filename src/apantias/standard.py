@@ -47,7 +47,6 @@ class Analysis:
         self.thres_event_sec = self.params_dict["thres_event_sec"]
         self.ext_offsetmap = self.params_dict["ext_offsetmap"]
         self.ext_noisemap = self.params_dict["ext_noisemap"]
-        self.polarity = self.params_dict["polarity"]
 
         # get parameters from data_h5 file
         self.total_frames, self.column_size, self.row_size, self.nreps = (
@@ -124,7 +123,7 @@ class Default(Analysis):
                 (failed_fits / (self.column_size * self.row_size) * 100),
             )
         data = io.get_data_from_file(self.data_h5, "preproc_mean_nreps")
-        io.add_array(self.out_h5, data, "1_clean/raw_pixel_data")
+        io.add_array(self.out_h5, data, "1_clean/raw_pixel_data") #rename this
         _logger.info("Removing bad slopes")
         data[bad_slopes_mask] = np.nan
         sum_bad_slopes = np.sum(bad_slopes_mask)

@@ -10,6 +10,7 @@ import time
 import os
 import gc
 
+from typing import Optional
 import h5py
 import numpy as np
 
@@ -129,7 +130,7 @@ def _get_workload_dict(
     return workload_dict
 
 
-def _get_vds_list(workload_dict: list, old_list: list = None) -> list:
+def _get_vds_list(workload_dict: dict, old_list: list = None) -> list:  # type: ignore
     """
     Creates a list used for the creation of virtual datasets (VDS).
 
@@ -173,6 +174,8 @@ def _get_vds_list(workload_dict: list, old_list: list = None) -> list:
             ...
         ]
     """
+    if old_list is None:
+        old_list = []
     datasets = []
     for bin_file in workload_dict.keys():
         for _, batch in enumerate(workload_dict[bin_file]):
@@ -196,7 +199,7 @@ def _get_vds_list(workload_dict: list, old_list: list = None) -> list:
     vds_list = []
     for dataset in datasets:
         dataset_name = dataset[0]
-        if old_list is not None:
+        if old_list:
             # check if datset_name is in the old_list
             if not any(d.get("name") == dataset_name for d in old_list):
                 vds_list.append(
@@ -259,12 +262,9 @@ def _avg_frames(h5_file: str, vds_list: list):
                 median = np.median(source, axis=0)
                 f.create_dataset(name + "_median_frames", data=median)
             elif avg == "weighted":
-                if isinstance(f["raw_data"], h5py.Dataset):
-                    total_frames = f["raw_data"].shape[0]
-                else:
-                    raise ValueError(
-                        "Expected 'raw_data' to be a dataset, but found a group."
-                    )
+                dset = f["raw_data"]
+                assert isinstance(dset, h5py.Dataset)
+                total_frames = dset.shape[0]
                 weighted_avg = np.sum(source, axis=0) / total_frames
                 f.create_dataset(name + "_weighted_frames", data=weighted_avg)
 
@@ -285,10 +285,11 @@ def _create_vds(h5_file: str, vds_list: list):
         sources = dataset["sources"]
         final_shape = tuple(dataset["final_shape"])
         # get type of first dataset
-        dtype = h5py.File(sources[0].split(".h5")[0] + ".h5", "r")[
+        dset = h5py.File(sources[0].split(".h5")[0] + ".h5", "r")[
             sources[0].split(".h5")[1]
-        ].dtype
-        layout = h5py.VirtualLayout(shape=final_shape, dtype=dtype)
+        ]
+        assert isinstance(dset, h5py.Dataset)
+        layout = h5py.VirtualLayout(shape=final_shape, dtype=dset.dtype)
         with h5py.File(h5_file, "a") as f:
             start_index = 0
             for source in sources:
@@ -296,6 +297,7 @@ def _create_vds(h5_file: str, vds_list: list):
                 source_dataset = source.split(".h5")[1]
                 with h5py.File(source_h5, "r") as source_f:
                     dset = source_f[source_dataset]
+                    assert isinstance(dset, h5py.Dataset)
                     sh = dset.shape
                     attributes = dict(dset.attrs)
                 end_index = start_index + sh[0]
@@ -311,6 +313,7 @@ def _create_vds(h5_file: str, vds_list: list):
                     group = f.create_group(group_name)
                 else:
                     group = f[group_name]
+                assert isinstance(group, h5py.Group)
                 dset = group.create_virtual_dataset(dset_name, layout, fillvalue=np.nan)
                 for key, value in attributes.items():
                     dset.attrs[key] = value
@@ -350,7 +353,7 @@ def _read_data_from_bin(
     inp_data = np.fromfile(bin_file, dtype="uint16", count=counts, offset=offset)
     # check if file is at its end
     if inp_data.size == 0:
-        return None
+        raise ValueError(f"File {bin_file} is empty or corrupted")
     # reshape the array into rows -> (#ofRows,67)
     try:
         inp_data = inp_data.reshape(-1, raw_row_size)
@@ -398,19 +401,20 @@ def _write_data_to_h5(path: str, data: np.ndarray, attributes=None) -> None:
         dataset = path_parts[-1]
         current_group = f
         for group in groups:
-            if group not in current_group:
+            assert isinstance(current_group, (h5py.Group, h5py.File))
+            if group not in current_group.keys():
                 current_group = current_group.create_group(group)
             else:
                 current_group = current_group[group]
-        if dataset in current_group:
+        assert isinstance(current_group, (h5py.Group, h5py.File))
+        if dataset in current_group.keys():
             raise ValueError(f"Dataset {dataset} already exists in {h5_file}")
-        else:
-            dataset = current_group.create_dataset(
-                dataset, dtype=data.dtype, data=data, chunks=None
-            )
-            if attributes is not None:
-                for key, value in attributes.items():
-                    dataset.attrs[key] = value
+        dataset = current_group.create_dataset(
+            dataset, dtype=data.dtype, data=data, chunks=None
+        )
+        if attributes is not None:
+            for key, value in attributes.items():
+                dataset.attrs[key] = value
 
 
 def _read_data_from_h5(path: str) -> np.ndarray:
@@ -425,7 +429,9 @@ def _read_data_from_h5(path: str) -> np.ndarray:
     """
     h5_file, dataset_path = utils.split_h5_path(path)
     with h5py.File(h5_file, "r") as f:
-        data = f[dataset_path][:]
+        data = f[dataset_path]
+        assert isinstance(data, h5py.Dataset)
+        data = data[:]
     return data
 
 
@@ -443,9 +449,10 @@ def _get_datasets_from_h5(path: str) -> list:
     with h5py.File(h5_file, "r") as f:
         datasets = []
         group = f[group_path]
+        assert isinstance(group, (h5py.File, h5py.Group))
         for name, item in group.items():
-            if isinstance(item, h5py.Dataset):
-                datasets.append([name, list(item.shape), dict(item.attrs)])
+            assert isinstance(item, h5py.Dataset)
+            datasets.append([name, list(item.shape), dict(item.attrs)])
     return datasets
 
 
@@ -459,6 +466,7 @@ def _process_raw_data(
     offset: int,
     counts: int,
     bin_file: str,
+    polarity: int,
 ) -> None:
     """
     Processes raw binary data and writes it to an HDF5 file.
@@ -477,6 +485,7 @@ def _process_raw_data(
         offset (int): Offset in bytes to start reading the binary file.
         counts (int): Number of uint16 values to read from the binary file.
         bin_file (str): Path to the binary file to process.
+        polarity: default is -1. raw data is multiplied by this value.
 
     Returns:
         None
@@ -487,13 +496,14 @@ def _process_raw_data(
         data = _read_data_from_bin(
             bin_file, column_size, row_size, key_ints, nreps, offset, counts
         )
+        # data is saved to file in uint16 to save space
         _write_data_to_h5(h5_group + "raw_data", data, {"avg": "False"})
         data = data[:, :, ignore_first_nreps:, :]
-        # raw_set is multiplied with #frames to calculated the weighted average later
-        raw_offset = np.mean(data, axis=0, keepdims=True) * data.shape[0]
-        raw_data_mean = np.mean(data, axis=2)
-        raw_data_median = np.median(data, axis=2)
-        raw_data_std = np.std(data, axis=2)
+        # performing the mean automatically casts to float64, multiply by polarity now
+        raw_offset = np.mean(data, axis=0, keepdims=True) * data.shape[0] * polarity
+        raw_data_mean = np.mean(data, axis=2) * polarity
+        raw_data_median = np.median(data, axis=2) * polarity
+        raw_data_std = np.std(data, axis=2) * polarity
         _write_data_to_h5(h5_group + "raw_offset", raw_offset, {"avg": "weighted"})
         _write_data_to_h5(
             h5_group + "raw_data_mean_nreps", raw_data_mean, {"avg": "mean"}
@@ -519,6 +529,7 @@ def _preprocess(
     ext_dark_frame_dset: str,
     offset: int,
     nreps_eval: list,
+    polarity: int,
 ) -> None:
     """
     Preprocesses raw data by applying corrections and calculating statistical metrics.
@@ -535,6 +546,7 @@ def _preprocess(
         ext_dark_frame_dset (str): Path to an external dark frame dataset (optional).
         offset (int): Offset value for data correction.
         nreps_eval (list): List of evaluation ranges for repetitions (optional).
+        polarity: default is -1. raw data is multiplied by this value.
 
     Returns:
         None
@@ -542,12 +554,14 @@ def _preprocess(
     try:
         data = _read_data_from_h5(h5_group + "raw_data")
         data = data[:, :, ignore_first_nreps:, :]
-        data = data.astype(np.float64)
+        data = data.astype(np.float64) * polarity
         if ext_dark_frame_dset is not None:
-            offset = _read_data_from_h5(ext_dark_frame_dset)
+            offset_map = _read_data_from_h5(ext_dark_frame_dset)
         else:
-            offset = _read_data_from_h5(h5_file_virtual + "raw_offset_weighted_frames")
-        data -= offset
+            offset_map = _read_data_from_h5(
+                h5_file_virtual + "raw_offset_weighted_frames"
+            )
+        data -= offset_map
         common_modes = np.median(data, axis=3, keepdims=True)
         data -= common_modes
         _write_data_to_h5(
@@ -562,11 +576,6 @@ def _preprocess(
         mean = np.mean(data, axis=2)
         std = np.std(data, axis=2)
         median = np.median(data, axis=2)
-        """
-        maybe a bit slower, use this again if numba version doesnt work well
-        x = np.arange(data.shape[2])
-        slopes = np.apply_along_axis(lambda y: np.polyfit(x, y, 1)[0], axis=2, arr=data)
-        """
         slopes = utils.apply_slope_fit_along_frames_single(data)
         _write_data_to_h5(h5_group + "preproc_mean_nreps", mean, {"avg": "mean"})
         _write_data_to_h5(h5_group + "preproc_median_nreps", median, {"avg": "mean"})
@@ -623,9 +632,10 @@ def create_data_file_from_bins(
     offset: int = 8,
     available_cpu_cores: int = 4,
     available_ram_gb: int = 16,
-    ext_dark_frame_h5: str = None,
-    nreps_eval: list[list[int]] = None,
-    attributes: dict = None,
+    ext_dark_frame_h5: Optional[str] = None,
+    nreps_eval: Optional[list[list[int]]] = None,
+    attributes: Optional[dict] = None,
+    polarity: int = -1,
 ) -> None:
     """
     Processes binary data files and converts them into HDF5 format with virtual datasets.
@@ -648,6 +658,7 @@ def create_data_file_from_bins(
         ext_dark_frame_h5 (str): Path to an external dark frame HDF5 file (optional).
         nreps_eval (list[list[int]]): List of evaluation ranges for repetitions (optional).
         attributes (dict): Additional attributes to add to the HDF5 files (optional).
+        polarity: default is -1. raw data is multiplied by this value.
 
     Raises:
         FileNotFoundError: If any of the specified files or folders do not exist.
@@ -698,19 +709,13 @@ def create_data_file_from_bins(
         if not os.path.exists(ext_h5_file):
             raise FileNotFoundError(f'File "{ext_h5_file}" does not exist')
         with h5py.File(ext_h5_file, "r") as f:
-            try:
-                shape = f[ext_group_path].shape
-            except Exception as e:
-                raise ValueError(
-                    f"Could not read shape of external dark frame {ext_dark_frame_h5}: {e}"
-                ) from e
-            if shape[0] != column_size or shape[1] != row_size:
+            dset = f[ext_group_path]
+            assert isinstance(dset, h5py.Dataset)
+            if dset.shape[0] != column_size or dset.shape[1] != row_size:
                 raise ValueError(
                     f"Shape of external dark frame {ext_dark_frame_h5} does"
                     "not match ({column_size}, {row_size}) of the bin_file files"
                 )
-    # leave one core for the main process
-    # available_cpu_cores -= 1
     # create folders:
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     bin_name = os.path.basename(bin_files[0]).split(".")[0]
@@ -793,6 +798,7 @@ def create_data_file_from_bins(
                         offset_batch,
                         counts,
                         bin_file,
+                        polarity,
                     ),
                 )
                 processes.append(p)
@@ -836,6 +842,7 @@ def create_data_file_from_bins(
                         ext_dark_frame_h5,
                         offset_batch,
                         nreps_eval,
+                        polarity,
                     ),
                 )
                 processes.append(p)

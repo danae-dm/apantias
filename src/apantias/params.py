@@ -2,6 +2,7 @@
 
 import os
 import json
+from typing import Optional
 
 from .logger import global_logger
 
@@ -28,7 +29,6 @@ class Params:
         "thres_event_sec": 3,  # float
         "ext_offsetmap": "",  # str
         "ext_noisemap": "",  # str
-        "polarity": -1,  # int
     }
 
     # types are checked when they are read
@@ -45,14 +45,13 @@ class Params:
         "thres_event_sec": (int, float),  # float
         "ext_offsetmap": str,  # str
         "ext_noisemap": str,  # str
-        "polarity": int,  # int
     }
 
     # required parameters, where there is no default value
     # file cannot be loaded if these are missing
     required_params = ["results_dir", "data_h5_file"]
 
-    def __init__(self, json_path: str = None):
+    def __init__(self, json_path: Optional[str] = None):
         self.default_dict = {**self.parameters}
         self.inp_dict = None
         self.param_dict = None
@@ -120,7 +119,7 @@ class Params:
         for key, value in self.param_dict.items():
             _logger.info("%s: %s", key, value)
 
-    def save_default_file(self, path: str = None) -> None:
+    def save_default_file(self, path: Optional[str] = None) -> None:
         """Function description"""
         # if no path is provided, save to the current directory
         if path is None:
