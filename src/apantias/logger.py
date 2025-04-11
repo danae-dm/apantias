@@ -1,32 +1,33 @@
-import logging
-import sys
-
-
-"""
+"""Handles logging.
 levels:
 logging.debug()
 logging.info()
 logging.warning()
 logging.error()
 logging.critical()
+
 """
+
+import logging
+import sys
 
 
 class CustomFormatter(logging.Formatter):
+    """Formatting Class"""
 
     grey = "\x1b[38;20m"
     yellow = "\x1b[33;20m"
     red = "\x1b[31;20m"
     bold_red = "\x1b[31;1m"
     reset = "\x1b[0m"
-    format = "%(asctime)s - %(message)s"
+    format_string = "%(asctime)s - %(message)s"
 
     FORMATS = {
-        logging.DEBUG: grey + format + reset,
-        logging.INFO: grey + format + reset,
-        logging.WARNING: yellow + format + reset,
-        logging.ERROR: red + format + reset,
-        logging.CRITICAL: bold_red + format + reset,
+        logging.DEBUG: grey + format_string + reset,
+        logging.INFO: grey + format_string + reset,
+        logging.WARNING: yellow + format_string + reset,
+        logging.ERROR: red + format_string + reset,
+        logging.CRITICAL: bold_red + format_string + reset,
     }
 
     def format(self, record):
@@ -36,6 +37,8 @@ class CustomFormatter(logging.Formatter):
 
 
 class Logger:
+    """Global Logger, used in the standard and bin_to_h5 modules"""
+
     def __init__(self, logger_name: str, level: str = "info"):
         # Create a logger
         self.logger = logging.getLogger(logger_name)
@@ -48,7 +51,7 @@ class Logger:
         ]
         if level not in ["debug", "info", "warning", "error", "critical"]:
             raise ValueError("Invalid level")
-        level = levels[["debug", "info", "warning", "error", "critical"].index(level)]
+        level = levels[["debug", "info", "warning", "error", "critical"].index(level)]  # type: ignore
         self.logger.setLevel(level)
 
         # Create a console handler
@@ -60,6 +63,7 @@ class Logger:
         self.logger.addHandler(ch)
 
     def get_logger(self) -> logging.Logger:
+        """Description"""
         return self.logger
 
 
