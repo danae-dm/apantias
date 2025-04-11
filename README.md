@@ -1,3 +1,5 @@
+This is outdated!
+
 new features/bugs/requests:
 https://github.com/shakamaran/apantias/issues
 
