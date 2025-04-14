@@ -483,12 +483,13 @@ def _process_raw_data(
         data = _read_data_from_bin(bin_file, column_size, row_size, key_ints, nreps, offset, counts)
         # data is saved to file in uint16 to save space
         _write_data_to_h5(h5_group + "raw_data", data, {"avg": "False"})
+        data = data.astype(np.float64) * polarity
         data = data[:, :, ignore_first_nreps:, :]
         # performing the mean automatically casts to float64, multiply by polarity now
-        raw_offset = np.mean(data, axis=0, keepdims=True) * data.shape[0] * polarity
-        raw_data_mean = np.mean(data, axis=2) * polarity
-        raw_data_median = np.median(data, axis=2) * polarity
-        raw_data_std = np.std(data, axis=2) * polarity
+        raw_offset = np.mean(data, axis=0, keepdims=True) * data.shape[0]
+        raw_data_mean = np.mean(data, axis=2)
+        raw_data_median = np.median(data, axis=2)
+        raw_data_std = np.std(data, axis=2)
         _write_data_to_h5(h5_group + "raw_offset", raw_offset, {"avg": "weighted"})
         _write_data_to_h5(h5_group + "raw_data_mean_nreps", raw_data_mean, {"avg": "mean"})
         _write_data_to_h5(h5_group + "raw_data_std_nreps", raw_data_std, {"avg": "mean"})
