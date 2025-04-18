@@ -562,30 +562,66 @@ def _preprocess(
     """
     try:
         data = _read_data_from_h5(h5_group + "raw_data")
-        data = data[:, :, ignore_first_nreps:, :]
+        attributes = {"avg": "false", "info": f"Raw data as read from .bin file. {data.shape}"}
         data = data.astype(np.float64) * polarity
+        attributes["info"] += f" Multiplied by polarity. {data.shape}"
+        data = data[:, :, ignore_first_nreps:, :]
+        attributes["info"] += f" Ignored first {ignore_first_nreps} nreps. {data.shape}"
         if ext_dark_frame_dset is not None:
             offset_map = _read_data_from_h5(ext_dark_frame_dset)
+            attributes["info"] += f" Subtracted external offset. {offset_map.shape}"
         else:
             offset_map = _read_data_from_h5(h5_file_virtual + "raw_offset_weighted_frames")
+            attributes["info"] += f" Subtracted (own) offset. {offset_map.shape}"
         data -= offset_map
         common_modes = np.median(data, axis=3, keepdims=True)
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Commmon mode calculated. {common_modes.shape}",
+        }
+        _write_data_to_h5(h5_group + "preproc_common_modes", common_modes, new_attrs)
         data -= common_modes
-        _write_data_to_h5(h5_group + "preproc_common_modes", common_modes, {"avg": "mean"})
+        attributes["info"] += f" Common mode corrected. {data.shape}"
         del offset, common_modes
         gc.collect()
         if data.shape[2] > 50:
             shapiro = utils.shapiro(data, axis=2)
             _write_data_to_h5(h5_group + "preproc_shapiro", shapiro, {"avg": "mean"})
             del shapiro
+
         mean = np.mean(data, axis=2)
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Mean over Nreps. {mean.shape}",
+        }
+        _write_data_to_h5(h5_group + "preproc_mean_nreps", mean, new_attrs)
+
         std = np.std(data, axis=2)
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Standard Deviation over Nreps. {std.shape}",
+        }
+        _write_data_to_h5(h5_group + "preproc_std_nreps", std, new_attrs)
+
         median = np.median(data, axis=2)
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Median over Nreps. {median.shape}",
+        }
+        _write_data_to_h5(h5_group + "preproc_median_nreps", median, new_attrs)
+
         slopes = utils.apply_slope_fit_along_frames_single(data)
-        _write_data_to_h5(h5_group + "preproc_mean_nreps", mean, {"avg": "mean"})
-        _write_data_to_h5(h5_group + "preproc_median_nreps", median, {"avg": "mean"})
-        _write_data_to_h5(h5_group + "preproc_std_nreps", std, {"avg": "mean"})
-        _write_data_to_h5(h5_group + "preproc_slope_nreps", slopes, {"avg": "mean"})
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Slope of the linear fit over Nreps. {slopes.shape}",
+        }
+        _write_data_to_h5(h5_group + "preproc_slope_nreps", slopes, new_attrs)
+
         del mean, std, median, slopes
         gc.collect()
         if nreps_eval is None:
