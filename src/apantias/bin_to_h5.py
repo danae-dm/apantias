@@ -482,18 +482,47 @@ def _process_raw_data(
     try:
         data = _read_data_from_bin(bin_file, column_size, row_size, key_ints, nreps, offset, counts)
         # data is saved to file in uint16 to save space
-        _write_data_to_h5(h5_group + "raw_data", data, {"avg": "False"})
+        attributes = {"avg": "False", "info": f"Raw data as read from .bin file. {data.shape}"}
+        _write_data_to_h5(h5_group + "raw_data", data, attributes)
         data = data.astype(np.float64) * polarity
+        attributes["info"] += f" Multiplied by polarity. {data.shape}"
         data = data[:, :, ignore_first_nreps:, :]
-        # performing the mean automatically casts to float64, multiply by polarity now
+        attributes["info"] += f" Ignored first {ignore_first_nreps} nreps. {data.shape}"
+
+        # raw_offset is multiplied by the number of frames read by this process for the weighted average calculation
         raw_offset = np.mean(data, axis=0, keepdims=True) * data.shape[0]
+        new_attrs = {
+            **attributes,
+            "avg": "weighted",
+            "info": attributes["info"]
+            + f" Mean over frames. Multiplied by frames read by this process. {raw_offset.shape}",
+        }
+        _write_data_to_h5(h5_group + "raw_offset", raw_offset, new_attrs)
+
         raw_data_mean = np.mean(data, axis=2)
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Mean over Nreps. {raw_data_mean.shape}",
+        }
+        _write_data_to_h5(h5_group + "raw_data_mean_nreps", raw_data_mean, new_attrs)
+
         raw_data_median = np.median(data, axis=2)
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Median over Nreps. {raw_data_median.shape}",
+        }
+        _write_data_to_h5(h5_group + "raw_data_median_nreps", raw_data_median, new_attrs)
+
         raw_data_std = np.std(data, axis=2)
-        _write_data_to_h5(h5_group + "raw_offset", raw_offset, {"avg": "weighted"})
-        _write_data_to_h5(h5_group + "raw_data_mean_nreps", raw_data_mean, {"avg": "mean"})
-        _write_data_to_h5(h5_group + "raw_data_std_nreps", raw_data_std, {"avg": "mean"})
-        _write_data_to_h5(h5_group + "raw_data_median_nreps", raw_data_median, {"avg": "mean"})
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Standard deviation over Nreps. {raw_data_std.shape}",
+        }
+        _write_data_to_h5(h5_group + "raw_data_std_nreps", raw_data_std, new_attrs)
+
         del raw_offset, raw_data_mean, raw_data_median, raw_data_std, data
         gc.collect()
     except Exception as e:
