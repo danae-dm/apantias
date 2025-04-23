@@ -3,11 +3,11 @@ This module provides simple visualization functions for displaying data in a not
 It includes utilities for drawing histograms, heatmaps, line graphs, and histograms with Gaussian fits.
 The module leverages Matplotlib and Seaborn for creating visualizations.
 """
+from typing import Optional
 
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-from typing import Optional
 
 from . import fitting
 
