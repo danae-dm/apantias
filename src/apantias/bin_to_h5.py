@@ -284,6 +284,7 @@ def _create_vds(h5_file: str, vds_list: list):
         dset = h5py.File(sources[0].split(".h5")[0] + ".h5", "r")[sources[0].split(".h5")[1]]
         assert isinstance(dset, h5py.Dataset)
         layout = h5py.VirtualLayout(shape=final_shape, dtype=dset.dtype)
+        attributes = {}
         with h5py.File(h5_file, "a") as f:
             start_index = 0
             for source in sources:
