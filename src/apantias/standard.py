@@ -10,6 +10,7 @@ from . import analysis as an
 from . import params
 from . import fitting as fit
 from . import file_io as io
+from . import bin_to_h5
 
 from .logger import global_logger
 
@@ -55,8 +56,11 @@ class Analysis:
         bin_filename = os.path.basename(self.data_h5)[:-3]
         self.out_h5_name = f"{timestamp}_{bin_filename}.h5"
         self.out_h5 = os.path.join(self.results_dir, self.out_h5_name)
-        io._create_analysis_file(self.results_dir, self.out_h5_name, self.params_dict, self.custom_attributes)
+        io._create_analysis_file(self.results_dir, self.out_h5_name, self.params_dict, self.custom_attributes, self.data_h5)
         _logger.info("Created analysis h5 file: %s/%s", self.results_dir, self.out_h5_name)
+        vds_list  = io._get_all_datasets(self.data_h5)
+        bin_to_h5._create_vds(self.out_h5, vds_list)
+        _logger.info("Virtual datasets created in group '0_raw_data'")
 
 
 class Default(Analysis):
