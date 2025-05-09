@@ -47,6 +47,7 @@ def get_data_from_file(
     path: str,
     dataset_path: Optional[str] = None,
     slicing: Optional[str] = None,
+    orig_type: bool = False,
 ) -> np.ndarray:
     """
     Retrieves data from a specified dataset in an HDF5 file.
@@ -83,8 +84,10 @@ def get_data_from_file(
             data = dataset[tuple(slices)]
         else:
             data = dataset[:]
-
-        data = data.astype(np.float64)
+        if not orig_type:
+            # Convert to float64 if not already in that format
+            if dataset.dtype != np.float64:
+                data = data.astype(np.float64)
     return data
 
 

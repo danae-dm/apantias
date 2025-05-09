@@ -136,7 +136,7 @@ class Default(Analysis):
         data -= offset[np.newaxis, :, :]
         io.add_array(self.out_h5, data, "2_offnoi/pixel_data")
         _logger.info("Start Calculating event_map")
-        structure = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]])
+        structure = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]])
         event_map = an.group_pixels(data, self.thres_event_prim, self.thres_event_sec, noise, structure)
         event_counts = event_map > 0
         event_counts_sum = np.sum(event_counts, axis=0)
