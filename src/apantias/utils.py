@@ -6,6 +6,8 @@ import numpy as np
 from numba import njit, prange
 from scipy import stats
 from sklearn.cluster import DBSCAN
+import tables
+from scipy import ndimage
 
 from . import fitting
 
@@ -74,9 +76,7 @@ def get_rolling_average(data: np.ndarray, window_size: int) -> np.ndarray:
     return np.convolve(data, weights, mode="valid")
 
 
-def get_ram_usage_in_gb(
-    frames: int, column_size: int, nreps: int, row_size: int
-) -> int:
+def get_ram_usage_in_gb(frames: int, column_size: int, nreps: int, row_size: int) -> int:
     """
     Calculates the estimated RAM usage in GB for a 4D array with the given dimensions.
 
@@ -673,84 +673,6 @@ def _nanmean_2d_axis1(data: np.ndarray) -> np.ndarray:
     return output
 
 
-@njit
-def _find_root(label, parent):
-    while parent[label] != label:
-        label = parent[label]
-    return label
-
-
-@njit
-def _union(label1, label2, parent):
-    root1 = _find_root(label1, parent)
-    root2 = _find_root(label2, parent)
-    if root1 != root2:
-        parent[root2] = root1
-
-
-@njit
-def two_pass_labeling(data, structure):
-    """
-    Implements the two-pass labeling algorithm for connected components in a 2D boolean array.
-
-    Args:
-        data (np.ndarray): 2D boolean array.
-        structure (np.ndarray): Structuring element for connectivity.
-
-    Returns:
-        tuple: A tuple containing the labeled array and the number of features.
-    """
-    rows, cols = data.shape
-    labels = np.zeros((rows, cols), dtype=np.int32)
-    parent = np.arange(rows * cols, dtype=np.int32)
-    next_label = 1
-
-    # First pass
-    for i in range(rows):
-        for j in range(cols):
-            if data[i, j] == 0:
-                continue
-
-            neighbors = []
-            for di in range(-1, 2):
-                for dj in range(-1, 2):
-                    ni, nj = i + di, j + dj
-                    if 0 <= ni < rows and 0 <= nj < cols:
-                        if structure[di + 1, dj + 1] == 1 and labels[ni, nj] != 0:
-                            neighbors.append(labels[ni, nj])
-
-            if not neighbors:
-                labels[i, j] = next_label
-                next_label += 1
-            else:
-                min_label = min(neighbors)
-                labels[i, j] = min_label
-                for neighbor in neighbors:
-                    if neighbor != min_label:
-                        _union(min_label, neighbor, parent)
-
-    # Second pass
-    for i in range(rows):
-        for j in range(cols):
-            if labels[i, j] != 0:
-                labels[i, j] = _find_root(labels[i, j], parent)
-
-    # Relabel to ensure labels are contiguous
-    unique_labels = np.unique(labels)
-    label_map = np.zeros(unique_labels.max() + 1, dtype=np.int32)
-    for new_label, old_label in enumerate(unique_labels):
-        label_map[old_label] = new_label
-    for i in range(rows):
-        for j in range(cols):
-            if labels[i, j] != 0:
-                labels[i, j] = label_map[labels[i, j]]
-    num_features = (
-        len(unique_labels) - 1
-    )  # Subtract 1 to exclude the background label (0)
-
-    return labels, num_features
-
-
 def parse_numpy_slicing(slicing_str: str) -> list:
     """
     Parses a NumPy slicing string and converts it to a list of Python slice objects.
@@ -772,9 +694,7 @@ def parse_numpy_slicing(slicing_str: str) -> list:
             slice_parts = part.split(":")
             start = int(slice_parts[0]) if slice_parts[0] else None
             stop = int(slice_parts[1]) if slice_parts[1] else None
-            step = (
-                int(slice_parts[2]) if len(slice_parts) > 2 and slice_parts[2] else None
-            )
+            step = int(slice_parts[2]) if len(slice_parts) > 2 and slice_parts[2] else None
             slices.append(slice(start, stop, step))
         else:
             slices.append(int(part))
@@ -838,31 +758,21 @@ def apply_pixelwise(cores, data, func, *args, **kwargs) -> np.ndarray:
         return func(data, *args, **kwargs)
 
     rows_per_process = divide_evenly(data.shape[1], cores)
-    results = np.zeros(
-        (result_shape[0], data.shape[1], data.shape[2]), dtype=result_type
-    )
+    results = np.zeros((result_shape[0], data.shape[1], data.shape[2]), dtype=result_type)
     with ProcessPoolExecutor() as executor:
         futures = []
         for i in range(cores):
             # copy the data of one row and submit it to the executor
             # this is necessary to avoid memory issues
-            process_data = data[
-                :, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :
-            ]
-            futures.append(
-                executor.submit(
-                    process_batch, func, process_data.copy(), *args, **kwargs
-                )
-            )
+            process_data = data[:, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :]
+            futures.append(executor.submit(process_batch, func, process_data.copy(), *args, **kwargs))
         # wait for all futures to be done
         wait(futures)
         # Process the results in the order they were submitted
         for i, future in enumerate(futures):
             try:
                 batch_results = future.result()
-                results[
-                    :, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :
-                ] = batch_results
+                results[:, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :] = batch_results
             except Exception as e:
                 raise e
     return results
@@ -907,3 +817,146 @@ def divide_evenly(number: int, parts: int) -> list:
     for i in range(remainder):
         result[i] += 1
     return result
+
+
+def label_frame(
+    data: np.ndarray,
+    primary_threshold: float,
+    secondary_threshold: float,
+    noise_map: np.ndarray,
+    structure: np.ndarray,
+) -> tuple[np.ndarray, int]:
+
+    primary_mask = data > primary_threshold * noise_map
+    secondary_mask = data > secondary_threshold * noise_map
+
+    # Label primary regions
+    primary_labels, num_primary = ndimage.label(primary_mask, structure=structure)  # type: ignore
+
+    # For each primary region, grow into secondary threshold areas
+    final_labels = np.zeros_like(data, dtype=np.uint16)
+
+    for i in range(1, num_primary + 1):
+        # Create seed from primary region
+        seed = primary_labels == i
+
+        # Dilate iteratively while staying within secondary threshold
+        current_region = seed.copy()
+
+        while True:
+            # Dilate one step
+            dilated = ndimage.binary_dilation(current_region, structure=structure)
+            # Keep only pixels above secondary threshold
+            new_region = np.logical_and(dilated, secondary_mask)
+
+            # Stop if no new pixels added
+            if np.array_equal(new_region, current_region):
+                break
+            current_region = new_region
+
+        final_labels[current_region] = i
+    num_features = int(np.max(final_labels)) if final_labels.max() > 0 else 0
+
+    return final_labels, num_features
+
+
+def create_event_data(
+    data: np.ndarray, primary_threshold: float, secondary_threshold: float, noise_map: np.ndarray, structure: np.ndarray
+) -> list:
+
+    event_data = []
+    signal_counter = 0
+    event_counter = 0
+    for frame_idx in range(data.shape[0]):
+        if frame_idx % 100 == 0:
+            print(frame_idx)
+        # get all labels for the frame
+        labels, num_features = label_frame(
+            data[frame_idx, :], primary_threshold, secondary_threshold, noise_map, structure
+        )
+        # loop through features (0=no feature)
+        for feature in range(1, num_features + 1):
+            # Find all labeled pixels with that feature
+            labeled_pixels = np.where(labels == feature)
+            no_signals = len(labeled_pixels[0])
+            for i in range(len(labeled_pixels[0])):
+                row_idx = labeled_pixels[0][i]
+                col_idx = labeled_pixels[1][i]
+                pixel_value = data[frame_idx, row_idx, col_idx]
+
+                # Determine threshold levels
+                primary_check = pixel_value > primary_threshold * noise_map[row_idx, col_idx]
+                secondary_check = pixel_value > secondary_threshold * noise_map[row_idx, col_idx]
+
+                event_data.append(
+                    {
+                        "signal_id": signal_counter,
+                        "event_id": event_counter,
+                        "no_signals": no_signals,
+                        "frame": frame_idx,
+                        "row": row_idx,
+                        "col": col_idx,
+                        "value": pixel_value,
+                        "is_primary": primary_check,
+                        "is_secondary": np.bool_(secondary_check and not primary_check),
+                    }
+                )
+                signal_counter += 1
+            event_counter += 1
+    print(event_counter)
+    return event_data
+
+
+def write_event_data_to_h5(event_data: list, h5_filename: str, path: str, table_name: str) -> None:
+    """
+    Write event data to an HDF5 file using PyTables.
+
+    Args:
+        event_data: List of event dictionaries from create_event_data()
+        h5_filename: Path to the HDF5 file to create/write
+        table_name: Name of the table in the HDF5 file (default: "events")
+    """
+
+    class EventRecord(tables.IsDescription):
+        signal_id = tables.UInt32Col(dflt=0)  # type: ignore
+        event_id = tables.UInt32Col(dflt=0)  # type: ignore
+        no_signals = tables.UInt16Col(dflt=0)  # type: ignore
+        frame = tables.UInt32Col(dflt=0)  # type: ignore
+        row = tables.UInt8Col(dflt=0)  # type: ignore
+        col = tables.UInt8Col(dflt=0)  # type: ignore
+        value = tables.Float64Col(dflt=0.0)  # type: ignore
+        is_primary = tables.BoolCol(dflt=False)  # type: ignore
+        is_secondary = tables.BoolCol(dflt=False)  # type: ignore
+
+    # Create and write to HDF5 file
+    with tables.open_file(h5_filename, mode="w") as h5file:
+        # Create the table
+        table = h5file.create_table(path, table_name, EventRecord, "Pixel events with thresholds")
+
+        # Get a reference to table row for writing
+        event_row = table.row
+
+        # Write each event to the table
+        for event in event_data:
+            # Fill the row data
+            event_row["signal_id"] = event["signal_id"]
+            event_row["event_id"] = event["event_id"]
+            event_row["no_signals"] = event["no_signals"]
+            event_row["frame"] = event["frame"]
+            event_row["row"] = event["row"]
+            event_row["col"] = event["col"]
+            event_row["value"] = event["value"]
+            event_row["is_primary"] = event["is_primary"]
+            event_row["is_secondary"] = event["is_secondary"]
+
+            # Add the row to the table
+            event_row.append()
+
+        # Flush data to disk
+        table.flush()
+
+        # Add some metadata
+        table.attrs.total_events = len(event_data)
+        table.attrs.description = "Event data from two-threshold analysis"
+
+        print(f"Successfully wrote {len(event_data)} events to {h5_filename}")
