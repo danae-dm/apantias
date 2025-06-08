@@ -11,6 +11,7 @@ from scipy import ndimage
 import tables
 
 from . import utils
+from . import events
 
 
 def get_slopes(data: np.ndarray) -> np.ndarray:
@@ -41,10 +42,9 @@ def correct_common_mode(data: np.ndarray) -> None:
     data -= median_common
 
 
-def create_event_data(
+def create_event_table(
     h5_file: str,
-    path: str,
-    table_name: str,
+    table_path: str,
     data: np.ndarray,
     primary_threshold: float,
     secondary_threshold: float,
@@ -52,13 +52,16 @@ def create_event_data(
     structure: np.ndarray,
 ):
     """ """
+    path, _, table_name = table_path.rpartition("/")
+    print(path)
+    print(table_name)
     print("start creating event dict")
-    event_data = utils.create_event_data(data, primary_threshold, secondary_threshold, noise_map, structure)
+    event_data = events.create_event_data(data, primary_threshold, secondary_threshold, noise_map, structure)
     print("start writing event dict")
-    utils.write_event_data_to_h5(event_data, h5_file, path, table_name)
+    events.write_event_data_to_h5(event_data, h5_file, path, table_name)
 
 
-def query_event_data(h5_filename: str, query: str, path: str, table_name: str) -> np.ndarray:
+def query_event_data(h5_filename: str, table_path: str, query: str, column_name: str) -> np.ndarray:
     """
     Query event data from HDF5 file with conditions.
 
@@ -70,26 +73,26 @@ def query_event_data(h5_filename: str, query: str, path: str, table_name: str) -
     Returns:
         Filtered numpy array with event data
     """
+    path, _, table_name = table_path.rpartition("/")
     try:
         with tables.open_file(h5_filename, mode="r") as h5file:
-            table = h5file.get_node(path, table_name)
-            if not isinstance(table, tables.Table):
+            table = h5file.get_node("/" + path, table_name)
+            if not isinstance(table, tables.Table) or table.cols is None:
                 # Return empty array if not a Table
                 return np.array([])
-
-            # Create a query iterator for large datasets
-            query_iter = table.where(query)
-
-            # Collect results - for small datasets, read all
-            filtered_data = np.array([row[:] for row in query_iter])
+            column_obj = getattr(table.cols, column_name)
+            column_values = []
+            for i, row in enumerate(table.where(query)):
+                column_values.append(row[column_name])
 
             # If no results, create empty array with correct dtype
-            if len(filtered_data) == 0:
-                filtered_data = np.array([], dtype=table.dtype)
+            if len(column_values) == 0:
+                return np.array([], dtype=column_obj.dtype)
 
-            print(f"Query '{query}' returned {len(filtered_data)} events")
+            print(f"Query '{query}' returned {len(column_values)} events")
 
-            return filtered_data
+            return np.array(column_values, dtype=column_obj.dtype)
     except Exception as e:
+        print(e)
         return np.array([])
     return np.array([])
