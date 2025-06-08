@@ -8,41 +8,40 @@ from scipy import stats
 from sklearn.cluster import DBSCAN
 import tables
 from scipy import ndimage
+import os
 
 from . import fitting
+from . import utils
 
 
-def shapiro(data: np.ndarray, axis: int):
-    """
-    Performs the Shapiro-Wilk test for normality along a specified axis of a NumPy array.
+def get_cpu_count():
+    # try slurm, if it runs as a job or in a countainer
+    slurm_cpus = os.getenv("SLURM_CPUS_PER_TASK")
+    if slurm_cpus:
+        return int(slurm_cpus)
+    # try cpu_count, if it doesnt
+    cpu_count = os.cpu_count()
+    if cpu_count is not None:
+        return cpu_count
+    else:
+        return 8  # fallback
 
-    Args:
-        data (np.ndarray): Input data array.
-        axis (int): Axis along which to perform the Shapiro-Wilk test.
 
-    Returns:
-        np.ndarray: An array of p-values indicating the likelihood that each slice follows a normal distribution.
-    """
-    result_shape = list(data.shape)
-    result_shape.pop(axis)
-    result = np.zeros(result_shape, dtype=float)
-
-    # Iterate over the slices along the specified axis
-    it = np.nditer(result, flags=["multi_index"])
-    while not it.finished:
-        # Get the slice indices
-        idx = list(it.multi_index)
-        idx.insert(int(axis), slice(None))  # type: ignore
-
-        # Perform the Shapiro-Wilk test
-        _, shapiro_p_value = stats.shapiro(data[tuple(idx)])
-
-        # Determine if the slice follows a normal distribution
-        result[it.multi_index] = shapiro_p_value
-
-        it.iternext()
-
-    return result
+def get_avail_ram_gb():
+    # try slurm, if it runs as a job or in a countainer
+    slurm_mem = os.getenv("SLURM_MEM_PER_NODE")
+    if slurm_mem:
+        return int(slurm_mem) // 1024
+    # try reading from system, if it doesnt
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    parts = line.split()
+                    return int(parts[1]) // 1024**2  # Convert from kB to MB
+    except:
+        pass
+    return 16
 
 
 def get_avg_over_nreps(data: np.ndarray) -> np.ndarray:
@@ -722,7 +721,7 @@ def process_batch(func, row_data, *args, **kwargs):
     return batch_results
 
 
-def apply_pixelwise(cores, data, func, *args, **kwargs) -> np.ndarray:
+def apply_pixelwise(data, func, *args, **kwargs) -> np.ndarray:
     """
     Helper function to apply a function to each pixel in a 3D numpy array in parallel.
     Data must have shape (n,row,col). The function is applied to [:,row,col].
@@ -731,7 +730,6 @@ def apply_pixelwise(cores, data, func, *args, **kwargs) -> np.ndarray:
     The passed function must have a data parameter, which is the first argument.
 
     Args:
-        cores (int): Number of CPU cores to use.
         data (np.ndarray): Input 3D array with shape (n, row, col).
         func (callable): Function to apply to each pixel.
         *args: Additional arguments for the function.
@@ -753,6 +751,7 @@ def apply_pixelwise(cores, data, func, *args, **kwargs) -> np.ndarray:
         raise ValueError("Function must return a numpy array.")
     if result.ndim != 1:
         raise ValueError("Function must return a 1D numpy array.")
+    cores = utils.get_cpu_count()
     # initialize results, now that we know what the function returns
     if cores == 1:
         return func(data, *args, **kwargs)
@@ -863,7 +862,7 @@ def label_frame(
 def create_event_data(
     data: np.ndarray, primary_threshold: float, secondary_threshold: float, noise_map: np.ndarray, structure: np.ndarray
 ) -> list:
-
+    # TODO: parallelize this, look into using Pool instead of Process
     event_data = []
     signal_counter = 0
     event_counter = 0

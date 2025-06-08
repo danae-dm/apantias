@@ -276,6 +276,7 @@ def _create_vds(h5_file: str, vds_list: list):
     Returns:
         None
     """
+    h5_dir = os.path.dirname(h5_file)
     for dataset in vds_list:
         name = dataset["name"]
         sources = dataset["sources"]
@@ -290,13 +291,15 @@ def _create_vds(h5_file: str, vds_list: list):
             for source in sources:
                 source_h5 = source.split(".h5")[0] + ".h5"
                 source_dataset = source.split(".h5")[1]
+                # get the relative path:
+                source_h5_rel = os.path.relpath(source_h5, h5_dir)
                 with h5py.File(source_h5, "r") as source_f:
                     dset = source_f[source_dataset]
                     assert isinstance(dset, h5py.Dataset)
                     sh = dset.shape
                     attributes = dict(dset.attrs)
                 end_index = start_index + sh[0]
-                vsource = h5py.VirtualSource(source_h5, source_dataset, shape=sh)
+                vsource = h5py.VirtualSource(source_h5_rel, source_dataset, shape=sh)
                 layout[start_index:end_index, ...] = vsource
                 start_index = end_index
             # fillvalue = np.nan means, that if the source dataset is not present, the value is np.nan
@@ -586,10 +589,6 @@ def _preprocess(
         attributes["info"] += f" Common mode corrected. {data.shape}"
         del offset, common_modes
         gc.collect()
-        if data.shape[2] > 50:
-            shapiro = utils.shapiro(data, axis=2)
-            _write_data_to_h5(h5_group + "preproc_shapiro", shapiro, {"avg": "mean"})
-            del shapiro
 
         mean = np.mean(data, axis=2)
         new_attrs = {
@@ -630,10 +629,6 @@ def _preprocess(
         for item in nreps_eval:
             s = slice(item[0], item[1], item[2])
             data_slice = data[:, :, s, :]
-            if data_slice.shape[2] > 50:
-                shapiro = utils.shapiro(data_slice, axis=2)
-                _write_data_to_h5(h5_group + f"{s}_preproc_shapiro", shapiro, {"avg": "mean"})
-                del shapiro
             mean = np.mean(data_slice, axis=2)
             std = np.std(data_slice, axis=2)
             median = np.median(data_slice, axis=2)
@@ -793,6 +788,7 @@ def create_data_file_from_bins(
         offset,
     )
     _logger.info("Starting preprocessing step.")
+    _logger.info(f"{available_cpu_cores} CPUs and {available_ram_gb} GB RAM will be used.")
     _logger.info("These .bin_file files will be processed:")
     for bin_file in bin_files:
         _logger.info("%s of size %.2f GB", bin_file, os.path.getsize(bin_file) / (1024**3))
