@@ -657,8 +657,8 @@ def create_data_file_from_bins(
     key_ints: int = 3,
     ignore_first_nreps: int = 3,
     offset: int = 8,
-    available_cpu_cores: int = 4,
-    available_ram_gb: int = 16,
+    available_cpu_cores: int = 0,
+    available_ram_gb: int = 0,
     ext_dark_frame_h5: Optional[str] = None,
     nreps_eval: Optional[list[list[int]]] = None,
     attributes: Optional[dict] = None,
@@ -695,6 +695,10 @@ def create_data_file_from_bins(
         None
     """
     # check if folder, bin_file files exist and calculate nreps and make sure they are all the same
+    if available_cpu_cores == 0:
+        available_cpu_cores = utils.get_cpu_count()
+    if available_ram_gb == 0:
+        available_ram_gb = utils.get_avail_ram_gb()
     if not os.path.exists(output_folder):
         raise FileNotFoundError(f"Folder {output_folder} does not exist.")
     nreps_list = []
