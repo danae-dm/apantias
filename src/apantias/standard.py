@@ -107,10 +107,12 @@ class Default(Analysis):
         _logger.info("Finished fitting")
         lower_bound = fitted[1, :, :] - self.thres_bad_slopes * np.abs(fitted[2, :, :])
         upper_bound = fitted[1, :, :] + self.thres_bad_slopes * np.abs(fitted[2, :, :])
+        failed_fits_mask = np.isnan(fitted[1, :, :]) | np.isnan(fitted[2, :, :])
         bad_slopes_mask = (slopes < lower_bound) | (slopes > upper_bound)
+        bad_pixels_mask = bad_slopes_mask | failed_fits_mask
         io.add_array(self.out_h5, fitted, "1_clean/slope_fit_parameters")
-        io.add_array(self.out_h5, bad_slopes_mask, "1_clean/bad_slopes_mask")
-        io.add_array(self.out_h5, np.sum(bad_slopes_mask, axis=0), "1_clean/bad_slopes_count")
+        io.add_array(self.out_h5, bad_pixels_mask, "1_clean/bad_slopes_mask")
+        io.add_array(self.out_h5, np.sum(bad_pixels_mask, axis=0), "1_clean/bad_slopes_count")
         failed_fits = np.sum(np.isnan(fitted[:, :, 1]))
         if failed_fits > 0:
             _logger.warning(
@@ -119,12 +121,12 @@ class Default(Analysis):
         data = io.get_data_from_file(self.data_h5, "preproc_mean_nreps")
         io.add_array(self.out_h5, data, "1_clean/preproc_pixel_data")  # rename this
         _logger.info("Removing bad slopes")
-        data[bad_slopes_mask] = np.nan
-        sum_bad_slopes = np.sum(bad_slopes_mask)
+        data[bad_pixels_mask] = np.nan
+        sum_bad_slopes = np.sum(bad_pixels_mask)
         _logger.warning(
             "Signals removed due to bad slopes: %d (%.2f%%)",
             sum_bad_slopes,
-            (sum_bad_slopes / (bad_slopes_mask.size) * 100),
+            (sum_bad_slopes / (bad_pixels_mask.size) * 100),
         )
         _logger.info("Removing outliers")
         fitted = utils.apply_pixelwise(data, fit.fit_gauss_to_hist)

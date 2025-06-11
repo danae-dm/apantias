@@ -14,6 +14,16 @@ def label_frame(
     noise_map: np.ndarray,
     structure: np.ndarray,
 ) -> tuple[np.ndarray, int]:
+    """
+    Label connected regions in the data based on primary and secondary thresholds.
+
+    Args:
+        data: 2D array of pixel values for a single frame
+        primary_threshold: Primary threshold value
+        secondary_threshold: Secondary threshold value
+        noise_map: 2D array of noise values corresponding to the data
+        structure: Structure array for morphological operations
+    """
 
     primary_mask = data > primary_threshold * noise_map
     secondary_mask = data > secondary_threshold * noise_map
@@ -202,10 +212,10 @@ def create_event_data(
         secondary_threshold: Secondary threshold value
         noise_map: Noise map array
         structure: Structure array for morphological operations
-        available_cpus: Number of CPU cores to use for processing
+        available_cpus: (optional) Number of CPU cores to use for processing
 
     Returns:
-        List of event dictionaries with sequential ordering preserved
+        List of event dictionaries
     """
     if available_cpus == 0:
         available_cpus = utils.get_cpu_count()
