@@ -47,6 +47,7 @@ def get_data_from_file(
     path: str,
     dataset_path: Optional[str] = None,
     slicing: Optional[str] = None,
+    orig_type: bool = False,
 ) -> np.ndarray:
     """
     Retrieves data from a specified dataset in an HDF5 file.
@@ -83,8 +84,10 @@ def get_data_from_file(
             data = dataset[tuple(slices)]
         else:
             data = dataset[:]
-
-        data = data.astype(np.float64)
+        if not orig_type:
+            # Convert to float64 if not already in that format
+            if dataset.dtype != np.float64:
+                data = data.astype(np.float64)
     return data
 
 
@@ -185,6 +188,7 @@ def _create_analysis_file(
     output_filename: str,
     parameter_file_contents: dict,
     attributes_dict: dict,
+    data_h5: str,
 ) -> None:
     """
     Creates an analysis HDF5 file with predefined groups and metadata.
@@ -214,14 +218,38 @@ def _create_analysis_file(
         else:
             for key, value in attributes_dict.items():
                 f.attrs[key] = value
-        f.create_group("0_infos")
+        f.create_group("infos")
         f.create_dataset(
-            "0_infos/parameter_json",
+            "infos/parameter_json",
             data=repr(parameter_file_contents),
             dtype=h5py.special_dtype(vlen=str),
         )
         f.create_dataset(
-            "0_infos/apantias_version",
+            "infos/apantias_version",
             data=repr(__version__),
             dtype=h5py.special_dtype(vlen=str),
         )
+        f.create_dataset("infos/data_file_location", data = f"Location of data file: {data_h5}. If there is data missing in the group 0_raw_data or in the Event Tree, it has probably been moved or deleted.")
+
+
+def _get_all_datasets(h5_file: str) -> list:
+    """
+    Recursively get all datasets from an HDF5 file with their full paths.
+    
+    Args:
+        h5_file (str): Path to the HDF5 file
+        
+    Returns:
+        list: List of dictionaries containing dataset information
+    """
+    datasets = []
+    def visitor(name, obj):
+        if isinstance(obj, h5py.Dataset):
+            datasets.append({
+                "name": "0_raw_data/" + name,
+                "sources": [f"{h5_file}/{name}"],
+                "final_shape": obj.shape
+            })
+    with h5py.File(h5_file, "r") as f:
+        f.visititems(visitor)
+    return datasets

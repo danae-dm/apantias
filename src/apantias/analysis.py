@@ -7,8 +7,11 @@ to optimize performance on large datasets.
 
 import numpy as np
 from numba import njit, prange
+from scipy import ndimage
+import tables
 
 from . import utils
+from . import events
 
 
 def get_slopes(data: np.ndarray) -> np.ndarray:
@@ -39,65 +42,61 @@ def correct_common_mode(data: np.ndarray) -> None:
     data -= median_common
 
 
-@njit(parallel=True)
-def group_pixels(
+def create_event_table(
+    h5_file: str,
+    table_path: str,
     data: np.ndarray,
     primary_threshold: float,
     secondary_threshold: float,
     noise_map: np.ndarray,
     structure: np.ndarray,
-) -> np.ndarray:
+):
+    """ """
+    path, _, table_name = table_path.rpartition("/")
+    if path == "":
+        path = "/"
+    print(path)
+    print(table_name)
+    print("start creating event dict")
+    event_data = events.create_event_data(data, primary_threshold, secondary_threshold, noise_map, structure)
+    print("start writing event dict")
+    events.write_event_data_to_h5(event_data, h5_file, path, table_name)
+
+
+def query_event_data(h5_filename: str, table_path: str, query: str, column_name: str) -> np.ndarray:
     """
-    Uses the two pass labelling algorithm to group events.
-    Pixels over the primary threshold are connected to pixels above the
-    secondary threshold according to a structure element.
-    Input is of shape (frame,row,col), calulation over the frames is
-    parallized using numba's prange.
-    The output is a numpy array of shape (frame,row,col) with zeroes if there
-    is no event above the primary threshold. Clustered events are labeled with
-    integers beginning with 1.
+    Query event data from HDF5 file with conditions.
+
     Args:
-        data: (nframes, column_size, row_size)
-        primary_threshold
-        secondary_threshold
-        noise_map: (column_size, row_size)
-        structure: (3,3)
+        h5_filename: Path to the HDF5 file
+        query: Query string (e.g., "is_primary == True")
+        table_name: Name of the table in the HDF5 file (default: "events")
+
+    Returns:
+        Filtered numpy array with event data
     """
-    output = np.zeros(data.shape, dtype=np.uint16)
-    for frame_index in prange(data.shape[0]):
-        mask_primary = data[frame_index] > primary_threshold * noise_map
-        mask_secondary = data[frame_index] > secondary_threshold * noise_map
-        # Set the first and last rows to zero
-        mask_primary[0, :] = 0
-        mask_primary[-1, :] = 0
-        mask_secondary[0, :] = 0
-        mask_secondary[-1, :] = 0
+    path, _, table_name = table_path.rpartition("/")
+    if path == "":
+        path = "/"
+    try:
+        with tables.open_file(h5_filename, mode="r") as h5file:
+            table = h5file.get_node("/" + path, table_name)
+            if not isinstance(table, tables.Table) or table.cols is None:
+                # Return empty array if not a Table
+                return np.array([])
+            column_obj = getattr(table.cols, column_name)
+            column_values = []
+            for i, row in enumerate(table.where(query)):
+                column_values.append(row[column_name])
 
-        # Set the first and last columns to zero
-        mask_primary[:, 0] = 0
-        mask_primary[:, -1] = 0
-        mask_secondary[:, 0] = 0
-        mask_secondary[:, -1] = 0
+            # If no results, create empty array with correct dtype
+            if len(column_values) == 0:
+                return np.array([], dtype=column_obj.dtype)
 
-        labeled_primary, num_features_primary = utils.two_pass_labeling(
-            mask_primary, structure=structure
-        )
-        # Iterate over each feature in the primary mask
-        for feature_num in range(1, num_features_primary + 1):
-            # Create a mask for the current feature
-            feature_mask = labeled_primary == feature_num
+            print(f"Query '{query}' returned {len(column_values)} events")
 
-            # Expand the feature mask to include secondary threshold pixels
-            expanded_mask = mask_secondary & feature_mask
-
-            # Label the expanded mask
-            labeled_expanded, _ = utils.two_pass_labeling(
-                expanded_mask, structure=structure
-            )
-
-            # Get the indices where labeled_expanded > 0
-            indices = np.where(labeled_expanded > 0)
-            for i in range(len(indices[0])):
-                output[frame_index, indices[0][i], indices[1][i]] = feature_num
-
-    return output
+            return np.array(column_values, dtype=column_obj.dtype)
+    except Exception as e:
+        print(e)
+        return np.array([])
+    return np.array([])

@@ -276,6 +276,7 @@ def _create_vds(h5_file: str, vds_list: list):
     Returns:
         None
     """
+    h5_dir = os.path.dirname(h5_file)
     for dataset in vds_list:
         name = dataset["name"]
         sources = dataset["sources"]
@@ -284,18 +285,21 @@ def _create_vds(h5_file: str, vds_list: list):
         dset = h5py.File(sources[0].split(".h5")[0] + ".h5", "r")[sources[0].split(".h5")[1]]
         assert isinstance(dset, h5py.Dataset)
         layout = h5py.VirtualLayout(shape=final_shape, dtype=dset.dtype)
+        attributes = {}
         with h5py.File(h5_file, "a") as f:
             start_index = 0
             for source in sources:
                 source_h5 = source.split(".h5")[0] + ".h5"
                 source_dataset = source.split(".h5")[1]
+                # get the relative path:
+                source_h5_rel = os.path.relpath(source_h5, h5_dir)
                 with h5py.File(source_h5, "r") as source_f:
                     dset = source_f[source_dataset]
                     assert isinstance(dset, h5py.Dataset)
                     sh = dset.shape
                     attributes = dict(dset.attrs)
                 end_index = start_index + sh[0]
-                vsource = h5py.VirtualSource(source_h5, source_dataset, shape=sh)
+                vsource = h5py.VirtualSource(source_h5_rel, source_dataset, shape=sh)
                 layout[start_index:end_index, ...] = vsource
                 start_index = end_index
             # fillvalue = np.nan means, that if the source dataset is not present, the value is np.nan
@@ -482,17 +486,47 @@ def _process_raw_data(
     try:
         data = _read_data_from_bin(bin_file, column_size, row_size, key_ints, nreps, offset, counts)
         # data is saved to file in uint16 to save space
-        _write_data_to_h5(h5_group + "raw_data", data, {"avg": "False"})
+        attributes = {"avg": "False", "info": f"Raw data as read from .bin file. {data.shape}"}
+        _write_data_to_h5(h5_group + "raw_data", data, attributes)
+        data = data.astype(np.float64) * polarity
+        attributes["info"] += f" Multiplied by polarity. {data.shape}"
         data = data[:, :, ignore_first_nreps:, :]
-        # performing the mean automatically casts to float64, multiply by polarity now
-        raw_offset = np.mean(data, axis=0, keepdims=True) * data.shape[0] * polarity
-        raw_data_mean = np.mean(data, axis=2) * polarity
-        raw_data_median = np.median(data, axis=2) * polarity
-        raw_data_std = np.std(data, axis=2) * polarity
-        _write_data_to_h5(h5_group + "raw_offset", raw_offset, {"avg": "weighted"})
-        _write_data_to_h5(h5_group + "raw_data_mean_nreps", raw_data_mean, {"avg": "mean"})
-        _write_data_to_h5(h5_group + "raw_data_std_nreps", raw_data_std, {"avg": "mean"})
-        _write_data_to_h5(h5_group + "raw_data_median_nreps", raw_data_median, {"avg": "mean"})
+        attributes["info"] += f" Ignored first {ignore_first_nreps} nreps. {data.shape}"
+
+        # raw_offset is multiplied by the number of frames read by this process for the weighted average calculation
+        raw_offset = np.mean(data, axis=0, keepdims=True) * data.shape[0]
+        new_attrs = {
+            **attributes,
+            "avg": "weighted",
+            "info": attributes["info"]
+            + f" Mean over frames. Multiplied by frames read by this process. {raw_offset.shape}",
+        }
+        _write_data_to_h5(h5_group + "raw_offset", raw_offset, new_attrs)
+
+        raw_data_mean = np.mean(data, axis=2)
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Mean over Nreps. {raw_data_mean.shape}",
+        }
+        _write_data_to_h5(h5_group + "raw_data_mean_nreps", raw_data_mean, new_attrs)
+
+        raw_data_median = np.median(data, axis=2)
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Median over Nreps. {raw_data_median.shape}",
+        }
+        _write_data_to_h5(h5_group + "raw_data_median_nreps", raw_data_median, new_attrs)
+
+        raw_data_std = np.std(data, axis=2)
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Standard deviation over Nreps. {raw_data_std.shape}",
+        }
+        _write_data_to_h5(h5_group + "raw_data_std_nreps", raw_data_std, new_attrs)
+
         del raw_offset, raw_data_mean, raw_data_median, raw_data_std, data
         gc.collect()
     except Exception as e:
@@ -532,30 +566,62 @@ def _preprocess(
     """
     try:
         data = _read_data_from_h5(h5_group + "raw_data")
-        data = data[:, :, ignore_first_nreps:, :]
+        attributes = {"avg": "false", "info": f"Raw data as read from .bin file. {data.shape}"}
         data = data.astype(np.float64) * polarity
+        attributes["info"] += f" Multiplied by polarity. {data.shape}"
+        data = data[:, :, ignore_first_nreps:, :]
+        attributes["info"] += f" Ignored first {ignore_first_nreps} nreps. {data.shape}"
         if ext_dark_frame_dset is not None:
             offset_map = _read_data_from_h5(ext_dark_frame_dset)
+            attributes["info"] += f" Subtracted external offset. {offset_map.shape}"
         else:
             offset_map = _read_data_from_h5(h5_file_virtual + "raw_offset_weighted_frames")
+            attributes["info"] += f" Subtracted (own) offset. {offset_map.shape}"
         data -= offset_map
         common_modes = np.median(data, axis=3, keepdims=True)
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Commmon mode calculated. {common_modes.shape}",
+        }
+        _write_data_to_h5(h5_group + "preproc_common_modes", common_modes, new_attrs)
         data -= common_modes
-        _write_data_to_h5(h5_group + "preproc_common_modes", common_modes, {"avg": "mean"})
+        attributes["info"] += f" Common mode corrected. {data.shape}"
         del offset, common_modes
         gc.collect()
-        if data.shape[2] > 50:
-            shapiro = utils.shapiro(data, axis=2)
-            _write_data_to_h5(h5_group + "preproc_shapiro", shapiro, {"avg": "mean"})
-            del shapiro
+
         mean = np.mean(data, axis=2)
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Mean over Nreps. {mean.shape}",
+        }
+        _write_data_to_h5(h5_group + "preproc_mean_nreps", mean, new_attrs)
+
         std = np.std(data, axis=2)
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Standard Deviation over Nreps. {std.shape}",
+        }
+        _write_data_to_h5(h5_group + "preproc_std_nreps", std, new_attrs)
+
         median = np.median(data, axis=2)
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Median over Nreps. {median.shape}",
+        }
+        _write_data_to_h5(h5_group + "preproc_median_nreps", median, new_attrs)
+
         slopes = utils.apply_slope_fit_along_frames_single(data)
-        _write_data_to_h5(h5_group + "preproc_mean_nreps", mean, {"avg": "mean"})
-        _write_data_to_h5(h5_group + "preproc_median_nreps", median, {"avg": "mean"})
-        _write_data_to_h5(h5_group + "preproc_std_nreps", std, {"avg": "mean"})
-        _write_data_to_h5(h5_group + "preproc_slope_nreps", slopes, {"avg": "mean"})
+        new_attrs = {
+            **attributes,
+            "avg": "mean",
+            "info": attributes["info"] + f" Slope of the linear fit over Nreps. {slopes.shape}",
+        }
+        _write_data_to_h5(h5_group + "preproc_slope_nreps", slopes, new_attrs)
+
         del mean, std, median, slopes
         gc.collect()
         if nreps_eval is None:
@@ -563,10 +629,6 @@ def _preprocess(
         for item in nreps_eval:
             s = slice(item[0], item[1], item[2])
             data_slice = data[:, :, s, :]
-            if data_slice.shape[2] > 50:
-                shapiro = utils.shapiro(data_slice, axis=2)
-                _write_data_to_h5(h5_group + f"{s}_preproc_shapiro", shapiro, {"avg": "mean"})
-                del shapiro
             mean = np.mean(data_slice, axis=2)
             std = np.std(data_slice, axis=2)
             median = np.median(data_slice, axis=2)
@@ -595,8 +657,8 @@ def create_data_file_from_bins(
     key_ints: int = 3,
     ignore_first_nreps: int = 3,
     offset: int = 8,
-    available_cpu_cores: int = 4,
-    available_ram_gb: int = 16,
+    available_cpu_cores: int = 0,
+    available_ram_gb: int = 0,
     ext_dark_frame_h5: Optional[str] = None,
     nreps_eval: Optional[list[list[int]]] = None,
     attributes: Optional[dict] = None,
@@ -633,6 +695,10 @@ def create_data_file_from_bins(
         None
     """
     # check if folder, bin_file files exist and calculate nreps and make sure they are all the same
+    if available_cpu_cores == 0:
+        available_cpu_cores = utils.get_cpu_count()
+    if available_ram_gb == 0:
+        available_ram_gb = utils.get_avail_ram_gb()
     if not os.path.exists(output_folder):
         raise FileNotFoundError(f"Folder {output_folder} does not exist.")
     nreps_list = []
@@ -726,6 +792,7 @@ def create_data_file_from_bins(
         offset,
     )
     _logger.info("Starting preprocessing step.")
+    _logger.info(f"{available_cpu_cores} CPUs and {available_ram_gb} GB RAM will be used.")
     _logger.info("These .bin_file files will be processed:")
     for bin_file in bin_files:
         _logger.info("%s of size %.2f GB", bin_file, os.path.getsize(bin_file) / (1024**3))

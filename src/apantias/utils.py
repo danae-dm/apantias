@@ -4,43 +4,41 @@ from concurrent.futures import ProcessPoolExecutor, wait
 
 import numpy as np
 from numba import njit, prange
-from scipy import stats
 from sklearn.cluster import DBSCAN
+import os
 
 from . import fitting
+from . import utils
 
 
-def shapiro(data: np.ndarray, axis: int):
-    """
-    Performs the Shapiro-Wilk test for normality along a specified axis of a NumPy array.
+def get_cpu_count():
+    # try slurm, if it runs as a job or in a countainer
+    slurm_cpus = os.getenv("SLURM_CPUS_PER_TASK")
+    if slurm_cpus:
+        return int(slurm_cpus)
+    # try cpu_count, if it doesnt
+    cpu_count = os.cpu_count()
+    if cpu_count is not None:
+        return cpu_count
+    else:
+        return 8  # fallback
 
-    Args:
-        data (np.ndarray): Input data array.
-        axis (int): Axis along which to perform the Shapiro-Wilk test.
 
-    Returns:
-        np.ndarray: An array of p-values indicating the likelihood that each slice follows a normal distribution.
-    """
-    result_shape = list(data.shape)
-    result_shape.pop(axis)
-    result = np.zeros(result_shape, dtype=float)
-
-    # Iterate over the slices along the specified axis
-    it = np.nditer(result, flags=["multi_index"])
-    while not it.finished:
-        # Get the slice indices
-        idx = list(it.multi_index)
-        idx.insert(int(axis), slice(None))  # type: ignore
-
-        # Perform the Shapiro-Wilk test
-        _, shapiro_p_value = stats.shapiro(data[tuple(idx)])
-
-        # Determine if the slice follows a normal distribution
-        result[it.multi_index] = shapiro_p_value
-
-        it.iternext()
-
-    return result
+def get_avail_ram_gb():
+    # try slurm, if it runs as a job or in a countainer
+    slurm_mem = os.getenv("SLURM_MEM_PER_NODE")
+    if slurm_mem:
+        return int(slurm_mem) // 1024
+    # try reading from system, if it doesnt
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    parts = line.split()
+                    return int(parts[1]) // 1024**2  # Convert from kB to MB
+    except:
+        pass
+    return 16
 
 
 def get_avg_over_nreps(data: np.ndarray) -> np.ndarray:
@@ -74,9 +72,7 @@ def get_rolling_average(data: np.ndarray, window_size: int) -> np.ndarray:
     return np.convolve(data, weights, mode="valid")
 
 
-def get_ram_usage_in_gb(
-    frames: int, column_size: int, nreps: int, row_size: int
-) -> int:
+def get_ram_usage_in_gb(frames: int, column_size: int, nreps: int, row_size: int) -> int:
     """
     Calculates the estimated RAM usage in GB for a 4D array with the given dimensions.
 
@@ -673,84 +669,6 @@ def _nanmean_2d_axis1(data: np.ndarray) -> np.ndarray:
     return output
 
 
-@njit
-def _find_root(label, parent):
-    while parent[label] != label:
-        label = parent[label]
-    return label
-
-
-@njit
-def _union(label1, label2, parent):
-    root1 = _find_root(label1, parent)
-    root2 = _find_root(label2, parent)
-    if root1 != root2:
-        parent[root2] = root1
-
-
-@njit
-def two_pass_labeling(data, structure):
-    """
-    Implements the two-pass labeling algorithm for connected components in a 2D boolean array.
-
-    Args:
-        data (np.ndarray): 2D boolean array.
-        structure (np.ndarray): Structuring element for connectivity.
-
-    Returns:
-        tuple: A tuple containing the labeled array and the number of features.
-    """
-    rows, cols = data.shape
-    labels = np.zeros((rows, cols), dtype=np.int32)
-    parent = np.arange(rows * cols, dtype=np.int32)
-    next_label = 1
-
-    # First pass
-    for i in range(rows):
-        for j in range(cols):
-            if data[i, j] == 0:
-                continue
-
-            neighbors = []
-            for di in range(-1, 2):
-                for dj in range(-1, 2):
-                    ni, nj = i + di, j + dj
-                    if 0 <= ni < rows and 0 <= nj < cols:
-                        if structure[di + 1, dj + 1] == 1 and labels[ni, nj] != 0:
-                            neighbors.append(labels[ni, nj])
-
-            if not neighbors:
-                labels[i, j] = next_label
-                next_label += 1
-            else:
-                min_label = min(neighbors)
-                labels[i, j] = min_label
-                for neighbor in neighbors:
-                    if neighbor != min_label:
-                        _union(min_label, neighbor, parent)
-
-    # Second pass
-    for i in range(rows):
-        for j in range(cols):
-            if labels[i, j] != 0:
-                labels[i, j] = _find_root(labels[i, j], parent)
-
-    # Relabel to ensure labels are contiguous
-    unique_labels = np.unique(labels)
-    label_map = np.zeros(unique_labels.max() + 1, dtype=np.int32)
-    for new_label, old_label in enumerate(unique_labels):
-        label_map[old_label] = new_label
-    for i in range(rows):
-        for j in range(cols):
-            if labels[i, j] != 0:
-                labels[i, j] = label_map[labels[i, j]]
-    num_features = (
-        len(unique_labels) - 1
-    )  # Subtract 1 to exclude the background label (0)
-
-    return labels, num_features
-
-
 def parse_numpy_slicing(slicing_str: str) -> list:
     """
     Parses a NumPy slicing string and converts it to a list of Python slice objects.
@@ -772,9 +690,7 @@ def parse_numpy_slicing(slicing_str: str) -> list:
             slice_parts = part.split(":")
             start = int(slice_parts[0]) if slice_parts[0] else None
             stop = int(slice_parts[1]) if slice_parts[1] else None
-            step = (
-                int(slice_parts[2]) if len(slice_parts) > 2 and slice_parts[2] else None
-            )
+            step = int(slice_parts[2]) if len(slice_parts) > 2 and slice_parts[2] else None
             slices.append(slice(start, stop, step))
         else:
             slices.append(int(part))
@@ -802,7 +718,7 @@ def process_batch(func, row_data, *args, **kwargs):
     return batch_results
 
 
-def apply_pixelwise(cores, data, func, *args, **kwargs) -> np.ndarray:
+def apply_pixelwise(data, func, *args, **kwargs) -> np.ndarray:
     """
     Helper function to apply a function to each pixel in a 3D numpy array in parallel.
     Data must have shape (n,row,col). The function is applied to [:,row,col].
@@ -811,7 +727,6 @@ def apply_pixelwise(cores, data, func, *args, **kwargs) -> np.ndarray:
     The passed function must have a data parameter, which is the first argument.
 
     Args:
-        cores (int): Number of CPU cores to use.
         data (np.ndarray): Input 3D array with shape (n, row, col).
         func (callable): Function to apply to each pixel.
         *args: Additional arguments for the function.
@@ -833,36 +748,27 @@ def apply_pixelwise(cores, data, func, *args, **kwargs) -> np.ndarray:
         raise ValueError("Function must return a numpy array.")
     if result.ndim != 1:
         raise ValueError("Function must return a 1D numpy array.")
+    cores = utils.get_cpu_count()
     # initialize results, now that we know what the function returns
     if cores == 1:
         return func(data, *args, **kwargs)
 
     rows_per_process = divide_evenly(data.shape[1], cores)
-    results = np.zeros(
-        (result_shape[0], data.shape[1], data.shape[2]), dtype=result_type
-    )
+    results = np.zeros((result_shape[0], data.shape[1], data.shape[2]), dtype=result_type)
     with ProcessPoolExecutor() as executor:
         futures = []
         for i in range(cores):
             # copy the data of one row and submit it to the executor
             # this is necessary to avoid memory issues
-            process_data = data[
-                :, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :
-            ]
-            futures.append(
-                executor.submit(
-                    process_batch, func, process_data.copy(), *args, **kwargs
-                )
-            )
+            process_data = data[:, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :]
+            futures.append(executor.submit(process_batch, func, process_data.copy(), *args, **kwargs))
         # wait for all futures to be done
         wait(futures)
         # Process the results in the order they were submitted
         for i, future in enumerate(futures):
             try:
                 batch_results = future.result()
-                results[
-                    :, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :
-                ] = batch_results
+                results[:, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :] = batch_results
             except Exception as e:
                 raise e
     return results

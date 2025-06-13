@@ -20,8 +20,6 @@ class Params:
         "results_dir": "",  # str
         "data_h5_file": "",  # str
         "darkframe_dset": "",  # int
-        "available_cpus": 16,  # int
-        "available_ram_gb": 2,  # int
         "custom_attributes": {},  # dict
         "nframes_eval": [0, -1, 1],  # list of ints
         "thres_bad_slopes": 3,  # float
@@ -36,8 +34,6 @@ class Params:
         "results_dir": str,  # str
         "data_h5_file": str,  # str
         "darkframe_dset": str,  # str
-        "available_cpus": int,  # int
-        "available_ram_gb": int,  # int
         "custom_attributes": dict,  # dict
         "nframes_eval": list,  # list of ints
         "thres_bad_slopes": (int, float),  # float
@@ -98,6 +94,8 @@ class Params:
 
     def check_types(self) -> None:
         """Function description"""
+        if self.param_dict is None:
+            return None
         for key, value in self.param_dict.items():
             if key not in self.params_types:
                 raise TypeError(f"There is no type defined for {key}.")
@@ -108,10 +106,14 @@ class Params:
 
     def get_dict(self) -> dict:
         """Function description"""
+        if self.param_dict is None:
+            return {}
         return self.param_dict
 
     def print_contents(self) -> None:
         """Function description"""
+        if self.param_dict is None:
+            return None
         for key, value in self.param_dict.items():
             _logger.info("%s: %s", key, value)
 
