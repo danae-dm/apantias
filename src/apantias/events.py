@@ -239,6 +239,7 @@ def create_event_data(
     print(f"Created {len(frame_batches)} batches")
 
     # Create partial function with fixed parameters
+    # TODO: dont copy all the data!
     process_func = partial(
         process_frame_batch,
         data=data,
