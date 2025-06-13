@@ -53,6 +53,8 @@ def create_event_table(
 ):
     """ """
     path, _, table_name = table_path.rpartition("/")
+    if path == "":
+        path = "/"
     print(path)
     print(table_name)
     print("start creating event dict")
@@ -74,6 +76,8 @@ def query_event_data(h5_filename: str, table_path: str, query: str, column_name:
         Filtered numpy array with event data
     """
     path, _, table_name = table_path.rpartition("/")
+    if path == "":
+        path = "/"
     try:
         with tables.open_file(h5_filename, mode="r") as h5file:
             table = h5file.get_node("/" + path, table_name)
