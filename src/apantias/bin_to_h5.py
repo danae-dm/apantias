@@ -288,11 +288,24 @@ def _create_vds(h5_file: str, vds_list: list):
     for dataset in vds_list:
         name = dataset["name"]
         sources = dataset["sources"]
-        final_shape = tuple(dataset["final_shape"])
-        # get type of first dataset
         dset = h5py.File(sources[0].split(".h5")[0] + ".h5", "r")[sources[0].split(".h5")[1]]
         assert isinstance(dset, h5py.Dataset)
-        layout = h5py.VirtualLayout(shape=final_shape, dtype=dset.dtype)
+        other_dims = dset.shape[1:]
+        dtype = dset.dtype
+        # recalculate the final_shape by iterating through sources
+        total_len = 0
+        for source in sources:
+            source_h5 = source.split(".h5")[0] + ".h5"
+            source_dataset = source.split(".h5")[1]
+            with h5py.File(source_h5, "r") as source_f:
+                dset_src = source_f[source_dataset]
+                assert isinstance(dset_src, h5py.Dataset)
+                info_attr = dset_src.attrs["info"]
+                if isinstance(info_attr, str) and "dummy" in info_attr:
+                    continue
+                total_len += dset_src.shape[0]
+        final_shape = (total_len,) + other_dims
+        layout = h5py.VirtualLayout(shape=final_shape, dtype=dtype)
         attributes = {}
         with h5py.File(h5_file, "a") as f:
             start_index = 0
@@ -382,6 +395,7 @@ def _read_data_from_bin(
     diff = np.diff(frames, axis=0)
     valid_frames_position = np.nonzero(diff == rows_per_frame)[1]
     if len(valid_frames_position) == 0:
+        _logger.warning(f"No valid frames. Shape: {inp_data.shape}")
         return np.zeros((1))
     valid_frames = frames.T[valid_frames_position]
     frame_start_indices = valid_frames[:, 0]
