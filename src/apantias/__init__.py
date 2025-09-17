@@ -2,7 +2,7 @@
 Defines what modules are exposed to the user.
 """
 
-__version__ = "2.0.3b2"
+__version__ = "2.0.3b4"
 __author__ = "Florian Heinrich"
 __credits__ = "HEPHY Vienna"
 
