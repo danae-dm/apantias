@@ -6,12 +6,9 @@ to optimize performance on large datasets.
 """
 
 import numpy as np
-from numba import njit, prange
-from scipy import ndimage
 import tables
 
-from . import utils
-from . import events
+from . import events, utils
 
 
 def get_slopes(data: np.ndarray) -> np.ndarray:
@@ -58,12 +55,16 @@ def create_event_table(
     print(path)
     print(table_name)
     print("start creating event dict")
-    event_data = events.create_event_data(data, primary_threshold, secondary_threshold, noise_map, structure)
+    event_data = events.create_event_data(
+        data, primary_threshold, secondary_threshold, noise_map, structure
+    )
     print("start writing event dict")
     events.write_event_data_to_h5(event_data, h5_file, path, table_name)
 
 
-def query_event_data(h5_filename: str, table_path: str, query: str, column_name: str) -> np.ndarray:
+def query_event_data(
+    h5_filename: str, table_path: str, query: str, column_name: str
+) -> np.ndarray:
     """
     Query event data from HDF5 file with conditions.
 

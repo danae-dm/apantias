@@ -67,5 +67,58 @@ class Logger:
         return self.logger
 
 
+class FileLogger:
+    def __init__(self, log_file="apantias.log", level=logging.INFO):
+        self._logger = logging.getLogger(f"apantias.file.{log_file}")
+        self._logger.setLevel(level)
+        self._logger.propagate = False  # Prevent logs from printing to console
+        # Prevent duplicate handlers
+        if not any(isinstance(h, logging.FileHandler) and h.baseFilename == log_file for h in self._logger.handlers):
+            handler = logging.FileHandler(log_file)
+            handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(funcName)s - %(message)s"))
+            self._logger.addHandler(handler)
+
+    def info(self, msg, *args, **kwargs):
+        self._logger.info(msg, *args, **kwargs)
+
+    def warning(self, msg, *args, **kwargs):
+        self._logger.warning(msg, *args, **kwargs)
+
+    def error(self, msg, *args, **kwargs):
+        self._logger.error(msg, *args, **kwargs)
+
+    def debug(self, msg, *args, **kwargs):
+        self._logger.debug(msg, *args, **kwargs)
+
+    def critical(self, msg, *args, **kwargs):
+        self._logger.critical(msg, *args, **kwargs)
+
+    def get_logger(self):
+        return self._logger
+
+
+class NullLogger:
+    def info(self, *args, **kwargs):
+        pass
+
+    def warning(self, *args, **kwargs):
+        pass
+
+    def error(self, *args, **kwargs):
+        pass
+
+    def debug(self, *args, **kwargs):
+        pass
+
+    def critical(self, *args, **kwargs):
+        pass
+
+    def get_logger(self):
+        return None
+
+
 # Create a global logger instance to avoid multiple handlers
 global_logger = Logger("apantias", level="info").get_logger()
+# use the NullLogger to suppress log output.
+global_file_logger = NullLogger()
+# global_file_logger = FileLogger("my_logfile.log")

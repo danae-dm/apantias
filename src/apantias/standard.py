@@ -64,9 +64,10 @@ class Analysis:
             self.results_dir, self.out_h5_name, self.params_dict, self.custom_attributes, self.data_h5
         )
         _logger.info("Created analysis h5 file: %s/%s", self.results_dir, self.out_h5_name)
-        vds_list = io._get_all_datasets(self.data_h5)
-        bin_to_h5._create_vds(self.out_h5, vds_list)
-        _logger.info("Virtual datasets created in group '0_raw_data'")
+        # TODO: Debug this, not compatible with last changes in bin_to_h5
+        # vds_list = io._get_all_datasets(self.data_h5)
+        # bin_to_h5._create_vds(self.out_h5, vds_list)
+        # _logger.info("Virtual datasets created in group '0_raw_data'")
 
 
 class Default(Analysis):

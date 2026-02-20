@@ -1,26 +1,21 @@
-#for building the package with hatchling and uploading it to PyPI
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [project]
 name = "apantias"
-version = "2.0.3b2"
+version = "2.0.4"
 authors = [
-  { name="Florian Heinrich", email="florianheinrich@gmx.at" },
+    { name="Florian Heinrich", email="florianheinrich@gmx.at" },
 ]
 description = "Tools for analysis of data from the DANAE experiment on HEPHY"
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.13"
 dependencies = [
-    "numpy<=2.1",
-    "matplotlib",
-    "scipy",
-    "seaborn",
-    "h5py",
-    "numba",
-    "scikit_learn",
-    "tables"
+    "h5py>=3.15.1",
+    "matplotlib>=3.10.8",
+    "numba>=0.64.0",
+    "numpy>=2.4.2",
+    "scikit-learn>=1.8.0",
+    "scipy>=1.17.0",
+    "seaborn>=0.13.2",
+    "tables>=3.10.2",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -28,23 +23,22 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
+[dependency-groups]
+dev = [
+    "pylint>=4.0.5",
+    "ruff>=0.15.2",
+]
+
 [project.urls]
 Homepage = "https://github.com/shakamaran/apantias"
 Issues = "https://github.com/shakamaran/apantias/issues"
 
 [tool.pylint]
-# Disable specific checks
 disable = [
     "R0903",
     "R0914",
     "C0301",
     "W0105",
-    "E1133", # not an iterable error, for numba's prange
-    "E1101", # this is checked by pylance
+    "E1133",
+    "E1101",
 ]
-
-[tool.black]
-line-length = 120
-
-# Ignore specific directories or files
-ignore = [".github", ".vscode", "dist", "pip-wheel-metadata", "tests", ".gitignore", "LICENSE", "pyproject.toml", "README.md"]

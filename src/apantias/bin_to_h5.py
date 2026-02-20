@@ -17,8 +17,10 @@ import numpy as np
 from . import utils
 from . import __version__
 from .logger import global_logger
+from .logger import global_file_logger
 
 _logger = global_logger
+_file_logger = global_file_logger
 
 
 def _get_workload_dict(
@@ -180,6 +182,7 @@ def _get_vds_list(workload_dict: dict, old_list: list = None) -> list:  # type: 
             for _, [_, _, h5_group] in enumerate(batch):
                 # get names and shapes of datasets in the group
                 new_datasets = _get_datasets_from_h5(h5_group)
+                # if datassets is not empty
                 if not datasets:
                     datasets = new_datasets
                 else:
@@ -219,9 +222,14 @@ def _get_vds_list(workload_dict: dict, old_list: list = None) -> list:  # type: 
     for bin_file in workload_dict.keys():
         for _, batch in enumerate(workload_dict[bin_file]):
             for _, [_, _, h5_group] in enumerate(batch):
-                for dataset_info in vds_list:
-                    name = dataset_info["name"]
-                    dataset_info["sources"].append(f"{h5_group}{name}")
+                if not _get_datasets_from_h5(h5_group):
+                    # skip this if there are only dummy datasets
+                    continue
+                else:
+                    # add as source otherwise
+                    for dataset_info in vds_list:
+                        name = dataset_info["name"]
+                        dataset_info["sources"].append(f"{h5_group}{name}")
     return vds_list
 
 
@@ -280,11 +288,24 @@ def _create_vds(h5_file: str, vds_list: list):
     for dataset in vds_list:
         name = dataset["name"]
         sources = dataset["sources"]
-        final_shape = tuple(dataset["final_shape"])
-        # get type of first dataset
         dset = h5py.File(sources[0].split(".h5")[0] + ".h5", "r")[sources[0].split(".h5")[1]]
         assert isinstance(dset, h5py.Dataset)
-        layout = h5py.VirtualLayout(shape=final_shape, dtype=dset.dtype)
+        other_dims = dset.shape[1:]
+        dtype = dset.dtype
+        # recalculate the final_shape by iterating through sources
+        total_len = 0
+        for source in sources:
+            source_h5 = source.split(".h5")[0] + ".h5"
+            source_dataset = source.split(".h5")[1]
+            with h5py.File(source_h5, "r") as source_f:
+                dset_src = source_f[source_dataset]
+                assert isinstance(dset_src, h5py.Dataset)
+                info_attr = dset_src.attrs["info"]
+                if isinstance(info_attr, str) and "dummy" in info_attr:
+                    continue
+                total_len += dset_src.shape[0]
+        final_shape = (total_len,) + other_dims
+        layout = h5py.VirtualLayout(shape=final_shape, dtype=dtype)
         attributes = {}
         with h5py.File(h5_file, "a") as f:
             start_index = 0
@@ -296,6 +317,16 @@ def _create_vds(h5_file: str, vds_list: list):
                 with h5py.File(source_h5, "r") as source_f:
                     dset = source_f[source_dataset]
                     assert isinstance(dset, h5py.Dataset)
+                    # check if the dataset is a "dummy", a dummy i created when there are no frames found for this batch
+                    # they shouldnt be added to the vds_list anyway, but better be safe
+                    info_attr = dset.attrs["info"]
+                    if isinstance(info_attr, str):
+                        if "dummy" in info_attr:
+                            continue
+                    else:
+                        raise TypeError(
+                            f'dset.attrs["info"] is not a string (got {type(info_attr)}) in file: {source_h5} dataset: {source_dataset}'
+                        )
                     sh = dset.shape
                     attributes = dict(dset.attrs)
                 end_index = start_index + sh[0]
@@ -364,7 +395,8 @@ def _read_data_from_bin(
     diff = np.diff(frames, axis=0)
     valid_frames_position = np.nonzero(diff == rows_per_frame)[1]
     if len(valid_frames_position) == 0:
-        raise ValueError("No valid frames found")
+        _logger.warning(f"No valid frames. Shape: {inp_data.shape}")
+        return np.zeros((1))
     valid_frames = frames.T[valid_frames_position]
     frame_start_indices = valid_frames[:, 0]
     frame_end_indices = valid_frames[:, 1]
@@ -428,7 +460,7 @@ def _read_data_from_h5(path: str) -> np.ndarray:
 
 def _get_datasets_from_h5(path: str) -> list:
     """
-    Retrieves a list of datasets in a specified HDF5 group.
+    Retrieves a list of datasets in a specified HDF5 group. It only returns non-dummy datasets.
 
     Args:
         path (str): Full path to the HDF5 group.
@@ -438,12 +470,22 @@ def _get_datasets_from_h5(path: str) -> list:
     """
     h5_file, group_path = utils.split_h5_path(path)
     with h5py.File(h5_file, "r") as f:
+        if group_path not in f:
+            raise KeyError(f"Group '{group_path}' not found in HDF5 file {h5_file}")
         datasets = []
         group = f[group_path]
         assert isinstance(group, (h5py.File, h5py.Group))
         for name, item in group.items():
             assert isinstance(item, h5py.Dataset)
-            datasets.append([name, list(item.shape), dict(item.attrs)])
+            # only add it to the list if its not a dummy dataset
+            info_attr = item.attrs["info"]
+            if isinstance(info_attr, str):
+                if "dummy" not in info_attr:
+                    datasets.append([name, list(item.shape), dict(item.attrs)])
+            else:
+                raise TypeError(
+                    f'dset.attrs["info"] is not a string (got {type(info_attr)}) in file: {h5_file} dataset: {group_path}'
+                )
     return datasets
 
 
@@ -485,6 +527,15 @@ def _process_raw_data(
     # write the avg attribute to the dset to determine what to average later in the vds
     try:
         data = _read_data_from_bin(bin_file, column_size, row_size, key_ints, nreps, offset, counts)
+        # if there are no valid frames in the data, create dummy datasets. They are skipped when the virtual datasets are created.
+        if data.shape == (1,):
+            attributes = {"avg": "None", "info": "dummy"}
+            _write_data_to_h5(h5_group + "raw_data", data, attributes)
+            _write_data_to_h5(h5_group + "raw_offset", data, attributes)
+            _write_data_to_h5(h5_group + "raw_data_mean_nreps", data, attributes)
+            _write_data_to_h5(h5_group + "raw_data_median_nreps", data, attributes)
+            _write_data_to_h5(h5_group + "raw_data_std_nreps", data, attributes)
+            return
         # data is saved to file in uint16 to save space
         attributes = {"avg": "False", "info": f"Raw data as read from .bin file. {data.shape}"}
         _write_data_to_h5(h5_group + "raw_data", data, attributes)
@@ -540,7 +591,6 @@ def _preprocess(
     h5_file_virtual: str,
     ignore_first_nreps: int,
     ext_dark_frame_dset: str,
-    offset: int,
     nreps_eval: list,
     polarity: int,
 ) -> None:
@@ -566,6 +616,15 @@ def _preprocess(
     """
     try:
         data = _read_data_from_h5(h5_group + "raw_data")
+        if data.shape == (1,):
+            attributes = {"avg": "None", "info": "dummy"}
+            dummy_array = np.zeros((1))
+            _write_data_to_h5(h5_group + "preproc_common_modes", dummy_array, attributes)
+            _write_data_to_h5(h5_group + "preproc_mean_nreps", dummy_array, attributes)
+            _write_data_to_h5(h5_group + "preproc_std_nreps", dummy_array, attributes)
+            _write_data_to_h5(h5_group + "preproc_median_nreps", dummy_array, attributes)
+            _write_data_to_h5(h5_group + "preproc_slope_nreps", dummy_array, attributes)
+            return
         attributes = {"avg": "false", "info": f"Raw data as read from .bin file. {data.shape}"}
         data = data.astype(np.float64) * polarity
         attributes["info"] += f" Multiplied by polarity. {data.shape}"
@@ -587,7 +646,7 @@ def _preprocess(
         _write_data_to_h5(h5_group + "preproc_common_modes", common_modes, new_attrs)
         data -= common_modes
         attributes["info"] += f" Common mode corrected. {data.shape}"
-        del offset, common_modes
+        del offset_map, common_modes
         gc.collect()
 
         mean = np.mean(data, axis=2)
@@ -862,7 +921,6 @@ def create_data_file_from_bins(
                         h5_file_virtual,
                         ignore_first_nreps,
                         ext_dark_frame_h5,
-                        offset_batch,
                         nreps_eval,
                         polarity,
                     ),
