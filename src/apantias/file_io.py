@@ -10,11 +10,11 @@ from typing import Optional
 import h5py
 import numpy as np
 
-from . import utils
-from . import __version__
+from . import __version__, utils
 
 
 def display_file_structure(file_path: str) -> None:
+    
     """
     Displays the structure (groups and datasets) of an HDF5 file.
 
@@ -229,27 +229,34 @@ def _create_analysis_file(
             data=repr(__version__),
             dtype=h5py.special_dtype(vlen=str),
         )
-        f.create_dataset("infos/data_file_location", data = f"Location of data file: {data_h5}. If there is data missing in the group 0_raw_data or in the Event Tree, it has probably been moved or deleted.")
+        f.create_dataset(
+            "infos/data_file_location",
+            data=f"Location of data file: {data_h5}. If there is data missing in the group 0_raw_data or in the Event Tree, it has probably been moved or deleted.",
+        )
 
 
 def _get_all_datasets(h5_file: str) -> list:
     """
     Recursively get all datasets from an HDF5 file with their full paths.
-    
+
     Args:
         h5_file (str): Path to the HDF5 file
-        
+
     Returns:
         list: List of dictionaries containing dataset information
     """
     datasets = []
+
     def visitor(name, obj):
         if isinstance(obj, h5py.Dataset):
-            datasets.append({
-                "name": "0_raw_data/" + name,
-                "sources": [f"{h5_file}/{name}"],
-                "final_shape": obj.shape
-            })
+            datasets.append(
+                {
+                    "name": "0_raw_data/" + name,
+                    "sources": [f"{h5_file}/{name}"],
+                    "final_shape": obj.shape,
+                }
+            )
+
     with h5py.File(h5_file, "r") as f:
         f.visititems(visitor)
     return datasets
