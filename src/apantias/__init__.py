@@ -2,7 +2,9 @@
 Defines what modules are exposed to the user.
 """
 
-__version__ = "2.0.3b"
+import importlib.metadata
+
+__version__ = importlib.metadata.version("apantias")
 __author__ = "Florian Heinrich"
 __credits__ = "HEPHY Vienna"
 
