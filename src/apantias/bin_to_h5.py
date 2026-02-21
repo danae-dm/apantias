@@ -843,7 +843,7 @@ def create_data_file_from_bins(
             assert isinstance(dset, h5py.Dataset)
             if dset.shape[0] != column_size or dset.shape[1] != row_size:
                 raise ValueError(
-                    f"Shape of external dark frame {ext_dark_frame_h5} does"
+                    f"Shape ({dset.shape[0]},{dset.shape[1]}) of external dark frame {ext_dark_frame_h5} does"
                     f"not match ({column_size}, {row_size}) of the bin_file files"
                 )
     # create folders:
