@@ -844,7 +844,7 @@ def create_data_file_from_bins(
             if dset.shape[0] != column_size or dset.shape[1] != row_size:
                 raise ValueError(
                     f"Shape of external dark frame {ext_dark_frame_h5} does"
-                    "not match ({column_size}, {row_size}) of the bin_file files"
+                    f"not match ({column_size}, {row_size}) of the bin_file files"
                 )
     # create folders:
     timestamp = time.strftime("%Y%m%d-%H%M%S")
