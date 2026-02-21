@@ -110,7 +110,9 @@ def _get_workload_dict(
                     current_offset += counts * 2
             else:
                 bytes_left_per_process = int(bytes_left / available_cpu_cores)
-                rows_left_read_per_process = int(bytes_left_per_process / ((row_size + key_ints) * 2))
+                rows_left_read_per_process = int(
+                    bytes_left_per_process / ((row_size + key_ints) * 2)
+                )
                 for n in range(available_cpu_cores):
                     # counts is the number of uint16 values to read
                     counts = rows_left_read_per_process * (row_size + key_ints)
@@ -190,7 +192,9 @@ def _get_vds_list(workload_dict: dict, old_list: list = None) -> list:  # type: 
                         new_name = new_dataset[0]
                         new_shape_frames = new_dataset[1][0]
                         if new_name not in [dataset[0] for dataset in datasets]:
-                            raise ValueError(f"Dataset {new_name} not found in datasets")
+                            raise ValueError(
+                                f"Dataset {new_name} not found in datasets"
+                            )
                         # increment the shape of the dataset by the new shape across axis 0
                         datasets[i][1][0] += new_shape_frames
     # the datsets_dict contains the names of all datasets present in the .h5 files of the processes,
@@ -288,7 +292,9 @@ def _create_vds(h5_file: str, vds_list: list):
     for dataset in vds_list:
         name = dataset["name"]
         sources = dataset["sources"]
-        dset = h5py.File(sources[0].split(".h5")[0] + ".h5", "r")[sources[0].split(".h5")[1]]
+        dset = h5py.File(sources[0].split(".h5")[0] + ".h5", "r")[
+            sources[0].split(".h5")[1]
+        ]
         assert isinstance(dset, h5py.Dataset)
         other_dims = dset.shape[1:]
         dtype = dset.dtype
@@ -387,7 +393,9 @@ def _read_data_from_bin(
     try:
         inp_data = inp_data.reshape(-1, raw_row_size)
     except ValueError as exc:
-        raise ValueError(f"Could not reshape data from {bin_file}. Check if the file is corrupted.") from exc
+        raise ValueError(
+            f"Could not reshape data from {bin_file}. Check if the file is corrupted."
+        ) from exc
     # find all the framekeys
     frame_keys = np.where(inp_data[:, column_size] == 65535)
     # stack them and calculate difference to find incomplete frames
@@ -401,7 +409,10 @@ def _read_data_from_bin(
     frame_start_indices = valid_frames[:, 0]
     frame_end_indices = valid_frames[:, 1]
     inp_data = np.array(
-        [inp_data[start + 1 : end + 1, :64] for start, end in zip(frame_start_indices, frame_end_indices)]
+        [
+            inp_data[start + 1 : end + 1, :64]
+            for start, end in zip(frame_start_indices, frame_end_indices)
+        ]
     )
     inp_data = inp_data.reshape((-1, column_size, nreps, row_size))
     return inp_data
@@ -434,7 +445,9 @@ def _write_data_to_h5(path: str, data: np.ndarray, attributes=None) -> None:
         assert isinstance(current_group, (h5py.Group, h5py.File))
         if dataset in current_group.keys():
             raise ValueError(f"Dataset {dataset} already exists in {h5_file}")
-        dataset = current_group.create_dataset(dataset, dtype=data.dtype, data=data, chunks=None)
+        dataset = current_group.create_dataset(
+            dataset, dtype=data.dtype, data=data, chunks=None
+        )
         if attributes is not None:
             for key, value in attributes.items():
                 dataset.attrs[key] = value
@@ -526,7 +539,9 @@ def _process_raw_data(
     # read data from bin_file file, multiple processes can read from the same file
     # write the avg attribute to the dset to determine what to average later in the vds
     try:
-        data = _read_data_from_bin(bin_file, column_size, row_size, key_ints, nreps, offset, counts)
+        data = _read_data_from_bin(
+            bin_file, column_size, row_size, key_ints, nreps, offset, counts
+        )
         # if there are no valid frames in the data, create dummy datasets. They are skipped when the virtual datasets are created.
         if data.shape == (1,):
             attributes = {"avg": "None", "info": "dummy"}
@@ -537,7 +552,10 @@ def _process_raw_data(
             _write_data_to_h5(h5_group + "raw_data_std_nreps", data, attributes)
             return
         # data is saved to file in uint16 to save space
-        attributes = {"avg": "False", "info": f"Raw data as read from .bin file. {data.shape}"}
+        attributes = {
+            "avg": "False",
+            "info": f"Raw data as read from .bin file. {data.shape}",
+        }
         _write_data_to_h5(h5_group + "raw_data", data, attributes)
         data = data.astype(np.float64) * polarity
         attributes["info"] += f" Multiplied by polarity. {data.shape}"
@@ -568,13 +586,16 @@ def _process_raw_data(
             "avg": "mean",
             "info": attributes["info"] + f" Median over Nreps. {raw_data_median.shape}",
         }
-        _write_data_to_h5(h5_group + "raw_data_median_nreps", raw_data_median, new_attrs)
+        _write_data_to_h5(
+            h5_group + "raw_data_median_nreps", raw_data_median, new_attrs
+        )
 
         raw_data_std = np.std(data, axis=2)
         new_attrs = {
             **attributes,
             "avg": "mean",
-            "info": attributes["info"] + f" Standard deviation over Nreps. {raw_data_std.shape}",
+            "info": attributes["info"]
+            + f" Standard deviation over Nreps. {raw_data_std.shape}",
         }
         _write_data_to_h5(h5_group + "raw_data_std_nreps", raw_data_std, new_attrs)
 
@@ -619,13 +640,20 @@ def _preprocess(
         if data.shape == (1,):
             attributes = {"avg": "None", "info": "dummy"}
             dummy_array = np.zeros((1))
-            _write_data_to_h5(h5_group + "preproc_common_modes", dummy_array, attributes)
+            _write_data_to_h5(
+                h5_group + "preproc_common_modes", dummy_array, attributes
+            )
             _write_data_to_h5(h5_group + "preproc_mean_nreps", dummy_array, attributes)
             _write_data_to_h5(h5_group + "preproc_std_nreps", dummy_array, attributes)
-            _write_data_to_h5(h5_group + "preproc_median_nreps", dummy_array, attributes)
+            _write_data_to_h5(
+                h5_group + "preproc_median_nreps", dummy_array, attributes
+            )
             _write_data_to_h5(h5_group + "preproc_slope_nreps", dummy_array, attributes)
             return
-        attributes = {"avg": "false", "info": f"Raw data as read from .bin file. {data.shape}"}
+        attributes = {
+            "avg": "false",
+            "info": f"Raw data as read from .bin file. {data.shape}",
+        }
         data = data.astype(np.float64) * polarity
         attributes["info"] += f" Multiplied by polarity. {data.shape}"
         data = data[:, :, ignore_first_nreps:, :]
@@ -634,14 +662,17 @@ def _preprocess(
             offset_map = _read_data_from_h5(ext_dark_frame_dset)
             attributes["info"] += f" Subtracted external offset. {offset_map.shape}"
         else:
-            offset_map = _read_data_from_h5(h5_file_virtual + "raw_offset_weighted_frames")
+            offset_map = _read_data_from_h5(
+                h5_file_virtual + "raw_offset_weighted_frames"
+            )
             attributes["info"] += f" Subtracted (own) offset. {offset_map.shape}"
         data -= offset_map
         common_modes = np.median(data, axis=3, keepdims=True)
         new_attrs = {
             **attributes,
             "avg": "mean",
-            "info": attributes["info"] + f" Commmon mode calculated. {common_modes.shape}",
+            "info": attributes["info"]
+            + f" Commmon mode calculated. {common_modes.shape}",
         }
         _write_data_to_h5(h5_group + "preproc_common_modes", common_modes, new_attrs)
         data -= common_modes
@@ -677,7 +708,8 @@ def _preprocess(
         new_attrs = {
             **attributes,
             "avg": "mean",
-            "info": attributes["info"] + f" Slope of the linear fit over Nreps. {slopes.shape}",
+            "info": attributes["info"]
+            + f" Slope of the linear fit over Nreps. {slopes.shape}",
         }
         _write_data_to_h5(h5_group + "preproc_slope_nreps", slopes, new_attrs)
 
@@ -692,11 +724,19 @@ def _preprocess(
             std = np.std(data_slice, axis=2)
             median = np.median(data_slice, axis=2)
             x = np.arange(data_slice.shape[2])
-            slopes = np.apply_along_axis(lambda y, x=x: np.polyfit(x, y, 1)[0], axis=2, arr=data_slice)
-            _write_data_to_h5(h5_group + f"{s}_preproc_mean_nreps", mean, {"avg": "mean"})
-            _write_data_to_h5(h5_group + f"{s}_preproc_median_nreps", median, {"avg": "mean"})
+            slopes = np.apply_along_axis(
+                lambda y, x=x: np.polyfit(x, y, 1)[0], axis=2, arr=data_slice
+            )
+            _write_data_to_h5(
+                h5_group + f"{s}_preproc_mean_nreps", mean, {"avg": "mean"}
+            )
+            _write_data_to_h5(
+                h5_group + f"{s}_preproc_median_nreps", median, {"avg": "mean"}
+            )
             _write_data_to_h5(h5_group + f"{s}_preproc_std_nreps", std, {"avg": "mean"})
-            _write_data_to_h5(h5_group + f"{s}_preproc_slope_nreps", slopes, {"avg": "mean"})
+            _write_data_to_h5(
+                h5_group + f"{s}_preproc_slope_nreps", slopes, {"avg": "mean"}
+            )
             del data_slice, mean, std, median, slopes
             gc.collect()
         del data
@@ -741,7 +781,7 @@ def create_data_file_from_bins(
         offset (int): Offset in bytes to start reading the binary files (default: 8).
         available_cpu_cores (int): Number of CPU cores to use for parallel processing (default: 4).
         available_ram_gb (int): Amount of available RAM in gigabytes (default: 16).
-        ext_dark_frame_h5 (str): Path to an external dark frame HDF5 file (optional).
+        ext_dark_frame_h5 (str): Path to an external dark frame in a HDF5 file (optional).
         nreps_eval (list[list[int]]): List of evaluation ranges for repetitions (optional).
         attributes (dict): Additional attributes to add to the HDF5 files (optional).
         polarity: default is -1. raw data is multiplied by this value.
@@ -789,7 +829,9 @@ def create_data_file_from_bins(
     if all(x == nreps_list[0] for x in nreps_list):
         nreps = nreps_list[0]
     else:
-        raise ValueError(f"Not all bin_file files have the same number of nreps: {nreps_list}")
+        raise ValueError(
+            f"Not all bin_file files have the same number of nreps: {nreps_list}"
+        )
     # check if external dark frame exists and has the right shape
     if ext_dark_frame_h5 is not None:
         ext_h5_file = ext_dark_frame_h5.split(".h5")[0] + ".h5"
@@ -812,7 +854,9 @@ def create_data_file_from_bins(
     os.mkdir(working_folder)
     os.mkdir(data_folder)
     # create a h5 file for every process in the data_folder
-    h5_file_process = [os.path.join(data_folder, f"data_{i}.h5") for i in range(available_cpu_cores)]
+    h5_file_process = [
+        os.path.join(data_folder, f"data_{i}.h5") for i in range(available_cpu_cores)
+    ]
 
     for file in h5_file_process:
         with h5py.File(file, "w") as f:
@@ -851,16 +895,24 @@ def create_data_file_from_bins(
         offset,
     )
     _logger.info("Starting preprocessing step.")
-    _logger.info(f"{available_cpu_cores} CPUs and {available_ram_gb} GB RAM will be used.")
+    _logger.info(
+        f"{available_cpu_cores} CPUs and {available_ram_gb} GB RAM will be used."
+    )
     _logger.info("These .bin_file files will be processed:")
     for bin_file in bin_files:
-        _logger.info("%s of size %.2f GB", bin_file, os.path.getsize(bin_file) / (1024**3))
+        _logger.info(
+            "%s of size %.2f GB", bin_file, os.path.getsize(bin_file) / (1024**3)
+        )
         _logger.info(
             "The file will be split into %d batches to fit into memory.",
             len(workload_dict[bin_file]),
         )
-    _logger.info("Note, that the provided bin_file files will be treated as being from the same measurement.")
-    _logger.info("If you wish to process multiple measurements, please provide them separately.")
+    _logger.info(
+        "Note, that the provided bin_file files will be treated as being from the same measurement."
+    )
+    _logger.info(
+        "If you wish to process multiple measurements, please provide them separately."
+    )
     _logger.info("Start processing Raw Data.")
     for bin_file, workload in workload_dict.items():
         _logger.info("Start processing %s", bin_file)
@@ -952,5 +1004,7 @@ def create_data_file_from_bins(
     _logger.info("Averages over frames calculated.")
     _logger.info("Final Dataset is stored in %s", h5_file_virtual)
     _logger.info("Data is stored in %s", data_folder)
-    _logger.info("DO NOT move the data folder, if you do the virtual dataset will not work anymore.")
+    _logger.info(
+        "DO NOT move the data folder, if you do the virtual dataset will not work anymore."
+    )
     _logger.info("You can move the .h5 file to any location.\n")
