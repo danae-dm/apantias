@@ -1,8 +1,4 @@
-"""Init:
-Defines what modules are exposed to the user.
-"""
-
-__version__ = "2.0.3b"
+__version__ = "2.0.5"
 __author__ = "Florian Heinrich"
 __credits__ = "HEPHY Vienna"
 
