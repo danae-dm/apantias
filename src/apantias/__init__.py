@@ -1,10 +1,4 @@
-"""Init:
-Defines what modules are exposed to the user.
-"""
-
-import importlib.metadata
-
-__version__ = importlib.metadata.version("apantias")
+__version__ = "2.0.5"
 __author__ = "Florian Heinrich"
 __credits__ = "HEPHY Vienna"
 
