@@ -13,6 +13,7 @@ import time
 import numpy as np
 import logging
 import multiprocessing
+import h5py
 
 from . import config as cf
 
@@ -24,29 +25,34 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-def run():
+def run(client=None):
     if multiprocessing.parent_process() is not None:
         return  # we're in a spawned worker, bail out
     input_h5 = "raw_data_chunked_50MB.h5"
     zarr_store = "results.zarr"
 
     copy_raw_from_h5 = (
-        False  # set False after first run if raw_data already exists in zarr
+        True  # set False after first run if raw_data already exists in zarr
     )
     dask.config.set({"distributed.worker.multiprocessing-method": "forkserver"})
-    cluster = LocalCluster(
-        n_workers=6,
-        threads_per_worker=1,
-        processes=True,
-        memory_limit="1GiB",
-        local_directory="/tmp/dask-spill",
-        dashboard_address=":8787",
-    )
-    client = Client(cluster)
-    log.info(client.dashboard_link)
+
+    if client is None:
+        cluster = LocalCluster(
+            n_workers=4,
+            threads_per_worker=1,
+            processes=True,
+            memory_limit="1GiB",
+            local_directory="/tmp/dask-spill",
+            dashboard_address=":8787",
+        )
+        client = Client(cluster)
+    else:
+        # Use existing client (e.g. from Dask Jupyter extension)
+        log.info("Using provided Dask Client.")
+    time.sleep(100)
     log.info("Loading Config.")
-    config = cf.load_config()
-    print(config)
+    # config = cf.load_config()
+    # print(config)
 
     # optional one-time copy from HDF5 -> Zarr
     if copy_raw_from_h5:
@@ -89,9 +95,11 @@ def run():
     da.to_zarr(x_corr, zarr_store, component="signals", overwrite=True)
     log.info("Done")
 
-    client.close()
-    cluster.close()
+    # Only close if we created it locally
+    if "cluster" in locals():
+        client.close()
+        cluster.close()
 
 
 if __name__ == "__main__":
-    main()
+    run()
