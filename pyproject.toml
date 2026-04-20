@@ -11,6 +11,7 @@ dependencies = [
     "dask>=2026.3.0",
     "distributed>=2026.3.0",
     "h5py>=3.16.0",
+    "pydantic>=2.13.3",
     "pyyaml>=6.0.3",
     "zarr>=3.1.6",
 ]
