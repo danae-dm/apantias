@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Literal, Any
-
+from typing import Any
 import yaml
 
 # minor change
@@ -11,25 +10,62 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class RuntimeConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    cpus: int = 4
-    ram_gb: int = 16
-    input_path: Path = Path("data/raw")
-    output_path: Path = Path("data/processed")
+    cpus: int = Field(default=4, description="Number of CPU cores")
+    ram_gb: int = Field(default=8, description="RAM in GB")
+    zarr_temp: Path = Field(
+        default=Path("data/raw"), description="Path to zarr temp storage"
+    )
+    h5_archive: Path = Field(
+        default=Path("data/processed"), description="Path to h5 archive"
+    )
 
 
-class ExperimentConfig(BaseModel):
+class FrameConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    n_pixels_x: int = 512
-    n_pixels_y: int = 512
+    rows: int = Field(default=64, description="Number of frame rows")
+    cols: int = Field(default=64, description="Number of frame columns")
+    nreps: int = Field(default=200, description="Number of repetitions")
 
 
 class AppConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    rows: int = 64
-    cols: int = 64
-    nreps: int = 200
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
-    experiment: ExperimentConfig = Field(default_factory=ExperimentConfig)
+    frame: FrameConfig = Field(default_factory=FrameConfig)
+
+
+def get_field_descriptions(model: type[BaseModel]) -> dict[str, str]:
+    """Extract field descriptions from a Pydantic model."""
+    descriptions: dict[str, str] = {}
+    for field_name, field_info in model.model_fields.items():
+        if field_info.description:
+            descriptions[field_name] = field_info.description
+    return descriptions
+
+
+def _print_config(config: AppConfig) -> None:
+    """Pretty print configuration values with default/override indicators."""
+    defaults = AppConfig()
+
+    print("\n" + "=" * 50)
+    print("Configuration Loaded:")
+    print("=" * 50)
+    for section_name in ["runtime", "frame"]:
+        section = getattr(config, section_name)
+        default_section = getattr(defaults, section_name)
+        print(f"\n{section_name.upper()}:")
+        for field_name, field_info in section.model_fields.items():
+            value = getattr(section, field_name)
+            default_value = getattr(default_section, field_name)
+            desc = field_info.description or ""
+
+            # Check if value is overridden
+            is_default = value == default_value
+            status = "[default]" if is_default else "[overridden]"
+
+            print(f"  {field_name}: {value} {status}")
+            if desc:
+                print(f"    ({desc})")
+    print("\n" + "=" * 50 + "\n")
 
 
 def load_config(path: Path | None = None) -> AppConfig:
@@ -39,8 +75,11 @@ def load_config(path: Path | None = None) -> AppConfig:
     - If path exists: read & validate (merge with defaults).
     """
     if path is None:
-        return AppConfig()
+        config = AppConfig()
+        _print_config(config)
+        return config
 
+    path = Path(path)
     if not path.exists():
         cfg = AppConfig()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -48,20 +87,37 @@ def load_config(path: Path | None = None) -> AppConfig:
         config_dict = cfg.model_dump()
 
         # Convert Path objects to strings for YAML serialization
-        def path_to_str(d):
+        def path_to_str(d: dict[str, Any]) -> None:
             for k, v in d.items():
                 if isinstance(v, Path):
                     d[k] = str(v)
                 elif isinstance(v, dict):
-                    path_to_str(v)
+                    path_to_str(v)  # type: ignore[arg-type]
 
         path_to_str(config_dict)
 
-        path.write_text(yaml.dump(config_dict, sort_keys=False))
+        # Build YAML with descriptions as comments
+        yaml_lines: list[str] = []
+        configs: list[tuple[str, type[BaseModel]]] = [
+            ("runtime", RuntimeConfig),
+            ("frame", FrameConfig),
+        ]
+        for section, config_class in configs:
+            yaml_lines.append(f"{section}:")
+            descriptions = get_field_descriptions(config_class)
+            for key, value in config_dict[section].items():
+                if key in descriptions:
+                    yaml_lines.append(f"  # {descriptions[key]}")
+                yaml_lines.append(f"  {key}: {value}")
+
+        path.write_text("\n".join(yaml_lines))
+        _print_config(cfg)
         return cfg
 
     text = path.read_text()
-    data = yaml.safe_load(text) or {}
+    data: dict[str, Any] = yaml.safe_load(text) or {}
 
     # Validates and fills missing values with defaults
-    return AppConfig.model_validate(data)
+    config = AppConfig.model_validate(data)
+    _print_config(config)
+    return config
