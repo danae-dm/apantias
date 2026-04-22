@@ -10,4 +10,4 @@ __version__ = importlib.metadata.version("apantias")
 __author__ = "Florian Heinrich"
 __credits__ = "HEPHY Vienna"
 
-print(f"APANTIAS version {__version__} loaded.")
+print(f"test APANTIAS version {__version__} loaded.")
