@@ -7,6 +7,8 @@ import yaml
 # minor change
 from pydantic import BaseModel, ConfigDict, Field
 
+DEFAULT_CONFIG_FILE = Path("default.yaml")
+
 
 class RuntimeConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -24,7 +26,9 @@ class FrameConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     rows: int = Field(default=64, description="Number of frame rows")
     cols: int = Field(default=64, description="Number of frame columns")
-    nreps: int = Field(default=200, description="Number of repetitions")
+    nreps_eval: int = Field(
+        default=200, description="Number of repetitions to be evaluated"
+    )
 
 
 class AppConfig(BaseModel):
@@ -75,12 +79,13 @@ def load_config(path: Path | None = None) -> AppConfig:
     - If path exists: read & validate (merge with defaults).
     """
     if path is None:
-        config = AppConfig()
-        _print_config(config)
-        return config
+        path = DEFAULT_CONFIG_FILE
 
     path = Path(path)
     if not path.exists():
+        print(
+            f"No file {path} found.\nA file with defaults will be created at that location."
+        )
         cfg = AppConfig()
         path.parent.mkdir(parents=True, exist_ok=True)
         # Always write YAML as requested
@@ -107,7 +112,7 @@ def load_config(path: Path | None = None) -> AppConfig:
             descriptions = get_field_descriptions(config_class)
             for key, value in config_dict[section].items():
                 if key in descriptions:
-                    yaml_lines.append(f"  # {descriptions[key]}")
+                    yaml_lines.append(f"# {descriptions[key]}")
                 yaml_lines.append(f"  {key}: {value}")
 
         path.write_text("\n".join(yaml_lines))
