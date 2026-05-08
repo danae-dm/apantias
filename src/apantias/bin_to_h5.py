@@ -491,14 +491,18 @@ def _get_datasets_from_h5(path: str) -> list:
         for name, item in group.items():
             assert isinstance(item, h5py.Dataset)
             # only add it to the list if its not a dummy dataset
-            info_attr = item.attrs["info"]
-            if isinstance(info_attr, str):
-                if "dummy" not in info_attr:
-                    datasets.append([name, list(item.shape), dict(item.attrs)])
+            if "info" in item.attrs:
+                info_attr = item.attrs["info"]
+                if isinstance(info_attr, str):
+                    if "dummy" not in info_attr:
+                        datasets.append([name, list(item.shape), dict(item.attrs)])
+                else:
+                    raise TypeError(
+                        f'dset.attrs["info"] is not a string (got {type(info_attr)}) in file: {h5_file} dataset: {group_path}'
+                    )
             else:
-                raise TypeError(
-                    f'dset.attrs["info"] is not a string (got {type(info_attr)}) in file: {h5_file} dataset: {group_path}'
-                )
+                # If no "info" attribute, assume not dummy
+                datasets.append([name, list(item.shape), dict(item.attrs)])
     return datasets
 
 
@@ -728,14 +732,33 @@ def _preprocess(
                 lambda y, x=x: np.polyfit(x, y, 1)[0], axis=2, arr=data_slice
             )
             _write_data_to_h5(
-                h5_group + f"{s}_preproc_mean_nreps", mean, {"avg": "mean"}
+                h5_group + f"{s}_preproc_mean_nreps",
+                mean,
+                {
+                    "avg": "mean",
+                    "info": f"Sliced data {s} mean over nreps. {mean.shape}",
+                },
             )
             _write_data_to_h5(
-                h5_group + f"{s}_preproc_median_nreps", median, {"avg": "mean"}
+                h5_group + f"{s}_preproc_median_nreps",
+                median,
+                {
+                    "avg": "mean",
+                    "info": f"Sliced data {s} median over nreps. {median.shape}",
+                },
             )
-            _write_data_to_h5(h5_group + f"{s}_preproc_std_nreps", std, {"avg": "mean"})
             _write_data_to_h5(
-                h5_group + f"{s}_preproc_slope_nreps", slopes, {"avg": "mean"}
+                h5_group + f"{s}_preproc_std_nreps",
+                std,
+                {"avg": "mean", "info": f"Sliced data {s} std over nreps. {std.shape}"},
+            )
+            _write_data_to_h5(
+                h5_group + f"{s}_preproc_slope_nreps",
+                slopes,
+                {
+                    "avg": "mean",
+                    "info": f"Sliced data {s} slope over nreps. {slopes.shape}",
+                },
             )
             del data_slice, mean, std, median, slopes
             gc.collect()
