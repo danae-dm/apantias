@@ -8,11 +8,12 @@ description = "Tools for analysis of data from the DANAE experiment on HEPHY"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "dask>=2026.3.0",
-    "distributed>=2026.3.0",
-    "h5py>=3.16.0",
+    "bokeh>=3.9.1",
+    "dask[array,distributed]>=2026.3.0",
+    "matplotlib>=3.10.9",
     "pydantic>=2.13.3",
     "pyyaml>=6.0.3",
+    "rechunker>=0.5.2",
     "zarr>=3.1.6",
 ]
 classifiers = [
@@ -31,12 +32,6 @@ dev = [
 Homepage = "https://github.com/shakamaran/apantias"
 Issues = "https://github.com/shakamaran/apantias/issues"
 
-[tool.pylint]
-disable = [
-    "R0903",
-    "R0914",
-    "C0301",
-    "W0105",
-    "E1133",
-    "E1101",
-]
+[tool.ruff]
+line-length = 120
+format.preview = true

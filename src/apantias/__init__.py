@@ -3,11 +3,25 @@ Defines what modules are exposed to the user.
 """
 
 import importlib.metadata
-from . import config
-from . import orchestrator
+import logging
+import sys
+
+from apantias import utils
+from apantias import client
+from apantias import display
+from apantias import standard
+
+# Set up logging for interactive environments (Jupyter)
+_logger = logging.getLogger(__name__)
+if not _logger.handlers:
+    handler = logging.StreamHandler(sys.stdout)  # ← explicitly use stdout
+    handler.setFormatter(logging.Formatter("%(name)s - %(levelname)s: %(message)s"))
+    _logger.addHandler(handler)
+    _logger.setLevel(logging.DEBUG)
 
 __version__ = importlib.metadata.version("apantias")
 __author__ = "Florian Heinrich"
 __credits__ = "HEPHY Vienna"
+__all__ = ["utils", "client", "display", "standard"]
 
-print(f"test APANTIAS version {__version__} loaded.")
+print(f"test2 APANTIAS version {__version__} loaded.")
