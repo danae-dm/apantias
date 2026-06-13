@@ -7,11 +7,10 @@ from zarr.codecs import (
     BloscCodec,
     BloscShuffle,
     BytesCodec,
-    Crc32cCodec,
-    ShardingCodec,
-    ShardingCodecIndexLocation,
 )
 from typing import cast
+import dask
+import dask.array as da
 
 _logger = logging.getLogger(__name__)
 
@@ -19,14 +18,49 @@ _COLUMN_SIZE = 64
 _ROW_SIZE = 64
 _KEY_INTS = 3
 _RAW_ROW_SIZE = _ROW_SIZE + _KEY_INTS  # 67 uint16 values per raw row
+_TARGET_CHUNK_BYTES = 200 * 1024 * 1024  # 100 MB
+_NREPS_EVAL = [-1]  # TODO: implement this
+
+
+def _extract_and_write_batch(
+    bin_file: Path,
+    zarr_path: Path,
+    offset: int,
+    batch_start: int,
+    batch_end: int,
+    frame_start_indices: np.ndarray,
+    frame_end_indices: np.ndarray,
+    nreps: int,
+) -> None:
+    """Worker function to extract a batch of frames from the binary file and write directly to Zarr."""
+    # We use a memory map per worker to read the binary file concurrently
+    raw_uint16 = np.memmap(bin_file, dtype="uint16", mode="r", offset=offset)
+    n_complete_rows = len(raw_uint16) // _RAW_ROW_SIZE
+    raw_data = raw_uint16[: n_complete_rows * _RAW_ROW_SIZE].reshape(-1, _RAW_ROW_SIZE)
+
+    batch = np.array([
+        raw_data[frame_start_indices[i] + 1 : frame_end_indices[i] + 1, :_ROW_SIZE]
+        for i in range(batch_start, batch_end)
+    ])
+    # Reshape (batch, rows_per_frame, ROW_SIZE) → (batch, COLUMN_SIZE, nreps, ROW_SIZE)
+    batch = batch.reshape(-1, _COLUMN_SIZE, nreps, _ROW_SIZE)
+
+    # Open zarr array to write
+    path_str = str(zarr_path)
+    store_end = path_str.find(".zarr") + len(".zarr")
+    store_path = path_str[:store_end]
+    array_path = path_str[store_end:].lstrip("/")
+
+    # Open the existing zarr array and write to the corresponding slice
+    # Multiple processes can write to different chunks of a Zarr array simultaneously
+    arr = zarr.open_array(store_path, path=array_path, mode="r+")
+    arr[batch_start:batch_end] = batch
 
 
 def bin_to_zarr(
     bin_file: str | Path,
     zarr_path: str | Path,
     nreps: int,
-    chunk_size: int = 128,
-    shard_multiplier: int = 8,
     offset: int = 8,
 ) -> Path:
     """
@@ -45,9 +79,6 @@ def bin_to_zarr(
         bin_file: Path to the source .bin file containing uint16 values.
         zarr_path: Path where the Zarr v3 store will be created.
         nreps: Number of repetitions per frame column.
-        chunk_size: Number of frames per inner (compression) chunk.
-        shard_multiplier: Number of inner chunks per shard file
-            (shard_frames = chunk_size * shard_multiplier).
         offset: Byte offset into the binary file to start reading from.
 
     Returns:
@@ -57,7 +88,9 @@ def bin_to_zarr(
     zarr_path = Path(zarr_path)
 
     rows_per_frame = _COLUMN_SIZE * nreps
-    shard_size = chunk_size * shard_multiplier
+    bytes_per_frame = _COLUMN_SIZE * nreps * _ROW_SIZE * 2
+
+    chunk_size = max(1, _TARGET_CHUNK_BYTES // bytes_per_frame)
 
     # Memory-map the raw file as uint16 — pages are loaded from disk on demand,
     # so the full file does not reside in RAM.
@@ -107,58 +140,58 @@ def bin_to_zarr(
     group_path = "/".join(parts[:-1]) if len(parts) > 1 else None
 
     # ------------------------------------------------------------------
-    # Zarr v3 array with sharding
-    #   outer chunk (= one shard file): (shard_size,  64, nreps, 64)
-    #   inner chunk (= compression unit): (chunk_size, 64, nreps, 64)
-    # Codec pipeline per inner chunk:
+    # Zarr v3 array
+    #   chunk (= compression unit): (chunk_size, 64, nreps, 64)
+    # Codec pipeline per chunk:
     #   BytesCodec (little-endian uint16 bytes)
     #   → BloscCodec(zstd L9, bitshuffle)
     # ------------------------------------------------------------------
     array_shape = (n_frames, _COLUMN_SIZE, nreps, _ROW_SIZE)
     chunk_shape = (chunk_size, _COLUMN_SIZE, nreps, _ROW_SIZE)
-    shard_shape = (shard_size, _COLUMN_SIZE, nreps, _ROW_SIZE)
 
     # Construct full zarr array path
     full_array_path = f"{store_path}/{group_path}/{dataset_name}" if group_path else f"{store_path}/{dataset_name}"
 
-    arr = zarr.open_array(
+    # We just create the empty array structure here before launching workers
+    zarr.open_array(
         full_array_path,
         mode="w",
         shape=array_shape,
-        chunks=shard_shape,
+        chunks=chunk_shape,
         dtype="uint16",
         zarr_format=3,
         codecs=[
-            ShardingCodec(
-                chunk_shape=chunk_shape,
-                codecs=[
-                    BytesCodec(endian="little"),
-                    BloscCodec(
-                        cname="zstd",
-                        clevel=9,
-                        shuffle=BloscShuffle.bitshuffle,
-                    ),
-                ],
-                index_codecs=[
-                    BytesCodec(endian="little"),
-                    Crc32cCodec(),
-                ],
-                index_location=ShardingCodecIndexLocation.end,
-            )
+            BytesCodec(endian="little"),
+            BloscCodec(
+                cname="zstd",
+                clevel=9,
+                shuffle=BloscShuffle.bitshuffle,
+            ),
         ],
     )
 
-    # Write frames in batches aligned to shard boundaries to keep peak RAM low.
-    for batch_start in range(0, n_frames, shard_size):
-        batch_end = min(batch_start + shard_size, n_frames)
-        batch = np.array([
-            raw_data[frame_start_indices[i] + 1 : frame_end_indices[i] + 1, :_ROW_SIZE]
-            for i in range(batch_start, batch_end)
-        ])
-        # Reshape (batch, rows_per_frame, ROW_SIZE) → (batch, COLUMN_SIZE, nreps, ROW_SIZE)
-        batch = batch.reshape(-1, _COLUMN_SIZE, nreps, _ROW_SIZE)
-        arr[batch_start:batch_end] = batch
-        _logger.debug("Written frames %d:%d / %d", batch_start, batch_end, n_frames)
+    # Write frames in batches using Dask to distribute the work across cluster cores
+    # This reads the binary file concurrently and writes directly to Zarr
+    tasks = []
+    for batch_start in range(0, n_frames, chunk_size):
+        batch_end = min(batch_start + chunk_size, n_frames)
+
+        # Schedule the batch extraction and writing as a Dask task
+        task = dask.delayed(_extract_and_write_batch)(
+            bin_file,
+            zarr_path,
+            offset,
+            batch_start,
+            batch_end,
+            frame_start_indices,
+            frame_end_indices,
+            nreps,
+        )
+        tasks.append(task)
+
+    _logger.info("Executing %d Dask tasks to convert binary to Zarr...", len(tasks))
+    # Compute all tasks in parallel using the active Dask cluster
+    dask.compute(*tasks)
 
     _logger.info("Successfully wrote %d frames to %s", n_frames, zarr_path)
     return zarr_path
@@ -226,10 +259,30 @@ def print_store_info(zarr_path: str) -> None:
     print("\n".join(lines))
 
 
+def _rechunk_col_batch(
+    source_store: str,
+    source_array_path: str,
+    target_store: str,
+    target_array_path: str,
+    col: int,
+    n_row: int,
+) -> None:
+    """Worker function to read a 2-column wide band and write 2x2 spatial blocks to Zarr."""
+    source = zarr.open_array(source_store, path=source_array_path, mode="r")
+    target = zarr.open_array(target_store, path=target_array_path, mode="r+")
+
+    # Read just the 2 columns we need for this task (~440 MB footprint)
+    band: np.ndarray = source[:, col : col + 2, :, :]  # (n_frames, 2, n_reps, n_row)
+
+    # Write sequentially to avoid duplicating memory in ThreadPoolExecutor
+    # and to prevent Zarr from spawning 32 parallel C compressions at once
+    for j in range(0, n_row, 2):
+        target[:, col : col + 2, :, j : j + 2] = band[:, :, :, j : j + 2]
+
+
 def rechunk_to_pixels(
     source_path: str | Path,
     target_path: str | Path,
-    col_batch: int = 8,
 ) -> None:
     """
     Rechunks a zarr store so that each chunk contains all frames and all
@@ -237,8 +290,8 @@ def rechunk_to_pixels(
     become size 2).
 
     The source is expected to have shape (frames, 64, nreps, 64).
-    The resulting chunk shape is (frames, 2, nreps, 2), meaning one chunk
-    per 2×2 pixel block across the full time series.
+    The resulting chunk shape is (target_frames_chunk, 2, nreps, 2), where
+    target_frames_chunk is calculated to ensure chunks are ~100MB each.
 
     Source shards cover the full spatial extent, so every shard must be
     decompressed regardless of how many columns are requested. Reading
@@ -254,8 +307,6 @@ def rechunk_to_pixels(
     Args:
         source_path: Path to the source zarr store (chunked along frames).
         target_path: Path where the rechunked zarr store will be written.
-        col_batch: Number of columns to load per decompression pass
-            (must be a multiple of 2).
     """
     source_path = Path(source_path)
     target_path = Path(target_path)
@@ -268,6 +319,8 @@ def rechunk_to_pixels(
         source_array_path = source_str[store_end:].lstrip("/")
         source = cast(zarr.Array, zarr.open_array(source_store, path=source_array_path, mode="r"))  # type: ignore
     else:
+        source_store = source_str
+        source_array_path = ""
         source = cast(zarr.Array, zarr.open(source_str, mode="r"))
 
     n_frames, n_col, n_reps, n_row = source.shape
@@ -278,7 +331,8 @@ def rechunk_to_pixels(
         store_end = target_str.find(".zarr") + len(".zarr")
         target_store = target_str[:store_end]
         target_array_path = target_str[store_end:].lstrip("/")
-        target = zarr.open_array(
+        # create empty array
+        zarr.open_array(
             target_store,
             path=target_array_path,
             mode="w",
@@ -287,29 +341,56 @@ def rechunk_to_pixels(
             dtype=source.dtype,
         )  # type: ignore
     else:
-        target = zarr.open_array(
-            target_str,
+        target_store = target_str
+        target_array_path = ""
+        # create empty array
+        zarr.open_array(
+            target_store,
             mode="w",
             shape=source.shape,
             chunks=(n_frames, 2, n_reps, 2),
             dtype=source.dtype,
         )
 
-    def _write_block(i: int, j: int, data: np.ndarray) -> None:
-        target[:, i : i + 2, :, j : j + 2] = data
+    tasks = []
+    for i in range(0, n_col, 2):
+        task = dask.delayed(_rechunk_col_batch)(
+            source_store, source_array_path, target_store, target_array_path, i, n_row
+        )
+        tasks.append(task)
 
-    with ThreadPoolExecutor() as executor:
-        for i in range(0, n_col, col_batch):
-            i_end = min(i + col_batch, n_col)
-            # One decompression pass yields col_batch columns.
-            band: np.ndarray = source[:, i:i_end, :, :]  # (n_frames, col_batch, n_reps, n_row)
-            futures: list[Future[None]] = [
-                executor.submit(_write_block, i + ci, j, band[:, ci : ci + 2, :, j : j + 2].copy())
-                for ci in range(0, i_end - i, 2)
-                for j in range(0, n_row, 2)
-            ]
-            for f in futures:
-                f.result()
-            _logger.debug("Rechunked columns %d-%d / %d", i + 1, i_end, n_col)
+    _logger.info("Executing %d Dask tasks to rechunk %s...", len(tasks), source_path)
+    dask.compute(*tasks)
 
     _logger.info("Rechunked %s -> %s", source_path, target_path)
+
+
+def compute_median(data_p: da.Array, path: str | Path) -> None:
+    median_array = da.median(data_p, axis=(0, 2))
+    median_array.rechunk(-1).astype(np.float32).to_zarr(path)
+
+
+def compute_offset_corr(data_f: da.Array, median: da.Array, path: str | Path) -> None:
+    offset_corr_array = data_f - median[np.newaxis, :, np.newaxis, :]
+    offset_corr_array.astype(np.float32).to_zarr(path)
+
+
+def compute_common_modes(data: da.Array, path: str | Path) -> None:
+    common_modes_array = da.median(data, axis=3)
+    common_modes_array.to_zarr(path)
+
+
+def compute_slopes(data: da.Array, path: str | Path) -> None:
+    n = data.shape[3]
+    x = np.arange(n, dtype=np.float32)  # plain NumPy, tiny
+    x_dev = x - x.mean()  # plain NumPy
+    denominator = float((x_dev**2).sum())  # scalar, computed now
+
+    # Single pass over offset_corr
+    slopes_array = (data * x_dev[np.newaxis, np.newaxis, np.newaxis, :]).sum(axis=3) / denominator
+    slopes_array.astype(np.float32).to_zarr(path)
+
+
+def subtract(data: da.Array, common_modes: da.Array, path: str | Path) -> None:
+    signals_array = data - common_modes[:, :, :, np.newaxis]
+    signals_array.astype(np.float32).to_zarr(path)

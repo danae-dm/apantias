@@ -10,6 +10,8 @@ from apantias import utils
 from apantias import client
 from apantias import display
 from apantias import standard
+import multiprocessing
+
 
 # Set up logging for interactive environments (Jupyter)
 _logger = logging.getLogger(__name__)
@@ -24,4 +26,9 @@ __author__ = "Florian Heinrich"
 __credits__ = "HEPHY Vienna"
 __all__ = ["utils", "client", "display", "standard"]
 
-print(f"test2 APANTIAS version {__version__} loaded.")
+
+# multiprocessing.current_process().name is 'MainProcess' in the parent Jupyter kernel.
+# Dask's LocalCluster spawns workers via multiprocessing, where the name becomes
+# something like 'ForkProcess-1', 'SpawnPoolWorker-2', etc.
+if multiprocessing.current_process().name == "MainProcess":
+    print(f"APANTIAS version {__version__} loaded.")

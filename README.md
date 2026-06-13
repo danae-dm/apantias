@@ -1,5 +1,7 @@
 See GitHub wiki.
 
+TODO:
+Rechunking und bin to zarr fertig machen (imports und rechunking geht noch nicht)
 
 Prio:
 Pixel Histogramme von darkframes und signals.
@@ -19,7 +21,6 @@ Für die darkframes hab ichs jetzt mal so probiert,das hat funktioniert.
 #signals.to_zarr('/home/snorre/work/apantias_dev/signals.zarr', overwrite=True)
 
 für die darkframes:
-- slopes berechnen noch dazu
 - nrepseval sollten auch funktionieren (die am besten gleich beim zarr auf fast storage kopieren auslassen!)
 - ausgabe der signale (common mode korrigiert und slope filter dazu)
 

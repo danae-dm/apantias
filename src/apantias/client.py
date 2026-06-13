@@ -1,7 +1,8 @@
 from dask.distributed import Client, LocalCluster
 import psutil
 import logging
-from urllib.parse import urlparse
+import os
+from typing import Any
 
 _logger = logging.getLogger(__name__)
 
@@ -14,34 +15,115 @@ env_vars = {
 }
 
 
-def init_cluster(cores: int = 0):
-
-    physical_cores: int | None = psutil.cpu_count(logical=False)
-    if physical_cores is None:
-        _logger.error("No physical cores found.")
+def _parse_slurm_mem(mem_str: str) -> float | None:
+    if not mem_str:
+        return None
+    mem_str = mem_str.strip().upper()
+    try:
+        if mem_str.endswith("G"):
+            return float(mem_str[:-1])
+        elif mem_str.endswith("M"):
+            return float(mem_str[:-1]) / 1024.0
+        elif mem_str.endswith("K"):
+            return float(mem_str[:-1]) / (1024.0 * 1024.0)
+        else:
+            # SLURM default is usually MB
+            return float(mem_str) / 1024.0
+    except ValueError:
         return None
 
+
+def _get_cgroup_memory_limit() -> float | None:
+    for path in ["/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"]:
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    val = f.read().strip()
+                if val and val != "max":
+                    limit = int(val)
+                    # Some systems return a very high number (e.g., 9223372036854771712) when no limit is set
+                    if limit < 9000000000000000000:
+                        return limit / (1024.0**3)
+            except Exception:
+                pass
+    return None
+
+
+def get_resources() -> dict[str, Any]:
+    """
+    Detect the resource allocations (CPUs, Memory, GPUs) available to the current process,
+    respecting SLURM environment variables, container cgroup limits, and system fallbacks.
+    """
+    # 1. CPU allocation
+    cpus = None
+    slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK") or os.environ.get("SLURM_CPUS_ON_NODE")
+    if slurm_cpus:
+        try:
+            cpus = int(slurm_cpus)
+        except ValueError:
+            pass
+
+    if cpus is None and hasattr(os, "sched_getaffinity"):
+        try:
+            cpus = len(os.sched_getaffinity(0))
+        except Exception:
+            pass
+
+    if cpus is None or cpus <= 0:
+        physical_cores = psutil.cpu_count(logical=False)
+        cpus = physical_cores if physical_cores else (os.cpu_count() or 1)
+
+    # 2. Memory allocation
+    memory_gb = None
+    slurm_mem = os.environ.get("SLURM_MEM_PER_NODE")
+    if slurm_mem:
+        memory_gb = _parse_slurm_mem(slurm_mem)
+
+    if memory_gb is None:
+        slurm_mem_per_cpu = os.environ.get("SLURM_MEM_PER_CPU")
+        if slurm_mem_per_cpu:
+            parsed_per_cpu = _parse_slurm_mem(slurm_mem_per_cpu)
+            if parsed_per_cpu is not None:
+                memory_gb = parsed_per_cpu * cpus
+
+    if memory_gb is None:
+        memory_gb = _get_cgroup_memory_limit()
+
+    if memory_gb is None:
+        memory_gb = psutil.virtual_memory().total / (1024.0**3)
+
+    resources: dict[str, Any] = {"cpus": cpus, "memory_gb": round(memory_gb, 2)}
+    _logger.info(f"Detected resources: {resources}")
+    return resources
+
+
+def init_cluster(cores: int = 0):
+    resources = get_resources()
+    detected_cores = resources["cpus"]
+
     if cores == 0:
-        cores = physical_cores - 1
-        _logger.info(f"Detected {physical_cores} physical cores. Dask will use {cores} cores.")
-    elif cores > physical_cores:
-        cores = physical_cores - 1
+        cores = max(1, detected_cores - 1)
+    elif cores > detected_cores:
         _logger.warning(
-            f"Requested {cores} cores, but only {physical_cores} physical cores are available. "
-            f"Dask will use {cores} cores."
+            f"Requested {cores} cores, but only {detected_cores} are available. Limiting to {detected_cores}."
         )
-    else:
-        _logger.info(f"{cores} cores will be used of {physical_cores} available.")
+        cores = detected_cores
+
+    # Route the Dask dashboard through JupyterHub's server proxy
+    prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
+    try:
+        import dask.config  # type: ignore
+    except ImportError:
+        pass
+    dask.config.set({"distributed.dashboard.link": prefix + "proxy/{port}/status"})  # type: ignore
+
     cluster = LocalCluster(
         n_workers=cores,
         threads_per_worker=1,
         env=env_vars,
-        scheduler_port=8786,
         processes=True,
+        dashboard_address=":8787",  # binds 0.0.0.0:8787 so the proxy can reach it
     )
-    dashboard_url = cluster.dashboard_link
-    parsed = urlparse(dashboard_url)
-    port = parsed.port
-    _logger.info(f"Dashboard Link: {dashboard_url}")
-    _logger.info(f"If this runs in a jupyter container, try: http://localhost:8888/proxy/{port}/status")
+
+    _logger.info(f"Dashboard Link: {cluster.dashboard_link}")
     return Client(cluster)
