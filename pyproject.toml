@@ -34,3 +34,7 @@ Issues = "https://github.com/shakamaran/apantias/issues"
 [tool.ruff]
 line-length = 120
 format.preview = true
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
