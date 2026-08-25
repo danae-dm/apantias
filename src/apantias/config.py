@@ -5,7 +5,7 @@ from typing import Any
 
 import yaml
 
-# minor change
+# minor change2
 from pydantic import BaseModel, ConfigDict, Field
 
 DEFAULT_CONFIG_FILE = Path("default.yaml")
