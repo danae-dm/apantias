@@ -1,6 +1,6 @@
 [project]
 name = "apantias"
-version = "2.0.4"
+version = "2.0.9"
 authors = [
     { name="Florian Heinrich", email="florianheinrich@gmx.at" },
 ]
@@ -24,8 +24,7 @@ classifiers = [
 
 [dependency-groups]
 dev = [
-    "pylint>=4.0.5",
-    "ruff>=0.15.2",
+    "ruff>=0.15.2"
 ]
 
 [project.urls]

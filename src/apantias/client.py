@@ -3,6 +3,8 @@ import psutil
 import logging
 import os
 from typing import Any
+from apantias.utils import get_node_name
+from pathlib import Path
 
 _logger = logging.getLogger(__name__)
 
@@ -97,7 +99,7 @@ def get_resources() -> dict[str, Any]:
     return resources
 
 
-def init_cluster(cores: int = 0):
+def init_cluster(local_directory: str | Path, cores: int = 0):
     resources = get_resources()
     detected_cores = resources["cpus"]
 
@@ -123,7 +125,10 @@ def init_cluster(cores: int = 0):
         env=env_vars,
         processes=True,
         dashboard_address=":8787",  # binds 0.0.0.0:8787 so the proxy can reach it
+        local_directory=local_directory,
     )
-
-    _logger.info(f"Dashboard Link: {cluster.dashboard_link}")
+    node = get_node_name()
+    _logger.info("For Dashboard access open a ssh tunnel with this command:")
+    _logger.info(f"ssh -N -L 8787:{node}:8787 user@cbe.vbc.ac.at")
+    _logger.info("Access the Dashboard in your browser at http://localhost:8787")
     return Client(cluster)

@@ -1,10 +1,16 @@
 See GitHub wiki.
 
 TODO:
-Rechunking und bin to zarr fertig machen (imports und rechunking geht noch nicht)
+Set a local-directory for dask!
+
+Tested RAM requirements:
+Minimum is 2GB RAM per physical core.
+A chunk size of 100MB should reliably work. Must be lowered if RAM runs low.
+This chunk size is for the raw_data which is stored in uint16
 
 Prio:
 Pixel Histogramme von darkframes und signals.
+Output the signal also pixel chunked
 
 Für die darkframes hab ichs jetzt mal so probiert,das hat funktioniert.
 

@@ -34,8 +34,10 @@ class StandardAnalysis:
         self.common_modes = self.temp_zarr.joinpath("common_modes")
         self.slopes = self.temp_zarr.joinpath("slopes")
         self.signals = self.temp_zarr.joinpath("signals")
+        self.msd = self.temp_zarr.joinpath("msd")
+        self.signals_mean = self.temp_zarr.joinpath("signals_mean")
 
-    def _run_step(self, path: Path, step_name: str, func: Callable, *args, **kwargs):
+    def _run_step(self, path: Path, step_name: str, func: Callable, *args, **kwargs) -> None:
         if self._array_exists(path):
             _logger.info("%s already exists, skipping", step_name)
         else:
@@ -55,7 +57,7 @@ class StandardAnalysis:
             utils.bin_to_zarr,
             self.bin_path,
             self.raw_data_framewise,
-            200,
+            400,
         )
 
         self._run_step(
@@ -67,7 +69,13 @@ class StandardAnalysis:
         )
 
         data_p = da.from_zarr(self.raw_data_pixelwise)
-        data_f = da.from_zarr(self.raw_data_framewise)
+
+        # Load frame-chunked data. Dask defaults to the inner chunk shape (e.g. col=1).
+        # We explicitly rechunk axis 1 to full width (64) here so that offset_corr
+        # and downstream steps process full frames and don't fragment into tiny tasks.
+        # This does not affect rechunk_to_pixels, which runs before this and reads
+        # directly from the zarr store.
+        data_f = da.from_zarr(self.raw_data_framewise).rechunk({1: 64})
 
         self._run_step(self.median, "median", utils.compute_median, data_p, self.median)
         median = da.from_zarr(self.median)
@@ -87,6 +95,10 @@ class StandardAnalysis:
         signals = da.from_zarr(self.signals)
 
         self._run_step(self.slopes, "slopes", utils.compute_slopes, signals, self.slopes)
+
+        self._run_step(self.msd, "mean squared deviation", utils.compute_msd, signals, median, self.msd)
+
+        self._run_step(self.signals_mean, "signals_mean", utils.compute_signals_mean, signals, self.signals_mean)
 
     def _array_exists(self, path: Path) -> bool:
         """Check if a zarr array exists at the given path."""
