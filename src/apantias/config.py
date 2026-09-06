@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import yaml
 
@@ -12,7 +12,7 @@ DEFAULT_CONFIG_FILE = Path("default.yaml")
 
 
 class RuntimeConfig(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
     cpus: int = Field(default=4, description="Number of CPU cores")
     ram_gb: int = Field(default=8, description="RAM in GB")
     zarr_temp: Path = Field(
@@ -24,7 +24,7 @@ class RuntimeConfig(BaseModel):
 
 
 class FrameConfig(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
     rows: int = Field(default=64, description="Number of frame rows")
     cols: int = Field(default=64, description="Number of frame columns")
     nreps_eval: int = Field(
@@ -33,7 +33,7 @@ class FrameConfig(BaseModel):
 
 
 class AppConfig(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     frame: FrameConfig = Field(default_factory=FrameConfig)
 

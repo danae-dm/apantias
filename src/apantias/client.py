@@ -1,10 +1,13 @@
-from dask.distributed import Client, LocalCluster
-import psutil
 import logging
 import os
-from typing import Any
-from apantias.utils import get_node_name
 from pathlib import Path
+from typing import Any
+
+import psutil
+from dask.distributed import Client, LocalCluster
+import dask.config
+
+from src.apantias.utils import get_node_name
 
 _logger = logging.getLogger(__name__)
 
@@ -113,11 +116,7 @@ def init_cluster(local_directory: str | Path, cores: int = 0):
 
     # Route the Dask dashboard through JupyterHub's server proxy
     prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
-    try:
-        import dask.config  # type: ignore
-    except ImportError:
-        pass
-    dask.config.set({"distributed.dashboard.link": prefix + "proxy/{port}/status"})  # type: ignore
+    _ = dask.config.set({"distributed.dashboard.link": prefix + "proxy/{port}/status"})
 
     cluster = LocalCluster(
         n_workers=cores,

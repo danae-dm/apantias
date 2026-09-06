@@ -5,7 +5,7 @@ import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
-#
+
 def draw_heatmap(
     data: np.ndarray,
     title: Optional[str] = None,

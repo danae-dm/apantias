@@ -1,10 +1,12 @@
 import logging
 import time
 from pathlib import Path
-import zarr
 from typing import Callable
-from . import utils
+
 import dask.array as da
+import zarr
+
+from . import utils
 
 _logger = logging.getLogger(__name__)
 

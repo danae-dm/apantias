@@ -1,6 +1,10 @@
 import logging
-from pathlib import Path
 import os
+from pathlib import Path
+from typing import cast
+
+import dask
+import dask.array as da
 import numpy as np
 import zarr
 from zarr.codecs import (
@@ -9,9 +13,6 @@ from zarr.codecs import (
     BytesCodec,
     ShardingCodec,
 )
-from typing import cast
-import dask
-import dask.array as da
 
 _logger = logging.getLogger(__name__)
 
