@@ -2,7 +2,7 @@
 name = "apantias"
 version = "2.0.9"
 authors = [
-    { name="Florian Heinrich", email="florianheinrich@gmx.at" },
+    { name="Florian Heinrich", email="florian@fheinrich.at" },
 ]
 description = "Tools for analysis of data from the DANAE experiment on HEPHY"
 readme = "README.md"
@@ -38,3 +38,4 @@ format.preview = true
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
+typeCheckingMode = "standard"

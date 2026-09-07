@@ -6,10 +6,10 @@ import importlib.metadata
 import logging
 import sys
 
-from apantias import utils
-from apantias import client
-from apantias import display
-from apantias import standard
+
+from . import core
+from . import standard
+from . import settings
 import multiprocessing
 
 
@@ -24,7 +24,8 @@ if not _logger.handlers:
 __version__ = importlib.metadata.version("apantias")
 __author__ = "Florian Heinrich"
 __credits__ = "HEPHY Vienna"
-__all__ = ["utils", "client", "display", "standard"]
+# controls what is imported by "from apantiuas import *"
+__all__ = ["core", "settings", "standard"]
 
 
 # multiprocessing.current_process().name is 'MainProcess' in the parent Jupyter kernel.

@@ -1,18 +1,11 @@
-See GitHub wiki.
-
-TODO:
-Set a local-directory for dask!
+historical notes:
 
 Tested RAM requirements:
 Minimum is 2GB RAM per physical core.
 A chunk size of 100MB should reliably work. Must be lowered if RAM runs low.
 This chunk size is for the raw_data which is stored in uint16
 
-Prio:
-Pixel Histogramme von darkframes und signals.
-Output the signal also pixel chunked
-
-Für die darkframes hab ichs jetzt mal so probiert,das hat funktioniert.
+dont know what this was about:
 
 #median = da.median(dark_p, axis=(0,2))
 #offset_corr = dark_f - median[np.newaxis,:,np.newaxis,:]
@@ -26,12 +19,17 @@ Für die darkframes hab ichs jetzt mal so probiert,das hat funktioniert.
 #signals = da.mean(signals, axis = 2)
 #signals.to_zarr('/home/snorre/work/apantias_dev/signals.zarr', overwrite=True)
 
-für die darkframes:
-- nrepseval sollten auch funktionieren (die am besten gleich beim zarr auf fast storage kopieren auslassen!)
-- ausgabe der signale (common mode korrigiert und slope filter dazu)
+07.09.26:
+DONE:
+renamed config.py to settings.py
+finished the settings structure
+added module doc for how the settings should be used
 
-für die signale:
-- offset ist der median der darkframes
-- offset von den rohdaten abziehen
-- common mode berechnen und abziehen
-- mean oder median drüber, fertig sind die pixel hists
+TODO:
+move functions from utils to a compute module
+edit the compute functions to use the new config
+test a fresh run (without reusing, just recalculate everything think about adding that later on)
+think about nrepseval for the fresh run
+add a parameter on whether to keep the rawdata after the run
+think about a folder where the raw zarr data can be saved and reused.
+DOCUMENT everything that was done
