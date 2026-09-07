@@ -30,38 +30,41 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import get_resources
 
 DEFAULT_CONFIG_FILE = Path("default.yaml")
-#teach pyYAML how to dump Path Objects
+# teach pyYAML how to dump Path Objects
 yaml.add_representer(Path, lambda dumper, data: dumper.represent_str(str(data)))
+
 
 class RuntimeSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
     cpus: int = Field(default=0, description="Number of CPU cores, 0 is auto-detect")
     ram_mb: int = Field(default=0, description="RAM in MB, 0 is auto-detect")
     zarr_temp: Path = Field(
-        default=Path("/scratch-cbe/users/florian.heinrich/zarr_temp"), description="Path to zarr temp storage, use fast storage options here"
+        default=Path("/scratch-cbe/users/florian.heinrich/zarr_temp"),
+        description="Path to zarr temp storage, use fast storage options here",
     )
-    h5_archive: Path = Field(
-        default=Path("data/processed"), description="Path to h5 archive"
-    )
+    h5_archive: Path = Field(default=Path("data/processed"), description="Path to h5 archive")
     dask_temp: Path = Field(
-        default=Path("/scratch-cbe/users/florian.heinrich/dask_temp"), description="Path to dasks temp storage, use fast storage options here"
+        default=Path("/scratch-cbe/users/florian.heinrich/dask_temp"),
+        description="Path to dasks temp storage, use fast storage options here",
     )
+
 
 class FrameSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
     rows: int = Field(default=64, description="Number of frame rows")
     cols: int = Field(default=64, description="Number of frame columns")
-    nreps_eval: int = Field(
-        default=200, description="Number of repetitions to be evaluated"
-    )
+    nreps_eval: int = Field(default=200, description="Number of repetitions to be evaluated")
+
 
 class AppSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
     frame: FrameSettings = Field(default_factory=FrameSettings)
 
+
 # Process-wide frozen settings instance. None until loaded once.
 _config: AppSettings | None = None
+
 
 def _get_field_descriptions(model: type[BaseModel]) -> dict[str, str]:
     """Extract field descriptions from a Pydantic model."""
@@ -71,8 +74,10 @@ def _get_field_descriptions(model: type[BaseModel]) -> dict[str, str]:
             descriptions[field_name] = field_info.description
     return descriptions
 
+
 def _validate_complete(data: dict[str, Any], path: Path) -> None:
     """Raise if the loaded config is missing any required section or field."""
+
     def check(section_data: dict[str, Any], model: type[BaseModel], section: str) -> None:
         missing = [name for name in model.model_fields if name not in section_data]
         if missing:
@@ -81,6 +86,7 @@ def _validate_complete(data: dict[str, Any], path: Path) -> None:
     check(data, AppSettings, "top-level")
     check(data.get("runtime", {}), RuntimeSettings, "runtime")
     check(data.get("frame", {}), FrameSettings, "frame")
+
 
 def _resolve_auto(config: AppSettings) -> AppSettings:
     """Fill in cpus/ram_mb when set to 0 (auto-detect)."""
@@ -97,6 +103,7 @@ def _resolve_auto(config: AppSettings) -> AppSettings:
         return config
     return config.model_copy(update={"runtime": runtime.model_copy(update=updates)})
 
+
 def load_config(path: Path | None = None) -> AppSettings:
     """
     - If path is None: return defaults.
@@ -106,9 +113,7 @@ def load_config(path: Path | None = None) -> AppSettings:
     """
     path = Path(path) if path else DEFAULT_CONFIG_FILE
     if not path.exists():
-        print(
-            f"No file {path} found.\nA file with defaults will be created at that location."
-        )
+        print(f"No file {path} found.\nA file with defaults will be created at that location.")
         path.parent.mkdir(parents=True, exist_ok=True)
         cfg = AppSettings()
         data = cfg.model_dump()
@@ -122,6 +127,7 @@ def load_config(path: Path | None = None) -> AppSettings:
                 if key in descriptions:
                     lines.append(f"  # {descriptions[key]}")
                 lines.append(f"  {key}: {value}")
+
         dump_section("runtime", RuntimeSettings)
         dump_section("frame", FrameSettings)
         path.write_text("\n".join(lines))
@@ -136,6 +142,7 @@ def load_config(path: Path | None = None) -> AppSettings:
     cfg = _resolve_auto(AppSettings.model_validate(data))
     print_config(cfg)
     return cfg
+
 
 def print_config(config: AppSettings) -> None:
     """Pretty print configuration values with their descriptions."""
@@ -152,6 +159,7 @@ def print_config(config: AppSettings) -> None:
             print(f"  {field_name}: {value}")
 
     print("\n" + "=" * 50 + "\n")
+
 
 def set_config(path: Path | str | None = None, *, overwrite: bool = False) -> AppSettings:
     """Load the yaml config ONCE and register it as the process-wide shared instance.
@@ -173,6 +181,7 @@ def set_config(path: Path | str | None = None, *, overwrite: bool = False) -> Ap
         path = Path(path)
     _config = load_config(path)
     return _config
+
 
 def get_config() -> AppSettings:
     """Return the shared frozen AppSettings instance.

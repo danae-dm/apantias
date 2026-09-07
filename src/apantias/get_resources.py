@@ -13,11 +13,11 @@ def _parse_slurm_mem(mem_str: str) -> int | None:
     mb = 0.0
     try:
         if mem_str.endswith("G"):
-            mb = float(mem_str[:-1]) * 1024.0          # GB -> MB
+            mb = float(mem_str[:-1]) * 1024.0  # GB -> MB
         elif mem_str.endswith("M"):
-            mb = float(mem_str[:-1])                   # already MB
+            mb = float(mem_str[:-1])  # already MB
         elif mem_str.endswith("K"):
-            mb = float(mem_str[:-1]) / 1024.0          # KB -> MB
+            mb = float(mem_str[:-1]) / 1024.0  # KB -> MB
         else:
             # SLURM's default unit is MB
             mb = float(mem_str)
@@ -25,11 +25,12 @@ def _parse_slurm_mem(mem_str: str) -> int | None:
         return None
     return int(mb)
 
+
 def _get_cgroup_memory_limit() -> int | None:
     for path in ["/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"]:
         if os.path.exists(path):
             try:
-                with open(path, "r") as f:
+                with open(path) as f:
                     val = f.read().strip()
                 if val and val != "max":
                     limit = int(val)
@@ -39,6 +40,7 @@ def _get_cgroup_memory_limit() -> int | None:
             except Exception:
                 pass
     return None
+
 
 def get_resources() -> tuple[int, int]:
     """

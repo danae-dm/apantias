@@ -1,7 +1,7 @@
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import dask.array as da
 import zarr
@@ -9,6 +9,7 @@ import zarr
 from . import utils
 
 _logger = logging.getLogger(__name__)
+
 
 #
 class StandardAnalysis:

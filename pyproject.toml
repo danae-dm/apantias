@@ -35,6 +35,10 @@ Issues = "https://github.com/shakamaran/apantias/issues"
 line-length = 120
 format.preview = true
 
+[tool.ruff.lint]
+extend-select = ["E", "W", "I", "B", "UP"]
+ignore = ["F821"]
+
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
