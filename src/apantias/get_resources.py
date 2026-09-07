@@ -1,5 +1,7 @@
 import os
+
 import psutil
+
 
 def _parse_slurm_mem(mem_str: str) -> int | None:
     """Parse a SLURM memory value into an integer number of megabytes.

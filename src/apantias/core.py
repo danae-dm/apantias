@@ -1,16 +1,15 @@
 import logging
 import os
 
-from pathlib import Path
 import dask.config
 from dask.distributed import Client, LocalCluster
 
+from .settings import set_config
 from .utils import get_node_name
-from .settings import set_config, get_config
 
 _logger = logging.getLogger(__name__)
 
-#these environment variables ensure that numpy runs single threaded. we want only one thread running per core.
+# these environment variables ensure that numpy runs single threaded. we want only one thread running per core.
 env_vars = {
     "MKL_NUM_THREADS": "1",
     "OMP_NUM_THREADS": "1",
@@ -20,9 +19,8 @@ env_vars = {
 }
 
 
-
 def init(settings_path: str | None = None):
-    #initialize the config
+    # initialize the config
     config = set_config(settings_path)
     cores = config.runtime.cpus
     local_directory = config.runtime.dask_temp

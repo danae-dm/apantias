@@ -4,14 +4,10 @@ Defines what modules are exposed to the user.
 
 import importlib.metadata
 import logging
+import multiprocessing
 import sys
 
-
-from . import core
-from . import standard
-from . import settings
-import multiprocessing
-
+from . import core, settings, standard
 
 # Set up logging for interactive environments (Jupyter)
 _logger = logging.getLogger(__name__)

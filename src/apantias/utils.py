@@ -1,12 +1,13 @@
 import logging
 import os
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
-import dask
 import dask.array as da
+import dask.delayed as dd
 import numpy as np
 import zarr
+from dask.base import compute
 from zarr.codecs import (
     BloscCodec,
     BloscShuffle,
@@ -273,7 +274,7 @@ def bin_to_zarr(
     for batch_start in range(0, n_frames, chunk_size):
         batch_end = min(batch_start + chunk_size, n_frames)
         block = da.from_delayed(
-            dask.delayed(_read_frame_batch)(
+            dd.delayed(_read_frame_batch)(
                 bin_file,
                 offset,
                 frame_start_indices,
@@ -384,7 +385,7 @@ def _rechunk_col_batch(
     target = zarr.open_array(target_store, path=target_array_path, mode="r+")
 
     col_end = min(col + col_batch, n_col)
-    band: np.ndarray = source[:, col:col_end, :, :]  # (n_frames, col_batch, n_reps, n_row)
+    band = np.asarray(source[:, col:col_end, :, :])  # (n_frames, col_batch, n_reps, n_row)
 
     for c in range(col_end - col):
         for j in range(n_row):
@@ -479,13 +480,13 @@ def rechunk_to_pixels(
 
     tasks = []
     for i in range(0, n_col, col_batch):
-        task = dask.delayed(_rechunk_col_batch)(
+        task = dd.delayed(_rechunk_col_batch)(
             source_store, source_array_path, target_store, target_array_path, i, col_batch, n_col, n_row
         )
         tasks.append(task)
 
     _logger.info("Executing %d Dask tasks to rechunk %s...", len(tasks), source_path)
-    dask.compute(*tasks)
+    compute(*tasks)
 
     _logger.info("Rechunked %s -> %s", source_path, target_path)
 
@@ -498,7 +499,7 @@ def compute_median(data_p: da.Array, path: str | Path) -> None:
 def compute_offset_corr(data_f: da.Array, median: da.Array, path: str | Path) -> None:
     # Rechunk axis 1 (columns) to a single block so downstream output drops the
     # inner column chunks and processes full frames.
-    data_f = data_f.rechunk({1: -1})
+    data_f = data_f.rechunk(cast(Any, {1: -1}))
     offset_corr_array = data_f - median[np.newaxis, :, np.newaxis, :]
     offset_corr_array.to_zarr(path)
 
