@@ -493,6 +493,7 @@ def rechunk_to_pixels(
 
 def compute_median(data_p: da.Array, path: str | Path) -> None:
     median_array = da.median(data_p, axis=(0, 2))
+    # rechunk to a single chunk and write to zarr
     median_array.rechunk(-1).to_zarr(path)
 
 
