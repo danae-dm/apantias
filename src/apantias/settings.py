@@ -38,15 +38,22 @@ DEFAULT_CONFIG_FILE = Path("default.yaml")
 yaml.add_representer(Path, lambda dumper, data: dumper.represent_str(str(data)))
 
 
+class RangeSpec(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    # start is inclusive
+    start: int
+    # stop is exlusive! so stop=100 goes until index 99
+    stop: int
+    step: int = Field(default=1, ge=1)
+
+    def __len__(self) -> int:
+        return max(0, (self.stop - self.start + self.step - 1) // self.step)
+
+
 class RuntimeSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
     cpus: int = Field(default=0, description="Number of CPU cores, 0 is auto-detect")
     ram_mb: int = Field(default=0, description="RAM in MB, 0 is auto-detect")
-    zarr_temp: Path = Field(
-        default=Path("/scratch-cbe/users/florian.heinrich/zarr_temp"),
-        description="Path to zarr temp storage, use fast storage options here",
-    )
-    h5_archive: Path = Field(default=Path("data/processed"), description="Path to h5 archive")
     dask_temp: Path = Field(
         default=Path("/scratch-cbe/users/florian.heinrich/dask_temp"),
         description="Path to dasks temp storage, use fast storage options here",
@@ -57,13 +64,35 @@ class FrameSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
     rows: int = Field(default=64, description="Number of frame rows")
     cols: int = Field(default=64, description="Number of frame columns")
-    nreps_eval: int = Field(default=200, description="Number of repetitions to be evaluated")
+    nreps: int = Field(default=200, description="Number of repetitions")
+
+
+class AnalysisSettings(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
+    bin_file: Path = Field(default=Path("data/bin"), description="Path to bin file")
+    zarr_data: Path = Field(
+        default=Path("/scratch-cbe/users/florian.heinrich/zarr_data"),
+        description="Path to zarr data storage, for raw data.",
+    )
+    zarr_temp: Path = Field(
+        default=Path("/scratch-cbe/users/florian.heinrich/zarr_temp"),
+        description="Path to zarr temp storage, use fast storage options here",
+    )
+    h5_archive: Path = Field(default=Path("data/processed"), description="Path to h5 archive")
+    ext_offset: Path | None = Field(default=None, description="Path to ext offset")
+    nreps_range: RangeSpec = Field(
+        default=RangeSpec(start=3, stop=200, step=1), description="Nreps range [start, stop, step]"
+    )
+    frames_range: RangeSpec = Field(
+        default=RangeSpec(start=0, stop=100, step=1), description="Frames range [start, stop, step]"
+    )
 
 
 class AppSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
     frame: FrameSettings = Field(default_factory=FrameSettings)
+    analysis: AnalysisSettings = Field(default_factory=AnalysisSettings)
 
 
 # Process-wide frozen settings instance. None until loaded once.
@@ -80,15 +109,10 @@ def _get_field_descriptions(model: type[BaseModel]) -> dict[str, str]:
 
 
 def _dump_config(cfg: AppSettings, path: Path) -> None:
-    """Write default config to YAML with comments from field descriptions.
-
-    Dynamic: iterates AppSettings.model_fields, so adding a new section
-    to AppSettings is automatically picked up.
-    """
+    """Write default config to YAML with comments from field descriptions."""
     lines: list[str] = []
 
     for section_name, section_data in cfg.model_dump().items():
-        # section_data is a dict here; get the actual model for descriptions
         model = type(getattr(cfg, section_name))
         descriptions = _get_field_descriptions(model)
 
@@ -96,9 +120,15 @@ def _dump_config(cfg: AppSettings, path: Path) -> None:
         for key, value in section_data.items():
             if key in descriptions:
                 lines.append(f"  # {descriptions[key]}")
-            lines.append(f"  {key}: {value}")
+            if isinstance(value, dict):
+                # Emit nested dicts as proper YAML blocks
+                lines.append(f"  {key}:")
+                for sub_key, sub_value in value.items():
+                    lines.append(f"    {sub_key}: {sub_value}")
+            else:
+                lines.append(f"  {key}: {value}")
 
-    path.write_text("\n".join(lines))
+    path.write_text("\n".join(lines) + "\n")
 
 
 def _validate_complete(data: dict[str, Any], path: Path) -> None:

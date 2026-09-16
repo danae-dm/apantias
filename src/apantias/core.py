@@ -19,9 +19,9 @@ env_vars = {
 }
 
 
-def init(settings_path: str | None = None):
+def init(settings_path: str | None = None, overwrite_settings=False):
     # initialize the config
-    config = set_config(settings_path)
+    config = set_config(settings_path, overwrite=overwrite_settings)
     cores = config.runtime.cpus
     local_directory = config.runtime.dask_temp
 
