@@ -4,9 +4,9 @@ from pathlib import Path
 from typing import Any, cast
 
 import dask.array as da
-import dask.delayed as dd
 import numpy as np
 import zarr
+from dask import delayed  # pyright: ignore
 from dask.base import compute
 from zarr.codecs import (
     BloscCodec,
@@ -274,7 +274,7 @@ def bin_to_zarr(
     for batch_start in range(0, n_frames, chunk_size):
         batch_end = min(batch_start + chunk_size, n_frames)
         block = da.from_delayed(
-            dd.delayed(_read_frame_batch)(
+            delayed(_read_frame_batch)(
                 bin_file,
                 offset,
                 frame_start_indices,
@@ -480,7 +480,7 @@ def rechunk_to_pixels(
 
     tasks = []
     for i in range(0, n_col, col_batch):
-        task = dd.delayed(_rechunk_col_batch)(
+        task = delayed(_rechunk_col_batch)(
             source_store, source_array_path, target_store, target_array_path, i, col_batch, n_col, n_row
         )
         tasks.append(task)
