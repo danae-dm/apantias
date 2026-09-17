@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 
 import dask.array as da
+import zarr
 
 from apantias.settings import AppSettings, get_config
 
@@ -43,6 +44,9 @@ class StandardAnalysis:
 
     def run(self):
 
+        zarr.open_group(self.temp_zarr, mode="a")
+        zarr.open_group(self.zarr_data, mode="a")
+
         _logger.info("Start writing bin to zarr store.")
         utils.bin_to_zarr(self.bin_path, self.raw_data_framewise, self.config.frame.nreps)
         utils.rechunk_to_pixels(self.raw_data_framewise, self.raw_data_pixelwise)
@@ -77,4 +81,17 @@ class StandardAnalysis:
         utils.compute_common_modes(offset_corr, self.common_modes)
         common_modes = da.from_zarr(self.common_modes)
         utils.subtract(offset_corr, common_modes, self.signals)
+        signals = da.from_zarr(self.signals)
+        _logger.info("Done.")
+
+        _logger.info("Start calculating slopes")
+        utils.compute_slopes(signals, self.slopes)
+        _logger.info("Done.")
+
+        _logger.info("Start calculating mean squared deviation")
+        utils.compute_msd(signals, median, self.msd)
+        _logger.info("Done.")
+
+        _logger.info("Start calculating mean signals")
+        utils.compute_signals_mean(signals, self.signals_mean)
         _logger.info("Done.")

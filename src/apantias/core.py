@@ -45,4 +45,4 @@ def init(settings_path: str | None = None, overwrite_settings=False):
     _logger.info("For Dashboard access open a ssh tunnel with this command:")
     _logger.info(f"ssh -N -L 8787:{node}:8787 user@cbe.vbc.ac.at")
     _logger.info("Access the Dashboard in your browser at http://localhost:8787")
-    return Client(cluster)
+    return Client(cluster), cluster

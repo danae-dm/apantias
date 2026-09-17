@@ -37,4 +37,5 @@ maybe use half the processes but 2 threads per if memory problems arise
 change the settings file so it can be used as input for the standard analysis
 think about different path handling (relax the .zarr requirement)
 remove the sharding stuff in data_f after the rechunk to pixels pass
+add a good shutdown procedure
 DOCUMENT everything that was done
