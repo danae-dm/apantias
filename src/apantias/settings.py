@@ -4,11 +4,7 @@ Can load all settings from a .yaml file.
 if no Path is given and no default.yaml is present, a default.yaml is created
 and the default values are used.
 
-The settings are initialized in the core.init function using the set_config() function.
-They can be used in all modules like this:
-
-    from apantias.settings import get_config
-    config = get_config()  # same frozen instance every call, no file read
+Each setting is owned by a Analysis class instance
 
 Settings should be grouped in a structured way:
     - runtime
@@ -93,10 +89,6 @@ class AppSettings(BaseModel):
     runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
     frame: FrameSettings = Field(default_factory=FrameSettings)
     analysis: AnalysisSettings = Field(default_factory=AnalysisSettings)
-
-
-# Process-wide frozen settings instance. None until loaded once.
-_config: AppSettings | None = None
 
 
 def _get_field_descriptions(model: type[BaseModel]) -> dict[str, str]:
@@ -215,37 +207,3 @@ def print_config(config: AppSettings) -> None:
             print(f"  {field_name}: {value}")
 
     print("\n" + "=" * 50 + "\n")
-
-
-def set_config(path: Path | str | None = None, *, overwrite: bool = False, quiet: bool = False) -> AppSettings:
-    """Load the yaml config ONCE and register it as the process-wide shared instance.
-
-    Args:
-        path: Optional path to the yaml file. None uses the default config file.
-        overwrite: By default raising is better than silently swapping an already
-                   set config; pass True to replace it.
-
-    Call this exactly once at startup (e.g. from your entry point). Every other
-    module should then use get_config() to get the same frozen instance without
-    re-reading the yaml file.
-    """
-    global _config
-
-    if _config is not None and not overwrite:
-        raise RuntimeError("config already set; pass overwrite=True to replace it")
-    if isinstance(path, str):
-        path = Path(path)
-    _config = load_config(path, quiet=quiet)
-    return _config
-
-
-def get_config() -> AppSettings:
-    """Return the shared frozen AppSettings instance.
-
-    If set_config() was called first, this returns that exact instance.
-    Throws a RuntimeError if config wasnt set
-    """
-    global _config
-    if _config is None:
-        raise RuntimeError("config not set; call set_config() first")
-    return _config

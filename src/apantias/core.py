@@ -4,7 +4,8 @@ import os
 import dask.config
 from dask.distributed import Client, LocalCluster
 
-from .settings import set_config
+from apantias.get_resources import get_resources
+
 from .utils import get_node_name
 
 _logger = logging.getLogger(__name__)
@@ -19,14 +20,13 @@ env_vars = {
 }
 
 
-def init(settings_path: str | None = None, overwrite_settings=False):
+def init(local_dir, cores=None):
     # initialize the config
-    config = set_config(settings_path, overwrite=overwrite_settings)
-    cores = config.runtime.cpus
-    local_directory = config.runtime.dask_temp
-
-    if cores == 0:
+    if cores is None:
+        cores = get_resources()[0]
+    else:
         cores = max(1, cores - 1)
+    local_directory = local_dir
 
     # Route the Dask dashboard through JupyterHub's server proxy
     prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")

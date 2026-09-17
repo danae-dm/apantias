@@ -4,7 +4,8 @@ from pathlib import Path
 import dask.array as da
 import zarr
 
-from apantias.settings import AppSettings, get_config
+from apantias.core import init
+from apantias.settings import load_config
 
 from . import utils
 
@@ -20,9 +21,12 @@ class StandardAnalysis:
     """
 
     # config can be passed in, otherwise defaults to the shared frozen instance
-    def __init__(self, config: AppSettings | None = None) -> None:
-        if config is None:
-            config = get_config()
+    def __init__(self, path: Path | str | None = None) -> None:
+        if path is None:
+            config = load_config()
+        else:
+            config = load_config(Path(path))
+        self._client, self._cluster = init(config.runtime.dask_temp, config.runtime.cpus)
         self.config = config
         self.bin_path = Path(config.analysis.bin_file)
         self.zarr_data = Path(self.config.analysis.zarr_data)
@@ -43,6 +47,13 @@ class StandardAnalysis:
         self.signals_mean = self.temp_zarr.joinpath("signals_mean")
 
     def run(self):
+        client, _ = self._client, self._cluster
+        try:
+            self._run_analysis()
+        finally:
+            client.close()
+
+    def _run_analysis(self):
 
         zarr.open_group(self.temp_zarr, mode="a")
         zarr.open_group(self.zarr_data, mode="a")
