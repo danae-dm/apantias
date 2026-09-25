@@ -373,14 +373,12 @@ def bin_to_h5(
     _logger.info("Found %d valid frames in %s", n_frames, bin_path)
 
     chunk_size = _frame_chunk_size(nreps)
-
-    filters = hdf5plugin.Blosc(
-        cname="zstd",
-        clevel=9,
-        shuffle=1,  # 1 = bitshuffle, 2 = lz4
-    )
+    filters = hdf5plugin.Blosc(cname="lz4", clevel=5, shuffle=1)
     shape = (n_frames, _COLUMN_SIZE, nreps, _ROW_SIZE)
     chunk_shape = (chunk_size, _COLUMN_SIZE, nreps, _ROW_SIZE)
+
+    # Keep all reps (no slice)
+    nreps_slice = slice(None)
 
     with h5py.File(h5_path, "w") as f:
         ds = f.create_dataset(dataset_name, shape=shape, dtype="uint16", chunks=chunk_shape, **filters)
@@ -391,22 +389,35 @@ def bin_to_h5(
         ds.attrs["row_size"] = _ROW_SIZE
         ds.attrs["raw_row_size"] = _RAW_ROW_SIZE
 
-        for start in range(0, n_frames, chunk_size):
-            end = min(start + chunk_size, n_frames)
-            batch = _read_frame_batch(
-                bin_path,
-                offset,
-                frame_start_indices,
-                frame_end_indices,
-                start,
-                end,
-                nreps,
-                slice(None),  # keep all repetitions in the HDF5 file
+        # Build delayed tasks — one per batch
+        delayed_tasks = []
+        for batch_start in range(0, n_frames, chunk_size):
+            batch_end = min(batch_start + chunk_size, n_frames)
+            delayed_tasks.append(
+                delayed(_write_h5_batch)(
+                    ds,
+                    batch_start,
+                    batch_end,
+                    bin_path,
+                    offset,
+                    frame_start_indices,
+                    frame_end_indices,
+                    nreps,
+                    nreps_slice,
+                )
             )
-            ds[start:end] = batch
 
-    _logger.info("Successfully wrote %d frames to %s", n_frames, h5_path)
+        # Execute in parallel (threads are fine here — GIL released by
+        # numpy/hdf5plugin under the hood)
+        compute(*delayed_tasks, scheduler="threads")
+
     return h5_path
+
+
+def _write_h5_batch(ds, start, end, bin_path, offset, frame_start_indices, frame_end_indices, nreps, nreps_slice):
+    """Read one batch from binary and write it to a pre-opened h5py dataset."""
+    batch = _read_frame_batch(bin_path, offset, frame_start_indices, frame_end_indices, start, end, nreps, nreps_slice)
+    ds[start:end] = batch
 
 
 def _read_h5_batch(

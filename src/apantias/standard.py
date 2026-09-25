@@ -28,7 +28,7 @@ class StandardAnalysis:
             config = load_config(Path(path))
         self._client, self._cluster = init(config.runtime.dask_temp, config.runtime.cpus)
         self.config = config
-        self.bin_path = Path(config.analysis.bin_file)
+        self.h5_path = Path(config.analysis.h5_file)
         self.zarr_data = Path(self.config.analysis.zarr_data)
         self.temp_zarr = Path(self.config.analysis.zarr_temp)
         self.raw_ext = self.config.analysis.ext_offset
@@ -47,11 +47,12 @@ class StandardAnalysis:
         self.signals_mean = self.temp_zarr.joinpath("signals_mean")
 
     def run(self):
-        client, _ = self._client, self._cluster
+        client, cluster = self._client, self._cluster
         try:
             self._run_analysis()
         finally:
             client.close()
+            cluster.close()
 
     def _run_analysis(self):
 
@@ -59,7 +60,7 @@ class StandardAnalysis:
         zarr.open_group(self.zarr_data, mode="a")
 
         _logger.info("Start writing bin to zarr store.")
-        utils.bin_to_zarr(self.bin_path, self.raw_data_framewise, self.config.frame.nreps)
+        utils.h5_to_zarr(self.h5_path, self.raw_data_framewise)
         utils.rechunk_to_pixels(self.raw_data_framewise, self.raw_data_pixelwise)
         _logger.info("Done.")
         # Load pixelwise data. This must be used for calculations along frames.
