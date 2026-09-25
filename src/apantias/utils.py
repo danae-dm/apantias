@@ -1,815 +1,559 @@
-"""module description"""
-
-from concurrent.futures import ProcessPoolExecutor, wait
-
-import numpy as np
-from numba import njit, prange
-from sklearn.cluster import DBSCAN
+import logging
 import os
+from pathlib import Path
+from typing import Any, cast
 
-from . import fitting
-from . import utils
+import dask.array as da
+import numpy as np
+import zarr
+from dask import delayed  # pyright: ignore
+from dask.base import compute
+from zarr.codecs import (
+    BloscCodec,
+    BloscShuffle,
+    BytesCodec,
+    ShardingCodec,
+)
+
+_logger = logging.getLogger(__name__)
+
+_COLUMN_SIZE = 64
+_ROW_SIZE = 64
+_KEY_INTS = 3
+_RAW_ROW_SIZE = _ROW_SIZE + _KEY_INTS  # 67 uint16 values per raw row
+_TARGET_CHUNK_BYTES = 100 * 1024 * 1024  # 200 MB
+_NREPS_EVAL = slice(3, None, 1)
 
 
-def get_cpu_count():
-    # try slurm, if it runs as a job or in a countainer
-    slurm_cpus = os.getenv("SLURM_CPUS_PER_TASK")
-    if slurm_cpus:
-        return int(slurm_cpus)
-    # try cpu_count, if it doesnt
-    cpu_count = os.cpu_count()
-    if cpu_count is not None:
-        return cpu_count
+def get_node_name() -> str:
+    """Get the name of the compute node the process is running on.
+
+    Uses the SLURMD_NODENAME environment variable set by SLURM,
+    or falls back to the hostname if not running on a SLURM cluster.
+
+    Returns
+    -------
+    str
+        The name of the node.
+    """
+    node_name = os.environ.get("SLURMD_NODENAME")
+    if node_name is None:
+        import socket
+
+        node_name = socket.gethostname()
+    return node_name
+
+
+def _blosc_codecs() -> list:
+    """Inner codec pipeline for the raw uint16 detector data.
+
+    LZ4 + bitshuffle is chosen for speed: bitshuffle groups the near-constant
+    high bytes of the narrow-range uint16 values together, which already removes
+    most of the entropy, and LZ4 is one of the fastest Blosc codecs (several
+    times faster to compress than Zstd-9) with very fast decompression. The
+    resulting ratio is moderate but more than enough here, and copying to the
+    fast scratch drive becomes compression-bound rather than IO-bound far less
+    often.
+    """
+    return [
+        BytesCodec(endian="little"),
+        BloscCodec(
+            cname="lz4",
+            clevel=5,
+            shuffle=BloscShuffle.bitshuffle,
+        ),
+    ]
+
+
+def _sharded_frame_codecs(inner_chunk_shape: tuple[int, ...]) -> list:
+    """Codec pipeline for the frame-chunked array using a sharding codec.
+
+    The Zarr chunk (= the write/transfer unit, ~100 MB) becomes a *shard* that
+    is internally subdivided into ``inner_chunk_shape`` inner chunks, each
+    compressed separately with :func:`_blosc_codecs`.
+
+    Making the inner chunk one column wide ``(chunk_size, 1, nreps, n_row)`` is
+    what accelerates the downstream pixel rechunk: reading a single column then
+    becomes a *partial shard read* that decompresses only that column's inner
+    chunks instead of the whole shard. Across all 64 column passes every inner
+    chunk is decompressed exactly once (1x total) rather than once per pass
+    (64x), with no increase in per-task memory.
+    """
+    return [
+        ShardingCodec(
+            chunk_shape=inner_chunk_shape,
+            codecs=_blosc_codecs(),
+        )
+    ]
+
+
+def _read_frame_batch(
+    bin_file: Path,
+    offset: int,
+    frame_start_indices: np.ndarray,
+    frame_end_indices: np.ndarray,
+    batch_start: int,
+    batch_end: int,
+    nreps: int,
+    nreps_slice: slice,
+) -> np.ndarray:
+    """Extract one batch of frames from the binary file as a NumPy array.
+
+    This is the per-chunk worker for the Dask array. It memory-maps the file
+    (only the pages for *this* batch are paged in by the OS), gathers the frame
+    rows for ``batch_start:batch_end`` and returns a
+    ``(batch, COLUMN_SIZE, eval_nreps, ROW_SIZE)`` array. The only RAM it holds is
+    that single decoded batch, so total memory is bounded by the number of
+    Dask tasks running concurrently, not by the file size.
+    """
+    raw_uint16 = np.memmap(bin_file, dtype="uint16", mode="r", offset=offset)
+    n_complete_rows = len(raw_uint16) // _RAW_ROW_SIZE
+    raw_data = raw_uint16[: n_complete_rows * _RAW_ROW_SIZE].reshape(-1, _RAW_ROW_SIZE)
+
+    batch = np.stack([
+        raw_data[frame_start_indices[i] + 1 : frame_end_indices[i] + 1, :_ROW_SIZE]
+        for i in range(batch_start, batch_end)
+    ])
+    # Reshape to full nreps, apply the slice, then return
+    batch_full = batch.reshape(-1, _COLUMN_SIZE, nreps, _ROW_SIZE)
+    return batch_full[:, :, nreps_slice, :]
+
+
+def bin_to_zarr(
+    bin_file: str | Path,
+    zarr_path: str | Path,
+    nreps: int,
+    offset: int = 8,
+) -> Path:
+    """
+    Reads frames from a binary file and writes them to a Zarr v3 store.
+
+    The work is expressed as a **Dask array** so progress is visible in the
+    Dask dashboard and execution is distributed across the active cluster. The
+    array is built from one lazy block per Zarr chunk; each block is produced by
+    :func:`_read_frame_batch`, which memory-maps the file and decodes only that
+    batch. ``to_zarr`` then streams the blocks straight into the compressed
+    store.
+
+    Memory footprint is bounded by *concurrent* tasks, not file size: at any
+    moment Dask holds roughly ``n_running_tasks`` decoded batches in RAM, each
+    about ``chunk_size * COLUMN_SIZE * nreps * ROW_SIZE * 2`` bytes (the
+    ``_TARGET_CHUNK_BYTES`` budget, ~100 MB). With one thread per worker and N
+    workers, peak RAM ≈ ``N * ~100 MB`` regardless of how many frames the file
+    contains.
+
+    The binary file is memory-mapped to handle files larger than available RAM.
+    The output array is stored as "raw_data" in the zarr group and has shape
+    ``(n_frames, COLUMN_SIZE, nreps, ROW_SIZE)``.
+
+    Compression uses Blosc/Zstd with bitshuffle, which is highly effective for
+    uint16 values clustered in a narrow range (e.g. ~47000 ± 100): bitshuffle
+    groups nearly-identical high-bytes together, giving Zstd very high entropy
+    reduction before final encoding.
+
+    Args:
+        bin_file: Path to the source .bin file containing uint16 values.
+        zarr_path: Path where the Zarr v3 store will be created.
+        nreps: Number of repetitions per frame column.
+        offset: Byte offset into the binary file to start reading from.
+
+    Returns:
+        Path to the zarr store.
+    """
+    bin_file = Path(bin_file)
+    zarr_path = Path(zarr_path)
+
+    rows_per_frame = _COLUMN_SIZE * nreps
+
+    # Calculate how many reps will remain after slicing
+    eval_nreps = len(np.empty(nreps)[_NREPS_EVAL])
+    bytes_per_frame = _COLUMN_SIZE * eval_nreps * _ROW_SIZE * 2
+
+    # Round chunk_size down to the nearest multiple of 10 (or keep as 1 if tiny)
+    chunk_size = max(1, _TARGET_CHUNK_BYTES // bytes_per_frame)
+    if chunk_size >= 10:
+        chunk_size = (chunk_size // 10) * 10
+
+    # Memory-map the raw file as uint16 — pages are loaded from disk on demand,
+    # so the full file does not reside in RAM.
+    raw_uint16 = np.memmap(bin_file, dtype="uint16", mode="r", offset=offset)
+    n_complete_rows = len(raw_uint16) // _RAW_ROW_SIZE
+    raw_data = raw_uint16[: n_complete_rows * _RAW_ROW_SIZE].reshape(-1, _RAW_ROW_SIZE)
+
+    # Locate all frame-key rows (sentinel 65535 at column _COLUMN_SIZE).
+    frame_key_positions = np.where(raw_data[:, _COLUMN_SIZE] == 65535)[0]
+    if len(frame_key_positions) < 2:
+        raise ValueError(f"No valid frames found in {bin_file}")
+    # A valid frame has exactly rows_per_frame rows between two consecutive keys.
+    # Create pairs of consecutive frame markers
+    starts = frame_key_positions[:-1]
+    ends = frame_key_positions[1:]
+    # For each pair, compute spacing between markers
+    valid_mask = (ends - starts) == rows_per_frame
+    # Differences: [109-42, 176-109, 243-176] = [67, 67, 67]
+    # Compare to rows_per_frame (64 * nreps)
+    # → Boolean array: [True, True, True] (or False where spacing is wrong)
+    # Keep only the valid start/end indices
+    frame_start_indices = starts[valid_mask]
+    frame_end_indices = ends[valid_mask]
+    n_frames = len(frame_start_indices)
+
+    if n_frames == 0:
+        raise ValueError(f"No valid frames found in {bin_file}")
+
+    _logger.info("Found %d valid frames in %s", n_frames, bin_file)
+    # ------------------------------------------------------------------
+    # Parse zarr_path to extract store, group, and dataset name.
+    # Expected format: /path/to/store.zarr/group/path/dataset_name
+    # ------------------------------------------------------------------
+    path_str = str(zarr_path)
+    if ".zarr" not in path_str:
+        raise ValueError(f"zarr_path must contain '.zarr': {path_str}")
+
+    store_end = path_str.find(".zarr") + len(".zarr")
+    store_path = path_str[:store_end]
+    remainder = path_str[store_end:].lstrip("/")
+
+    if not remainder:
+        raise ValueError(f"zarr_path must specify group and dataset: {path_str}")
+
+    parts = remainder.split("/")
+    dataset_name = parts[-1]
+    group_path = "/".join(parts[:-1]) if len(parts) > 1 else None
+
+    # ------------------------------------------------------------------
+    # Zarr v3 array with a sharding codec.
+    #   shard (= write/transfer unit, ~100 MB): (chunk_size, 64, nreps, 64)
+    #   inner chunk (= compression unit): (chunk_size, 1, nreps, 64)
+    # The per-column inner chunk lets the downstream pixel rechunk read one
+    # column via a partial shard read, decompressing each inner chunk only once.
+    # See _sharded_frame_codecs() for details.
+    # ------------------------------------------------------------------
+    # Calculate how many reps will remain after slicing
+    # We use a dummy array to figure out the exact shape the slice produces
+    eval_nreps = len(np.empty(nreps)[_NREPS_EVAL])
+
+    array_shape = (n_frames, _COLUMN_SIZE, eval_nreps, _ROW_SIZE)
+    chunk_shape = (chunk_size, _COLUMN_SIZE, eval_nreps, _ROW_SIZE)
+    inner_chunk_shape = (chunk_size, 1, eval_nreps, _ROW_SIZE)
+
+    # Construct full zarr array path
+    full_array_path = f"{store_path}/{group_path}/{dataset_name}" if group_path else f"{store_path}/{dataset_name}"
+
+    # We create the empty array structure here so we control the v3 codec
+    # pipeline. Dask's store writes into it.
+    target = zarr.open_array(
+        full_array_path,
+        mode="w",
+        shape=array_shape,
+        chunks=chunk_shape,
+        dtype="uint16",
+        zarr_format=3,
+        codecs=_sharded_frame_codecs(inner_chunk_shape),
+    )
+
+    # ------------------------------------------------------------------
+    # Build a lazy Dask array: one block per Zarr chunk along the frame axis.
+    #
+    # Each block is produced on a worker by _read_frame_batch, which decodes
+    # only that batch from the memmap. Dask schedules these across the cluster
+    # (visible in the dashboard) and, crucially, only keeps the blocks of
+    # *currently running* tasks in memory. Peak RAM therefore scales with the
+    # number of concurrent tasks, NOT with n_frames -> safe for 800 nreps and
+    # thousands of frames.
+    # ------------------------------------------------------------------
+    n_batches = (n_frames + chunk_size - 1) // chunk_size
+    _logger.info(
+        "Building Dask array of %d frames in %d chunks (chunk_size=%d frames)...",
+        n_frames,
+        n_batches,
+        chunk_size,
+    )
+
+    blocks = []
+    for batch_start in range(0, n_frames, chunk_size):
+        batch_end = min(batch_start + chunk_size, n_frames)
+        block = da.from_delayed(
+            delayed(_read_frame_batch)(
+                bin_file,
+                offset,
+                frame_start_indices,
+                frame_end_indices,
+                batch_start,
+                batch_end,
+                nreps,
+                _NREPS_EVAL,
+            ),
+            shape=(batch_end - batch_start, _COLUMN_SIZE, eval_nreps, _ROW_SIZE),
+            dtype=np.uint16,
+        )
+        blocks.append(block)
+
+    data = da.concatenate(blocks, axis=0)
+
+    # Stream the blocks into the pre-created compressed Zarr array. Writing into
+    # the existing array object preserves our Blosc/bitshuffle codec pipeline.
+    # Dask shows task progress in the dashboard while writing.
+    da.store(data, target, lock=False)
+
+    _logger.info("Successfully wrote %d frames to %s", n_frames, zarr_path)
+    return zarr_path
+
+
+def get_chunk_info(zarr_path: str) -> tuple[tuple[int, ...], tuple[int, ...] | None]:
+    z = zarr.open(zarr_path, mode="r")  # type: ignore[return-value]
+
+    outer_chunk: tuple[int, ...] = z.metadata.chunk_grid.chunk_shape  # type: ignore[attr-defined]
+
+    inner_chunk: tuple[int, ...] | None = None
+    for codec in z.metadata.codecs:  # type: ignore[attr-defined]
+        if hasattr(codec, "chunk_shape"):  # type: ignore[attr-defined]
+            inner_chunk = codec.chunk_shape  # type: ignore
+            break
+
+    return outer_chunk, inner_chunk  # type: ignore
+
+
+def print_store_info(zarr_path: str) -> None:
+    """Print a combined tree and chunk layout summary for a zarr store."""
+
+    def _lines(
+        node: zarr.Array | zarr.Group,
+        prefix: str = "",
+        last: bool = True,
+    ) -> list[str]:
+        connector = "└── " if last else "├── "
+        name = node.name.split("/")[-1] or zarr_path
+
+        if isinstance(node, zarr.Array):
+            meta = node.metadata
+            outer: tuple[int, ...] = meta.chunk_grid.chunk_shape  # type: ignore[attr-defined]
+            inner: tuple[int, ...] | None = next(
+                (c.chunk_shape for c in meta.codecs if hasattr(c, "chunk_shape")),  # type: ignore[attr-defined]
+                None,
+            )
+            size_mb = node.nbytes_stored() / 1024**2
+            header = f"{prefix}{connector}{name}  {node.shape}  {node.dtype}  ({size_mb:.1f} MB on disk)"
+            child_prefix = prefix + ("    " if last else "│   ")
+            if inner:
+                detail = [
+                    f"{child_prefix}shard : {outer}",
+                    f"{child_prefix}chunk : {inner}",
+                ]
+            else:
+                detail = [f"{child_prefix}chunk : {outer}"]
+            return [header] + detail
+
+        # Group
+        header = f"{prefix}{connector}{name}/"
+        child_prefix = prefix + ("    " if last else "│   ")
+        result = [header]
+        members = list(node.members())
+        for i, (_, child) in enumerate(members):
+            result.extend(_lines(child, child_prefix, last=(i == len(members) - 1)))
+        return result
+
+    root = zarr.open(zarr_path, mode="r")
+    lines = [zarr_path]
+    if isinstance(root, zarr.Group):
+        members = list(root.members())
+        for i, (_, child) in enumerate(members):
+            lines.extend(_lines(child, "", last=(i == len(members) - 1)))
     else:
-        return 8  # fallback
+        lines.extend(_lines(root, "", last=True))
+    print("\n".join(lines))
 
 
-def get_avail_ram_gb():
-    # try slurm, if it runs as a job or in a countainer
-    slurm_mem = os.getenv("SLURM_MEM_PER_NODE")
-    if slurm_mem:
-        return int(slurm_mem) // 1024
-    # try reading from system, if it doesnt
-    try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                if line.startswith("MemTotal:"):
-                    parts = line.split()
-                    return int(parts[1]) // 1024**2  # Convert from kB to MB
-    except:
-        pass
-    return 16
+def _rechunk_col_batch(
+    source_store: str,
+    source_array_path: str,
+    target_store: str,
+    target_array_path: str,
+    col: int,
+    col_batch: int,
+    n_col: int,
+    n_row: int,
+) -> None:
+    """Worker: read a ``col_batch``-wide column band, write single-pixel chunks.
 
-
-def get_avg_over_nreps(data: np.ndarray) -> np.ndarray:
+    The band ``(n_frames, col_batch, n_reps, n_row)`` is the entire RAM
+    footprint of the task. Each ``(n_frames, 1, n_reps, 1)`` target chunk is
+    written individually so Zarr compresses one pixel at a time, avoiding any
+    duplication of the band in parallel compression buffers.
     """
-    Calculates the average over the nreps axis in a 4D array.
+    source = zarr.open_array(source_store, path=source_array_path, mode="r")
+    target = zarr.open_array(target_store, path=target_array_path, mode="r+")
+
+    col_end = min(col + col_batch, n_col)
+    band = np.asarray(source[:, col:col_end, :, :])  # (n_frames, col_batch, n_reps, n_row)
+
+    for c in range(col_end - col):
+        for j in range(n_row):
+            # Each write targets exactly one pixel chunk -> conflict-free.
+            target[:, col + c, :, j] = band[:, c, :, j]
+
+
+def rechunk_to_pixels(
+    source_path: str | Path,
+    target_path: str | Path,
+    col_batch: int = 1,
+) -> None:
+    """
+    Rechunks a zarr store so that each chunk holds all frames and all readouts
+    for a single spatial pixel. The target chunk shape is
+    ``(n_frames, 1, n_reps, 1)`` — i.e. one chunk per (column, row) pixel.
+
+    The source is expected to have shape ``(frames, 64, nreps, 64)``.
+
+    Source shards cover the full spatial extent, so every shard must be
+    decompressed regardless of how many columns are requested. Each task reads
+    ``col_batch`` columns and writes their pixel chunks. Smaller ``col_batch``
+    means lower peak RAM per worker but more passes over (re-decompressions of)
+    the source. ``col_batch=1`` minimises memory. Independent column bands are
+    rechunked in parallel via Dask.
+
+    Memory per worker (the dominant term) is the column band held in RAM::
+
+        peak_band_bytes ≈ n_frames * col_batch * n_reps * n_row * itemsize
+
+    For example, n_frames=2000, n_reps=50, n_row=64, uint16 (2 bytes),
+    col_batch=1::
+
+        2000 * 1 * 50 * 64 * 2  ≈ 1.22 GB
+
+    Doubling col_batch doubles this. Total concurrent RAM across the cluster is
+    roughly ``n_workers * peak_band_bytes`` plus modest Zarr write buffers.
 
     Args:
-        data (np.ndarray): Input data with shape (nframes, column_size, nreps, row_size).
-
-    Returns:
-        np.ndarray: Averaged data with shape (nframes, column_size, row_size).
+        source_path: Path to the source zarr store (chunked along frames).
+        target_path: Path where the rechunked zarr store will be written.
+        col_batch: Number of columns read per task. Controls the memory/IO
+            trade-off; 1 gives the smallest footprint.
     """
-    if np.ndim(data) != 4:
-        raise ValueError("Input data is not a 4D array.")
-    return nanmean(data, axis=2)
+    source_path = Path(source_path)
+    target_path = Path(target_path)
 
-
-def get_rolling_average(data: np.ndarray, window_size: int) -> np.ndarray:
-    """
-    Calculates a rolling average over a specified window size for 1D data.
-
-    Args:
-        data (np.ndarray): Input 1D data array.
-        window_size (int): Size of the rolling window.
-
-    Returns:
-        np.ndarray: 1D array of rolling averages.
-    """
-    weights = np.repeat(1.0, window_size) / window_size
-    # Use 'valid' mode to ensure that output has the same length as input
-    return np.convolve(data, weights, mode="valid")
-
-
-def get_ram_usage_in_gb(frames: int, column_size: int, nreps: int, row_size: int) -> int:
-    """
-    Calculates the estimated RAM usage in GB for a 4D array with the given dimensions.
-
-    Args:
-        frames (int): Number of frames.
-        column_size (int): Number of columns.
-        nreps (int): Number of repetitions.
-        row_size (int): Number of rows.
-
-    Returns:
-        int: Estimated RAM usage in gigabytes.
-    """
-    return int(frames * column_size * nreps * row_size * 8 / 1024**3) + 1
-
-
-@njit(parallel=True)
-def apply_slope_fit_along_frames(data):
-    """
-    Applies a slope fit along the nreps axis of a 4D array in parallel.
-
-    Args:
-        data (np.ndarray): Input 4D array with shape (nframes, column_size, nreps, row_size).
-
-    Returns:
-        np.ndarray: 3D array with shape (nframes, column_size, row_size) containing slope values.
-    """
-    if data.ndim != 4:
-        raise ValueError("Input data is not a 4D array.")
-    axis_0_size = data.shape[0]
-    axis_1_size = data.shape[1]
-    axis_3_size = data.shape[3]
-    output = np.empty((axis_0_size, axis_1_size, axis_3_size))
-    for frame in prange(axis_0_size):
-        for row in range(axis_1_size):
-            for col in range(axis_3_size):
-                slope = fitting.linear_fit(data[frame, row, :, col])
-                output[frame][row][col] = slope
-    return output
-
-
-@njit(parallel=False)
-def apply_slope_fit_along_frames_single(data):
-    """
-    Applies a slope fit along the nreps axis of a 4D array (single-threaded).
-
-    Args:
-        data (np.ndarray): Input 4D array with shape (nframes, column_size, nreps, row_size).
-
-    Returns:
-        np.ndarray: 3D array with shape (nframes, column_size, row_size) containing slope values.
-    """
-    if data.ndim != 4:
-        raise ValueError("Input data is not a 4D array.")
-    axis_0_size = data.shape[0]
-    axis_1_size = data.shape[1]
-    axis_3_size = data.shape[3]
-    output = np.empty((axis_0_size, axis_1_size, axis_3_size))
-    for frame in prange(axis_0_size):
-        for row in range(axis_1_size):
-            for col in range(axis_3_size):
-                slope = fitting.linear_fit(data[frame, row, :, col])
-                output[frame][row][col] = slope
-    return output
-
-
-def split_h5_path(path: str) -> tuple[str, str]:
-    """
-    Splits an HDF5 file path into the file path and dataset path.
-
-    Args:
-        path (str): Full path to the HDF5 file and dataset (e.g., "/path/to/file.h5/group1/dataset1").
-
-    Returns:
-        tuple: A tuple containing the HDF5 file path and the dataset path.
-    """
-    h5_file = path.split(".h5")[0] + ".h5"
-    dataset_path = path.split(".h5")[1]
-    return h5_file, dataset_path
-
-
-def nanmedian(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray:
-    """
-    Computes the median along a specified axis of a NumPy array, ignoring NaN values.
-
-    Args:
-        data (np.ndarray): Input data array.
-        axis (int): Axis along which to compute the median.
-        keepdims (bool): Whether to keep the reduced dimensions.
-
-    Returns:
-        np.ndarray: Array of medians along the specified axis.
-    """
-    if data.ndim == 2:
-        if axis == 0:
-            if keepdims:
-                return _nanmedian_2d_axis0(data)[np.newaxis, :]
-            else:
-                return _nanmedian_2d_axis0(data)
-        elif axis == 1:
-            if keepdims:
-                return _nanmedian_2d_axis1(data)[:, np.newaxis]
-            else:
-                return _nanmedian_2d_axis1(data)
-    elif data.ndim == 3:
-        if axis == 0:
-            if keepdims:
-                return _nanmedian_3d_axis0(data)[np.newaxis, :, :]
-            else:
-                return _nanmedian_3d_axis0(data)
-        elif axis == 1:
-            if keepdims:
-                return _nanmedian_3d_axis1(data)[:, np.newaxis, :]
-            else:
-                return _nanmedian_3d_axis1(data)
-        elif axis == 2:
-            if keepdims:
-                return _nanmedian_3d_axis2(data)[:, :, np.newaxis]
-            else:
-                return _nanmedian_3d_axis2(data)
-    elif data.ndim == 4:
-        if axis == 0:
-            if keepdims:
-                return _nanmedian_4d_axis0(data)[np.newaxis, :, :, :]
-            else:
-                return _nanmedian_4d_axis0(data)
-        elif axis == 1:
-            if keepdims:
-                return _nanmedian_4d_axis1(data)[:, np.newaxis, :, :]
-            else:
-                return _nanmedian_4d_axis1(data)
-        elif axis == 2:
-            if keepdims:
-                return _nanmedian_4d_axis2(data)[:, :, np.newaxis, :]
-            else:
-                return _nanmedian_4d_axis2(data)
-        elif axis == 3:
-            if keepdims:
-                return _nanmedian_4d_axis3(data)[:, :, :, np.newaxis]
-            else:
-                return _nanmedian_4d_axis3(data)
+    # Parse source path to extract store and array path
+    source_str = str(source_path)
+    if ".zarr" in source_str:
+        store_end = source_str.find(".zarr") + len(".zarr")
+        source_store = source_str[:store_end]
+        source_array_path = source_str[store_end:].lstrip("/")
+        source = cast(zarr.Array, zarr.open_array(source_store, path=source_array_path, mode="r"))  # type: ignore
     else:
-        raise ValueError("Data has wrong dimensions")
-    return np.array([])  # Add a default return statement
+        source_store = source_str
+        source_array_path = ""
+        source = cast(zarr.Array, zarr.open(source_str, mode="r"))
 
+    n_frames, n_col, n_reps, n_row = source.shape
 
-def nanmean(data: np.ndarray, axis: int, keepdims: bool = False) -> np.ndarray:
-    """
-    Computes the mean along a specified axis of a NumPy array, ignoring NaN values.
-
-    Args:
-        data (np.ndarray): Input data array.
-        axis (int): Axis along which to compute the mean.
-        keepdims (bool): Whether to keep the reduced dimensions.
-
-    Returns:
-        np.ndarray: Array of means along the specified axis.
-    """
-    if data.ndim == 2:
-        if axis == 0:
-            if keepdims:
-                return _nanmean_2d_axis0(data)[np.newaxis, :]
-            else:
-                return _nanmean_2d_axis0(data)
-        elif axis == 1:
-            if keepdims:
-                return _nanmean_2d_axis1(data)[:, np.newaxis]
-            else:
-                return _nanmean_2d_axis1(data)
-    elif data.ndim == 3:
-        if axis == 0:
-            if keepdims:
-                return _nanmean_3d_axis0(data)[np.newaxis, :, :]
-            else:
-                return _nanmean_3d_axis0(data)
-        elif axis == 1:
-            if keepdims:
-                return _nanmean_3d_axis1(data)[:, np.newaxis, :]
-            else:
-                return _nanmean_3d_axis1(data)
-        elif axis == 2:
-            if keepdims:
-                return _nanmean_3d_axis2(data)[:, :, np.newaxis]
-            else:
-                return _nanmean_3d_axis2(data)
-    elif data.ndim == 4:
-        if axis == 0:
-            if keepdims:
-                return _nanmean_4d_axis0(data)[np.newaxis, :, :, :]
-            else:
-                return _nanmean_4d_axis0(data)
-        elif axis == 1:
-            if keepdims:
-                return _nanmean_4d_axis1(data)[:, np.newaxis, :, :]
-            else:
-                return _nanmean_4d_axis1(data)
-        elif axis == 2:
-            if keepdims:
-                return _nanmean_4d_axis2(data)[:, :, np.newaxis, :]
-            else:
-                return _nanmean_4d_axis2(data)
-        elif axis == 3:
-            if keepdims:
-                return _nanmean_4d_axis3(data)[:, :, :, np.newaxis]
-            else:
-                return _nanmean_4d_axis3(data)
+    # Parse target path to extract store and array path
+    target_str = str(target_path)
+    if ".zarr" in target_str:
+        store_end = target_str.find(".zarr") + len(".zarr")
+        target_store = target_str[:store_end]
+        target_array_path = target_str[store_end:].lstrip("/")
+        # create empty array with single-pixel chunks
+        zarr.open_array(
+            target_store,
+            path=target_array_path,
+            mode="w",
+            shape=source.shape,
+            chunks=(n_frames, 1, n_reps, 1),
+            dtype=source.dtype,
+            zarr_format=3,
+            codecs=_blosc_codecs(),
+        )  # type: ignore
     else:
-        raise ValueError("Data has wrong dimensions")
-    return np.array([])  # Add a default return statement
+        target_store = target_str
+        target_array_path = ""
+        # create empty array with single-pixel chunks
+        zarr.open_array(
+            target_store,
+            mode="w",
+            shape=source.shape,
+            chunks=(n_frames, 1, n_reps, 1),
+            dtype=source.dtype,
+            zarr_format=3,
+            codecs=_blosc_codecs(),
+        )
+
+    tasks = []
+    for i in range(0, n_col, col_batch):
+        task = delayed(_rechunk_col_batch)(
+            source_store, source_array_path, target_store, target_array_path, i, col_batch, n_col, n_row
+        )
+        tasks.append(task)
+
+    _logger.info("Executing %d Dask tasks to rechunk %s...", len(tasks), source_path)
+    compute(*tasks)
+
+    _logger.info("Rechunked %s -> %s", source_path, target_path)
 
 
-@njit(parallel=True)
-def _nanmedian_4d_axis0(data: np.ndarray) -> np.ndarray:
+def compute_median(data_p: da.Array, path: str | Path) -> None:
+    median_array = da.median(data_p, axis=(0, 2))
+    # rechunk to a single chunk and write to zarr
+    median_array.rechunk(-1).to_zarr(path)
+
+
+def compute_offset_corr(data_f: da.Array, median: da.Array, path: str | Path) -> None:
+    # Rechunk axis 1 (columns) to a single block so downstream output drops the
+    # inner column chunks and processes full frames.
+    data_f = data_f.rechunk(cast(Any, {1: -1}))
+    offset_corr_array = data_f - median[np.newaxis, :, np.newaxis, :]
+    offset_corr_array.to_zarr(path)
+
+
+def compute_common_modes(data: da.Array, path: str | Path) -> None:
+    common_modes_array = da.median(data, axis=3)
+    common_modes_array.to_zarr(path)
+
+
+def compute_slopes(data: da.Array, path: str | Path) -> None:
+    # shape is (frames, columns, nreps, rows)
+    n = data.shape[2]  # nreps is axis 2
+    x = np.arange(n, dtype=np.float64)  # plain NumPy, tiny
+    x_dev = x - x.mean()  # plain NumPy
+    denominator = float((x_dev**2).sum())  # scalar, computed now
+
+    # Multiply along axis 2 (nreps), then sum along axis 2
+    # x_dev shape must broadcast to (1, 1, nreps, 1)
+    slopes_array = (data * x_dev[np.newaxis, np.newaxis, :, np.newaxis]).sum(axis=2) / denominator
+    slopes_array.to_zarr(path)
+
+
+def subtract(data: da.Array, common_modes: da.Array, path: str | Path) -> None:
+    signals_array = data - common_modes[:, :, :, np.newaxis]
+    signals_array.to_zarr(path)
+
+
+def compute_msd(data: da.Array, median: da.Array, path: str | Path) -> None:
     """
-    The equivalent to np.nanmedian(data, axis=0, keepdims=False).
-    Args:
-        data: 4D np.array
-    Returns:
-        3D np.array
-    """
-    if data.ndim != 4:
-        raise ValueError("Input data is not a 4D array.")
-    axis_1_size = data.shape[1]
-    axis_2_size = data.shape[2]
-    axis_3_size = data.shape[3]
-    output = np.zeros((axis_1_size, axis_2_size, axis_3_size))
-    for i in prange(axis_1_size):
-        for j in prange(axis_2_size):
-            for k in prange(axis_3_size):
-                median = np.nanmedian(data[:, i, j, k])
-                output[i, j, k] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmedian_4d_axis1(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmedian(data, axis=1, keepdims=False).
-    Args:
-        data: 4D np.array
-    Returns:
-        3D np.array
-    """
-    if data.ndim != 4:
-        raise ValueError("Input data is not a 4D array.")
-    axis_0_size = data.shape[0]
-    axis_2_size = data.shape[2]
-    axis_3_size = data.shape[3]
-    output = np.zeros((axis_0_size, axis_2_size, axis_3_size))
-    for i in prange(axis_0_size):
-        for j in prange(axis_2_size):
-            for k in prange(axis_3_size):
-                median = np.nanmedian(data[i, :, j, k])
-                output[i, j, k] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmedian_4d_axis2(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmedian(data, axis=2, keepdims=False).
-    Args:
-        data: 4D np.array
-    Returns:
-        3D np.array
-    """
-    if data.ndim != 4:
-        raise ValueError("Input data is not a 4D array.")
-    axis_0_size = data.shape[0]
-    axis_1_size = data.shape[1]
-    axis_3_size = data.shape[3]
-    output = np.zeros((axis_0_size, axis_1_size, axis_3_size))
-    for i in prange(axis_0_size):
-        for j in prange(axis_1_size):
-            for k in prange(axis_3_size):
-                median = np.nanmedian(data[i, j, :, k])
-                output[i, j, k] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmedian_4d_axis3(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmedian(data, axis=3, keepdims=False).
-    Args:
-        data: 4D np.array
-    Returns:
-        3D np.array
-    """
-    if data.ndim != 4:
-        raise ValueError("Input data is not a 4D array.")
-    axis_0_size = data.shape[0]
-    axis_1_size = data.shape[1]
-    axis_2_size = data.shape[2]
-    output = np.zeros((axis_0_size, axis_1_size, axis_2_size))
-    for i in prange(axis_0_size):
-        for j in prange(axis_1_size):
-            for k in prange(axis_2_size):
-                median = np.nanmedian(data[i, j, k, :])
-                output[i, j, k] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmedian_3d_axis0(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmedian(data, axis=0, keepdims=False).
-    Args:
-        data: 3D np.array
-    Returns:
-        2D np.array
-    """
-    if data.ndim != 3:
-        raise ValueError("Input data is not a 3D array.")
-    axis_1_size = data.shape[1]
-    axis_2_size = data.shape[2]
-    output = np.zeros((axis_1_size, axis_2_size))
-    for i in prange(axis_1_size):
-        for j in prange(axis_2_size):
-            median = np.nanmedian(data[:, i, j])
-            output[i, j] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmedian_3d_axis1(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmedian(data, axis=1, keepdims=False).
-    Args:
-        data: 3D np.array
-    Returns:
-        2D np.array
-    """
-    if data.ndim != 3:
-        raise ValueError("Input data is not a 3D array.")
-    axis_0_size = data.shape[0]
-    axis_2_size = data.shape[2]
-    output = np.zeros((axis_0_size, axis_2_size))
-    for i in prange(axis_0_size):
-        for j in prange(axis_2_size):
-            median = np.nanmedian(data[i, :, j])
-            output[i, j] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmedian_3d_axis2(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmedian(data, axis=2, keepdims=False).
-    Args:
-        data: 3D np.array
-    Returns:
-        2D np.array
-    """
-    if data.ndim != 3:
-        raise ValueError("Input data is not a 3D array.")
-    axis_0_size = data.shape[0]
-    axis_1_size = data.shape[1]
-    output = np.zeros((axis_0_size, axis_1_size))
-    for i in prange(axis_0_size):
-        for j in prange(axis_1_size):
-            median = np.nanmedian(data[i, j, :])
-            output[i, j] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmedian_2d_axis0(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmedian(data, axis=0, keepdims=False).
-    Args:
-        data: 2D np.array
-    Returns:
-        1D np.array
-    """
-    if data.ndim != 2:
-        raise ValueError("Input data is not a 2D array.")
-    axis_1_size = data.shape[1]
-    output = np.zeros(axis_1_size)
-    for i in prange(axis_1_size):
-        median = np.nanmedian(data[:, i])
-        output[i] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmedian_2d_axis1(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmedian(data, axis=1, keepdims=False).
-    Args:
-        data: 2D np.array
-    Returns:
-        1D np.array
-    """
-    if data.ndim != 2:
-        raise ValueError("Input data is not a 2D array.")
-    axis_0_size = data.shape[0]
-    output = np.zeros(axis_0_size)
-    for i in prange(axis_0_size):
-        median = np.nanmedian(data[i, :])
-        output[i] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmean_4d_axis0(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmean(data, axis=0, keepdims=False).
-    Args:
-        data: 4D np.array
-    Returns:
-        3D np.array
-    """
-    if data.ndim != 4:
-        raise ValueError("Input data is not a 4D array.")
-    axis_1_size = data.shape[1]
-    axis_2_size = data.shape[2]
-    axis_3_size = data.shape[3]
-    output = np.zeros((axis_1_size, axis_2_size, axis_3_size))
-    for i in prange(axis_1_size):
-        for j in prange(axis_2_size):
-            for k in prange(axis_3_size):
-                median = np.nanmean(data[:, i, j, k])
-                output[i, j, k] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmean_4d_axis1(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmean(data, axis=1, keepdims=False).
-    Args:
-        data: 4D np.array
-    Returns:
-        3D np.array
-    """
-    if data.ndim != 4:
-        raise ValueError("Input data is not a 4D array.")
-    axis_0_size = data.shape[0]
-    axis_2_size = data.shape[2]
-    axis_3_size = data.shape[3]
-    output = np.zeros((axis_0_size, axis_2_size, axis_3_size))
-    for i in prange(axis_0_size):
-        for j in prange(axis_2_size):
-            for k in prange(axis_3_size):
-                median = np.nanmean(data[i, :, j, k])
-                output[i, j, k] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmean_4d_axis2(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmean(data, axis=2, keepdims=False).
-    Args:
-        data: 4D np.array
-    Returns:
-        3D np.array
-    """
-    if data.ndim != 4:
-        raise ValueError("Input data is not a 4D array.")
-    axis_0_size = data.shape[0]
-    axis_1_size = data.shape[1]
-    axis_3_size = data.shape[3]
-    output = np.zeros((axis_0_size, axis_1_size, axis_3_size))
-    for i in prange(axis_0_size):
-        for j in prange(axis_1_size):
-            for k in prange(axis_3_size):
-                median = np.nanmean(data[i, j, :, k])
-                output[i, j, k] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmean_4d_axis3(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmean(data, axis=3, keepdims=False).
-    Args:
-        data: 4D np.array
-    Returns:
-        3D np.array
-    """
-    if data.ndim != 4:
-        raise ValueError("Input data is not a 4D array.")
-    axis_0_size = data.shape[0]
-    axis_1_size = data.shape[1]
-    axis_2_size = data.shape[2]
-    output = np.zeros((axis_0_size, axis_1_size, axis_2_size))
-    for i in prange(axis_0_size):
-        for j in prange(axis_1_size):
-            for k in prange(axis_2_size):
-                median = np.nanmean(data[i, j, k, :])
-                output[i, j, k] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmean_3d_axis0(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmean(data, axis=0, keepdims=False).
-    Args:
-        data: 3D np.array
-    Returns:
-        2D np.array
-    """
-    if data.ndim != 3:
-        raise ValueError("Input data is not a 3D array.")
-    axis_1_size = data.shape[1]
-    axis_2_size = data.shape[2]
-    output = np.zeros((axis_1_size, axis_2_size))
-    for i in prange(axis_1_size):
-        for j in prange(axis_2_size):
-            median = np.nanmean(data[:, i, j])
-            output[i, j] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmean_3d_axis1(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmean(data, axis=1, keepdims=False).
-    Args:
-        data: 3D np.array
-    Returns:
-        2D np.array
-    """
-    if data.ndim != 3:
-        raise ValueError("Input data is not a 3D array.")
-    axis_0_size = data.shape[0]
-    axis_2_size = data.shape[2]
-    output = np.zeros((axis_0_size, axis_2_size))
-    for i in prange(axis_0_size):
-        for j in prange(axis_2_size):
-            median = np.nanmean(data[i, :, j])
-            output[i, j] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmean_3d_axis2(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmean(data, axis=2, keepdims=False).
-    Args:
-        data: 3D np.array
-    Returns:
-        2D np.array
-    """
-    if data.ndim != 3:
-        raise ValueError("Input data is not a 3D array.")
-    axis_0_size = data.shape[0]
-    axis_1_size = data.shape[1]
-    output = np.zeros((axis_0_size, axis_1_size))
-    for i in prange(axis_0_size):
-        for j in prange(axis_1_size):
-            median = np.nanmean(data[i, j, :])
-            output[i, j] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmean_2d_axis0(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmean(data, axis=0, keepdims=False).
-    Args:
-        data: 2D np.array
-    Returns:
-        1D np.array
-    """
-    if data.ndim != 2:
-        raise ValueError("Input data is not a 2D array.")
-    axis_1_size = data.shape[1]
-    output = np.zeros(axis_1_size)
-    for i in prange(axis_1_size):
-        median = np.nanmean(data[:, i])
-        output[i] = median
-    return output
-
-
-@njit(parallel=True)
-def _nanmean_2d_axis1(data: np.ndarray) -> np.ndarray:
-    """
-    The equivalent to np.nanmean(data, axis=1, keepdims=False).
-    Args:
-        data: 2D np.array
-    Returns:
-        1D np.array
-    """
-    if data.ndim != 2:
-        raise ValueError("Input data is not a 2D array.")
-    axis_0_size = data.shape[0]
-    output = np.zeros(axis_0_size)
-    for i in prange(axis_0_size):
-        median = np.nanmean(data[i, :])
-        output[i] = median
-    return output
-
-
-def parse_numpy_slicing(slicing_str: str) -> list:
-    """
-    Parses a NumPy slicing string and converts it to a list of Python slice objects.
+    Computes the Mean Squared Deviation for each pixel.
 
     Args:
-        slicing_str (str): String representing NumPy slicing (e.g., "1:5, :, 2:10:2").
-
-    Returns:
-        list: List of Python slice objects.
+        data: Dask array of shape (frames, 64, nreps, 64)
+        median: Dask/NumPy array of shape (64, 64)
+        path: Path to save the resulting (64, 64) array
     """
-    slicing_str = slicing_str.replace("[", "")
-    slicing_str = slicing_str.replace("]", "")
-    slices = []
-    slicing_parts = slicing_str.split(",")
+    # 1. Align median for broadcasting: (64, 64) -> (1, 64, 1, 64)
+    # Axis 0 (frames) and Axis 2 (nreps) are new dimensions
+    median_aligned = median[np.newaxis, :, np.newaxis, :]
 
-    for part in slicing_parts:
-        part = part.strip()
-        if ":" in part:
-            slice_parts = part.split(":")
-            start = int(slice_parts[0]) if slice_parts[0] else None
-            stop = int(slice_parts[1]) if slice_parts[1] else None
-            step = int(slice_parts[2]) if len(slice_parts) > 2 and slice_parts[2] else None
-            slices.append(slice(start, stop, step))
-        else:
-            slices.append(int(part))
-    return slices
+    # 2. Calculate squared differences
+    # Resulting shape: (frames, 64, nreps, 64)
+    squared_diff = (data - median_aligned) ** 2
 
+    # 3. Average over frames (axis 0) and repetitions (axis 2)
+    # Resulting shape: (64, 64)
+    msd_array = da.mean(squared_diff, axis=(0, 2))
 
-def process_batch(func, row_data, *args, **kwargs):
-    """
-    Applies a function to a row of data.
-
-    Args:
-        func (callable): Function to apply.
-        row_data (np.ndarray): Row of data to process.
-        *args: Additional arguments for the function.
-        **kwargs: Additional keyword arguments for the function.
-
-    Returns:
-        np.ndarray: Processed data.
-    """
-
-    def func_with_args(data):
-        return func(data, *args, **kwargs)
-
-    batch_results = np.apply_along_axis(func_with_args, axis=0, arr=row_data)
-    return batch_results
+    # 4. Store the result
+    # We rechunk to -1 because the output is tiny (64x64)
+    msd_array.rechunk(-1).to_zarr(path)
 
 
-def apply_pixelwise(data, func, *args, **kwargs) -> np.ndarray:
-    """
-    Helper function to apply a function to each pixel in a 3D numpy array in parallel.
-    Data must have shape (n,row,col). The function is applied to [:,row,col].
-    A process is created for each row, to avoid overhead from creating too many processes.
-    The passed function must accept a 1D array as input and must have a 1D array as output.
-    The passed function must have a data parameter, which is the first argument.
-
-    Args:
-        data (np.ndarray): Input 3D array with shape (n, row, col).
-        func (callable): Function to apply to each pixel.
-        *args: Additional arguments for the function.
-        **kwargs: Additional keyword arguments for the function.
-
-    Returns:
-        np.ndarray: Processed data.
-    """
-    if data.ndim != 3:
-        raise ValueError("Data must be a 3D array.")
-    # try the passed function and check return value
-    try:
-        result = func(data[:, 0, 0], *args, **kwargs)
-        result_shape = result.shape
-        result_type = result.dtype
-    except Exception as e:
-        raise ValueError(f"Error applying function to data: {e}") from e
-    if not isinstance(result, np.ndarray):
-        raise ValueError("Function must return a numpy array.")
-    if result.ndim != 1:
-        raise ValueError("Function must return a 1D numpy array.")
-    cores = utils.get_cpu_count()
-    # initialize results, now that we know what the function returns
-    if cores == 1:
-        return func(data, *args, **kwargs)
-
-    rows_per_process = divide_evenly(data.shape[1], cores)
-    results = np.zeros((result_shape[0], data.shape[1], data.shape[2]), dtype=result_type)
-    with ProcessPoolExecutor() as executor:
-        futures = []
-        for i in range(cores):
-            # copy the data of one row and submit it to the executor
-            # this is necessary to avoid memory issues
-            process_data = data[:, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :]
-            futures.append(executor.submit(process_batch, func, process_data.copy(), *args, **kwargs))
-        # wait for all futures to be done
-        wait(futures)
-        # Process the results in the order they were submitted
-        for i, future in enumerate(futures):
-            try:
-                batch_results = future.result()
-                results[:, sum(rows_per_process[:i]) : sum(rows_per_process[: i + 1]), :] = batch_results
-            except Exception as e:
-                raise e
-    return results
-
-
-def dbscan_outliers(data: np.ndarray, eps, min_samples, inline=False):
-    """
-    Identifies outliers in data using the DBSCAN clustering algorithm.
-
-    Args:
-        data (np.ndarray): Input data array.
-        eps (float): Maximum distance between two samples for them to be considered in the same cluster.
-        min_samples (int): Minimum number of samples in a cluster.
-        inline (bool): Whether to modify the input data inline.
-
-    Returns:
-        np.ndarray or None: Boolean mask of outliers if inline is False, otherwise modifies the input data.
-    """
-    db = DBSCAN(eps=eps, min_samples=min_samples)
-    labels = db.fit_predict(data.reshape(-1, 1))
-    if labels.shape != data.shape:
-        labels = labels.reshape(data.shape)
-    if not inline:
-        return labels == -1
-    else:
-        data[labels == -1] = np.nan
-
-
-def divide_evenly(number: int, parts: int) -> list:
-    """
-    Divides an integer into approximately equal parts.
-
-    Args:
-        number (int): Number to divide.
-        parts (int): Number of parts to divide into.
-
-    Returns:
-        list: List of integers representing the divided parts.
-    """
-    quotient, remainder = divmod(number, parts)
-    result = [quotient] * parts
-    for i in range(remainder):
-        result[i] += 1
-    return result
+def compute_signals_mean(signals: da.Array, path: str | Path) -> None:
+    signals_median_array = da.mean(signals, axis=2)
+    signals_median_array.to_zarr(path)

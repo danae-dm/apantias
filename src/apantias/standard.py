@@ -1,162 +1,108 @@
-"""module description"""
+import logging
+from pathlib import Path
 
-import os
-from datetime import datetime
+import dask.array as da
+import zarr
 
-import numpy as np
+from apantias.core import init
+from apantias.settings import load_config
 
 from . import utils
-from . import analysis as an
-from . import params
-from . import fitting as fit
-from . import file_io as io
-from . import bin_to_h5
 
-from .logger import global_logger
-
-_logger = global_logger
+_logger = logging.getLogger(__name__)
 
 
-class Analysis:
+class StandardAnalysis:
     """
-    A base class for performing data analysis on HDF5 files.
+    Performs standard statistical analysis on zarr arrays.
 
-    This class initializes the analysis environment by loading parameters from a
-    configuration file, extracting metadata from the input HDF5 file, and creating
-    an output HDF5 file for storing analysis results. It provides a foundation for
-    specific analysis workflows by managing parameters, logging, and file handling.
+    Supports computing statistics (mean, std, etc.) over frames or spatial dimensions
+    for multi-dimensional arrays with shape (frames, columns, repetitions, rows).
     """
 
-    def __init__(self, prm_file: str) -> None:
-        self.prm_file = prm_file
-        self.params = params.Params(prm_file)
-        _logger.info("APANTIAS Instance initialized with parameter file: %s", prm_file)
-        self.params.print_contents()
+    # config can be passed in, otherwise defaults to the shared frozen instance
+    def __init__(self, path: Path | str | None = None) -> None:
+        if path is None:
+            config = load_config()
+        else:
+            config = load_config(Path(path))
+        self._client, self._cluster = init(config.runtime.dask_temp, config.runtime.cpus)
+        self.config = config
+        self.bin_path = Path(config.analysis.bin_file)
+        self.zarr_data = Path(self.config.analysis.zarr_data)
+        self.temp_zarr = Path(self.config.analysis.zarr_temp)
+        self.raw_ext = self.config.analysis.ext_offset
+        if self.raw_ext is not None and str(self.raw_ext) != "None":
+            self.ext_offset = Path(self.raw_ext)
+        else:
+            self.ext_offset = None
+        self.raw_data_pixelwise = self.zarr_data.joinpath("pixel_chunked")
+        self.raw_data_framewise = self.zarr_data.joinpath("frame_chunked")
+        self.median = self.temp_zarr.joinpath("median")
+        self.offset_corr = self.temp_zarr.joinpath("offset_corr")
+        self.common_modes = self.temp_zarr.joinpath("common_modes")
+        self.slopes = self.temp_zarr.joinpath("slopes")
+        self.signals = self.temp_zarr.joinpath("signals")
+        self.msd = self.temp_zarr.joinpath("msd")
+        self.signals_mean = self.temp_zarr.joinpath("signals_mean")
 
-        # load values of parameter file
-        self.params_dict = self.params.get_dict()
-        self.results_dir = self.params_dict["results_dir"]
-        self.data_h5 = self.params_dict["data_h5_file"]
-        self.darkframe_dset = self.params_dict["darkframe_dset"]
-        self.available_cpus = utils.get_cpu_count()
-        self.available_ram_gb = utils.get_avail_ram_gb()
-        self.custom_attributes = self.params_dict["custom_attributes"]
-        self.nframes_eval = self.params_dict["nframes_eval"]
-        self.thres_bad_slopes = self.params_dict["thres_bad_slopes"]
-        self.thres_event_prim = self.params_dict["thres_event_prim"]
-        self.thres_event_sec = self.params_dict["thres_event_sec"]
-        self.ext_offsetmap = self.params_dict["ext_offsetmap"]
-        self.ext_noisemap = self.params_dict["ext_noisemap"]
+    def run(self):
+        client, _ = self._client, self._cluster
+        try:
+            self._run_analysis()
+        finally:
+            client.close()
 
-        _logger.info(f"CPUs available: {self.available_cpus}")
-        _logger.info(f"RAM available: {self.available_ram_gb} GB")
-        _logger.info("")
+    def _run_analysis(self):
 
-        # get parameters from data_h5 file
-        self.total_frames, self.column_size, self.row_size, self.nreps = io._get_params_from_data_file(self.data_h5)
+        zarr.open_group(self.temp_zarr, mode="a")
+        zarr.open_group(self.zarr_data, mode="a")
 
-        # create analysis h5 file
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        bin_filename = os.path.basename(self.data_h5)[:-3]
-        self.out_h5_name = f"{timestamp}_{bin_filename}.h5"
-        self.out_h5 = os.path.join(self.results_dir, self.out_h5_name)
-        io._create_analysis_file(
-            self.results_dir, self.out_h5_name, self.params_dict, self.custom_attributes, self.data_h5
-        )
-        _logger.info("Created analysis h5 file: %s/%s", self.results_dir, self.out_h5_name)
-        # TODO: Debug this, not compatible with last changes in bin_to_h5
-        # vds_list = io._get_all_datasets(self.data_h5)
-        # bin_to_h5._create_vds(self.out_h5, vds_list)
-        # _logger.info("Virtual datasets created in group '0_raw_data'")
+        _logger.info("Start writing bin to zarr store.")
+        utils.bin_to_zarr(self.bin_path, self.raw_data_framewise, self.config.frame.nreps)
+        utils.rechunk_to_pixels(self.raw_data_framewise, self.raw_data_pixelwise)
+        _logger.info("Done.")
+        # Load pixelwise data. This must be used for calculations along frames.
+        # The pixelwise data is saved in chunks per pixel, not per frame.
+        data_p = da.from_zarr(self.raw_data_pixelwise)
+        # Load frame-chunked data. Dask defaults to the inner chunk shape (e.g. col=1).
+        # We explicitly rechunk axis 1 to full width (64) here so that offset_corr
+        # and downstream steps process full frames and don't fragment into tiny tasks.
+        # This does not affect rechunk_to_pixels, which runs before this and reads
+        # directly from the zarr store.
+        data_f = da.from_zarr(self.raw_data_framewise).rechunk({1: 64})
 
+        _logger.info("Start calculating offset.")
+        utils.compute_median(data_p, self.median)
+        # load the median as dask array
+        median = da.from_zarr(self.median)
+        _logger.info("Done.")
 
-class Default(Analysis):
-    """ "
-    A default implementation of the Analysis class for processing HDF5 data.
+        if self.ext_offset is None:
+            offset = median
+        else:
+            offset = da.from_zarr(self.ext_offset)
 
-    This class extends the base Analysis class and provides a specific workflow for
-    analyzing HDF5 data. It performs tasks such as calculating bad slopes, removing
-    outliers, subtracting offsets, and generating event maps. The results are stored
-    in an output HDF5 file, organized into different groups for clean and structured
-    analysis.
+        _logger.info("Start applying offset.")
+        utils.compute_offset_corr(data_f, offset, self.offset_corr)
+        offset_corr = da.from_zarr(self.offset_corr)
+        _logger.info("Done.")
 
-    Key Features:
-        - Fits Gaussian distributions to pixel data to identify bad slopes.
-        - Removes bad slopes and outliers from the data.
-        - Subtracts offsets and calculates cleaned pixel data.
-        - Generates event maps based on primary and secondary thresholds.
-        - Fits double Gaussian distributions to calculate gain parameters.
+        _logger.info("Start Common Mode Correction")
+        utils.compute_common_modes(offset_corr, self.common_modes)
+        common_modes = da.from_zarr(self.common_modes)
+        utils.subtract(offset_corr, common_modes, self.signals)
+        signals = da.from_zarr(self.signals)
+        _logger.info("Done.")
 
-    Attributes:
-        Inherits all attributes from the Analysis class.
+        _logger.info("Start calculating slopes")
+        utils.compute_slopes(signals, self.slopes)
+        _logger.info("Done.")
 
-    Methods:
-        calculate():
-            Executes the default analysis workflow, including bad slope detection,
-            outlier removal, offset subtraction, event map generation, and gain fitting.
-    """
+        _logger.info("Start calculating mean squared deviation")
+        utils.compute_msd(signals, median, self.msd)
+        _logger.info("Done.")
 
-    def __init__(self, prm_file: str) -> None:
-        super().__init__(prm_file)
-        _logger.info("Default analysis initialized")
-
-    def calculate(self):
-        """Function description"""
-        _logger.info("Start calculating bad slopes map")
-        slopes = io.get_data_from_file(self.data_h5, "preproc_slope_nreps")
-        fitted = utils.apply_pixelwise(slopes, fit.fit_gauss_to_hist)
-        _logger.info("Finished fitting")
-        lower_bound = fitted[1, :, :] - self.thres_bad_slopes * np.abs(fitted[2, :, :])
-        upper_bound = fitted[1, :, :] + self.thres_bad_slopes * np.abs(fitted[2, :, :])
-        failed_fits_mask = np.isnan(fitted[1, :, :]) | np.isnan(fitted[2, :, :])
-        bad_slopes_mask = (slopes < lower_bound) | (slopes > upper_bound)
-        bad_pixels_mask = bad_slopes_mask | failed_fits_mask
-        io.add_array(self.out_h5, fitted, "1_clean/slope_fit_parameters")
-        io.add_array(self.out_h5, bad_pixels_mask, "1_clean/bad_slopes_mask")
-        io.add_array(self.out_h5, np.sum(bad_pixels_mask, axis=0), "1_clean/bad_slopes_count")
-        failed_fits = np.sum(np.isnan(fitted[:, :, 1]))
-        if failed_fits > 0:
-            _logger.warning(
-                "Failed fits: %d (%.2f%%)", failed_fits, (failed_fits / (self.column_size * self.row_size) * 100)
-            )
-        data = io.get_data_from_file(self.data_h5, "preproc_mean_nreps")
-        io.add_array(self.out_h5, data, "1_clean/preproc_pixel_data")  # rename this
-        _logger.info("Removing bad slopes")
-        data[bad_pixels_mask] = np.nan
-        sum_bad_slopes = np.sum(bad_pixels_mask)
-        _logger.warning(
-            "Signals removed due to bad slopes: %d (%.2f%%)",
-            sum_bad_slopes,
-            (sum_bad_slopes / (bad_pixels_mask.size) * 100),
-        )
-        _logger.info("Removing outliers")
-        fitted = utils.apply_pixelwise(data, fit.fit_gauss_to_hist)
-        lower_bound = fitted[1, :, :] - 5 * np.abs(fitted[2, :, :])
-        outlier_mask = data < lower_bound
-        data[outlier_mask] = np.nan
-        io.add_array(self.out_h5, data, "1_clean/cleaned_pixel_data")
-        io.add_array(self.out_h5, outlier_mask, "1_clean/outlier_mask")
-        sum_outliers = np.sum(outlier_mask)
-        _logger.warning(
-            "Signals removed due to outliers: %d (%.2f%%)", sum_outliers, (sum_outliers / (outlier_mask.size) * 100)
-        )
-        _logger.info("Fitting pixelwise")
-        fitted = utils.apply_pixelwise(data, fit.fit_gauss_to_hist)
-        io.add_array(self.out_h5, fitted, "2_offnoi/fit_parameters")
-        offset = fitted[1]
-        noise = fitted[2]
-        _logger.info("Subtracting second offset")
-        data -= offset[np.newaxis, :, :]
-        io.add_array(self.out_h5, data, "2_offnoi/pixel_data")
-        # _logger.info("Start Calculating event_map")
-        # structure = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]])
-        # event_map = an.group_pixels(data, self.thres_event_prim, self.thres_event_sec, noise, structure)
-        # event_counts = event_map > 0
-        # event_counts_sum = np.sum(event_counts, axis=0)
-        # io.add_array(self.out_h5, event_map, "3_filter/event_map")
-        # io.add_array(self.out_h5, event_counts, "3_filter/event_counts")
-        # io.add_array(self.out_h5, event_counts_sum, "3_filter/event_counts_sum")
-        _logger.info("Start Fitting Gain")
-        fitted = utils.apply_pixelwise(data, fit.fit_2_gauss_to_hist)
-        io.add_array(self.out_h5, fitted, "4_gain/fit_parameters")
-        _logger.info("Analysis finished")
+        _logger.info("Start calculating mean signals")
+        utils.compute_signals_mean(signals, self.signals_mean)
+        _logger.info("Done.")

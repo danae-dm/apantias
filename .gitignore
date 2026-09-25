@@ -4,7 +4,7 @@ node_modules/
 *.egg-info/
 .ipynb_checkpoints
 *.tsbuildinfo
-
+.venv
 .ipynb_checkpoints/
 
 # Created by https://www.gitignore.io/api/python
@@ -59,3 +59,6 @@ pip-delete-this-directory.txt
 test*
 default*.json
 apantias.code-workspace
+
+#default settings file
+default.yaml
