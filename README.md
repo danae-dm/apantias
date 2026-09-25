@@ -5,19 +5,7 @@ Minimum is 2GB RAM per physical core.
 A chunk size of 100MB should reliably work. Must be lowered if RAM runs low.
 This chunk size is for the raw_data which is stored in uint16
 
-dont know what this was about:
-
-#median = da.median(dark_p, axis=(0,2))
-#offset_corr = dark_f - median[np.newaxis,:,np.newaxis,:]
-#offset_corr.astype(np.float32).to_zarr('/home/snorre/work/apantias_dev/offset_corr.zarr', overwrite=True)
-#offset_masked = da.where(bad_pixels[np.newaxis,:,np.newaxis,:], np.nan,offset_corr)
-#offset_masked.to_zarr('/home/snorre/work/apantias_dev/offset_masked.zarr', overwrite=True)
-#np.nanmedian needs a lot of memory!
-#common_modes = da.nanmedian(offset_masked, axis=3)
-#common_modes.to_zarr('/home/snorre/work/apantias_dev/common_modes.zarr', overwrite=True)
-#signals = offset_masked - common_modes[:,:,:,np.newaxis]
-#signals = da.mean(signals, axis = 2)
-#signals.to_zarr('/home/snorre/work/apantias_dev/signals.zarr', overwrite=True)
+leave all parameters in the settings instance!
 
 07.09.26:
 DONE:
