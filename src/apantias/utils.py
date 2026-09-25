@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import dask.array as da
+import h5py
+import hdf5plugin
 import numpy as np
 import zarr
 from dask import delayed  # pyright: ignore
@@ -119,6 +121,77 @@ def _read_frame_batch(
     return batch_full[:, :, nreps_slice, :]
 
 
+def _frame_chunk_size(nreps: int) -> int:
+    """Number of frames per write/compression chunk for the given ``nreps``.
+
+    Bounded so each chunk is at most ``_TARGET_CHUNK_BYTES`` (~100 MB), then
+    rounded down to the nearest multiple of 10 (or kept as 1 if tiny), so the
+    same write-unit budget is used for the HDF5 and Zarr pipelines.
+    """
+    bytes_per_frame = _COLUMN_SIZE * nreps * _ROW_SIZE * 2
+    chunk_size = max(1, _TARGET_CHUNK_BYTES // bytes_per_frame)
+    if chunk_size >= 10:
+        chunk_size = (chunk_size // 10) * 10
+    return chunk_size
+
+
+def _parse_bin_frames(
+    bin_file: Path,
+    offset: int,
+    nreps: int,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Locate the valid frame boundaries in a binary file.
+
+    Memory-maps the raw file (only the pages actually touched are loaded by the
+    OS), finds every frame-key row (sentinel 65535 at column ``_COLUMN_SIZE``)
+    and returns the start/end row indices of consecutive key pairs whose
+    interiors span exactly ``_COLUMN_SIZE * nreps`` rows, plus the frame count.
+    """
+    rows_per_frame = _COLUMN_SIZE * nreps
+    raw_uint16 = np.memmap(bin_file, dtype="uint16", mode="r", offset=offset)
+    n_complete_rows = len(raw_uint16) // _RAW_ROW_SIZE
+    raw_data = raw_uint16[: n_complete_rows * _RAW_ROW_SIZE].reshape(-1, _RAW_ROW_SIZE)
+
+    # Locate all frame-key rows (sentinel 65535 at column _COLUMN_SIZE).
+    frame_key_positions = np.where(raw_data[:, _COLUMN_SIZE] == 65535)[0]
+    if len(frame_key_positions) < 2:
+        raise ValueError(f"No valid frames found in {bin_file}")
+    # A valid frame has exactly rows_per_frame rows between two consecutive keys.
+    starts = frame_key_positions[:-1]
+    ends = frame_key_positions[1:]
+    valid_mask = (ends - starts) == rows_per_frame
+    frame_start_indices = starts[valid_mask]
+    frame_end_indices = ends[valid_mask]
+    n_frames = len(frame_start_indices)
+
+    if n_frames == 0:
+        raise ValueError(f"No valid frames found in {bin_file}")
+    return frame_start_indices, frame_end_indices, n_frames
+
+
+def _parse_zarr_path(zarr_path: str | Path) -> tuple[str, str | None, str]:
+    """Split a ``/path/to/store.zarr/group/path/dataset`` path.
+
+    Returns the store path, the (possibly ``None``) group path, and the dataset
+    name.
+    """
+    path_str = str(zarr_path)
+    if ".zarr" not in path_str:
+        raise ValueError(f"zarr_path must contain '.zarr': {path_str}")
+
+    store_end = path_str.find(".zarr") + len(".zarr")
+    store_path = path_str[:store_end]
+    remainder = path_str[store_end:].lstrip("/")
+
+    if not remainder:
+        raise ValueError(f"zarr_path must specify group and dataset: {path_str}")
+
+    parts = remainder.split("/")
+    dataset_name = parts[-1]
+    group_path = "/".join(parts[:-1]) if len(parts) > 1 else None
+    return store_path, group_path, dataset_name
+
+
 def bin_to_zarr(
     bin_file: str | Path,
     zarr_path: str | Path,
@@ -163,63 +236,20 @@ def bin_to_zarr(
     bin_file = Path(bin_file)
     zarr_path = Path(zarr_path)
 
-    rows_per_frame = _COLUMN_SIZE * nreps
-
-    # Calculate how many reps will remain after slicing
-    eval_nreps = len(np.empty(nreps)[_NREPS_EVAL])
-    bytes_per_frame = _COLUMN_SIZE * eval_nreps * _ROW_SIZE * 2
-
-    # Round chunk_size down to the nearest multiple of 10 (or keep as 1 if tiny)
-    chunk_size = max(1, _TARGET_CHUNK_BYTES // bytes_per_frame)
-    if chunk_size >= 10:
-        chunk_size = (chunk_size // 10) * 10
-
-    # Memory-map the raw file as uint16 — pages are loaded from disk on demand,
-    # so the full file does not reside in RAM.
-    raw_uint16 = np.memmap(bin_file, dtype="uint16", mode="r", offset=offset)
-    n_complete_rows = len(raw_uint16) // _RAW_ROW_SIZE
-    raw_data = raw_uint16[: n_complete_rows * _RAW_ROW_SIZE].reshape(-1, _RAW_ROW_SIZE)
-
-    # Locate all frame-key rows (sentinel 65535 at column _COLUMN_SIZE).
-    frame_key_positions = np.where(raw_data[:, _COLUMN_SIZE] == 65535)[0]
-    if len(frame_key_positions) < 2:
-        raise ValueError(f"No valid frames found in {bin_file}")
-    # A valid frame has exactly rows_per_frame rows between two consecutive keys.
-    # Create pairs of consecutive frame markers
-    starts = frame_key_positions[:-1]
-    ends = frame_key_positions[1:]
-    # For each pair, compute spacing between markers
-    valid_mask = (ends - starts) == rows_per_frame
-    # Differences: [109-42, 176-109, 243-176] = [67, 67, 67]
-    # Compare to rows_per_frame (64 * nreps)
-    # → Boolean array: [True, True, True] (or False where spacing is wrong)
-    # Keep only the valid start/end indices
-    frame_start_indices = starts[valid_mask]
-    frame_end_indices = ends[valid_mask]
-    n_frames = len(frame_start_indices)
-
-    if n_frames == 0:
-        raise ValueError(f"No valid frames found in {bin_file}")
-
+    # Locate all valid frames; see _parse_bin_frames.
+    frame_start_indices, frame_end_indices, n_frames = _parse_bin_frames(bin_file, offset, nreps)
     _logger.info("Found %d valid frames in %s", n_frames, bin_file)
+
     # ------------------------------------------------------------------
     # Parse zarr_path to extract store, group, and dataset name.
     # Expected format: /path/to/store.zarr/group/path/dataset_name
     # ------------------------------------------------------------------
-    path_str = str(zarr_path)
-    if ".zarr" not in path_str:
-        raise ValueError(f"zarr_path must contain '.zarr': {path_str}")
+    store_path, group_path, dataset_name = _parse_zarr_path(zarr_path)
 
-    store_end = path_str.find(".zarr") + len(".zarr")
-    store_path = path_str[:store_end]
-    remainder = path_str[store_end:].lstrip("/")
-
-    if not remainder:
-        raise ValueError(f"zarr_path must specify group and dataset: {path_str}")
-
-    parts = remainder.split("/")
-    dataset_name = parts[-1]
-    group_path = "/".join(parts[:-1]) if len(parts) > 1 else None
+    # Calculate how many reps remain after slicing, then derive the chunk size
+    # from the ~100 MB write-unit budget.
+    eval_nreps = len(np.empty(nreps)[_NREPS_EVAL])
+    chunk_size = _frame_chunk_size(eval_nreps)
 
     # ------------------------------------------------------------------
     # Zarr v3 array with a sharding codec.
@@ -229,10 +259,6 @@ def bin_to_zarr(
     # column via a partial shard read, decompressing each inner chunk only once.
     # See _sharded_frame_codecs() for details.
     # ------------------------------------------------------------------
-    # Calculate how many reps will remain after slicing
-    # We use a dummy array to figure out the exact shape the slice produces
-    eval_nreps = len(np.empty(nreps)[_NREPS_EVAL])
-
     array_shape = (n_frames, _COLUMN_SIZE, eval_nreps, _ROW_SIZE)
     chunk_shape = (chunk_size, _COLUMN_SIZE, eval_nreps, _ROW_SIZE)
     inner_chunk_shape = (chunk_size, 1, eval_nreps, _ROW_SIZE)
@@ -294,6 +320,244 @@ def bin_to_zarr(
     # Stream the blocks into the pre-created compressed Zarr array. Writing into
     # the existing array object preserves our Blosc/bitshuffle codec pipeline.
     # Dask shows task progress in the dashboard while writing.
+    da.store(data, target, lock=False)
+
+    _logger.info("Successfully wrote %d frames to %s", n_frames, zarr_path)
+    return zarr_path
+
+
+def bin_to_h5(
+    bin_path: str | Path,
+    nreps: int,
+    h5_path: str | Path,
+    dataset_name: str,
+    offset: int = 8,
+) -> Path:
+    """Write the frames of a binary file to a compressed HDF5 dataset.
+
+    The no-Dask counterpart of :func:`bin_to_zarr`: it parses the same frame
+    boundaries (via :func:`_parse_bin_frames`) but keeps **all** repetitions and
+    writes the full-resolution data as a uint16 dataset of shape
+    ``(n_frames, COLUMN_SIZE, nreps, ROW_SIZE)``. Dropping the first three
+    repetitions stays a property of the zarr target and is applied by
+    :func:`h5_to_zarr`.
+
+    The dataset is compressed with Blosc (zstd-level-9 + bitshuffle) via
+    ``hdf5plugin``, mirroring the bitshuffle codec of the zarr store: the
+    narrow-range uint16 values have near-constant high bytes, so bitshuffle
+    groups them into zero-heavy bitplanes that Zstd then encodes almost for
+    free. uint16 is the natural storage dtype — the values (~47000 ± 100)
+    exceed int16, and any wider dtype would only compress fewer values per byte.
+
+    Frames are written in batches of ``chunk_size`` (see
+    :func:`_frame_chunk_size`) so memory stays bounded at roughly
+    ``_TARGET_CHUNK_BYTES`` regardless of the number of frames. The metadata
+    needed by :func:`h5_to_zarr` (``nreps``, frame count, layout) is stored as
+    attributes on the dataset.
+
+    Args:
+        bin_path: Path to the source .bin file containing uint16 values.
+        nreps: Number of repetitions per frame column.
+        h5_path: Path where the HDF5 file will be created (its parent directory
+            must exist).
+        dataset_name: Name of the dataset within the HDF5 file.
+        offset: Byte offset into the binary file to start reading from.
+
+    Returns:
+        Path to the created HDF5 file.
+    """
+    bin_path = Path(bin_path)
+    h5_path = Path(h5_path)
+
+    frame_start_indices, frame_end_indices, n_frames = _parse_bin_frames(bin_path, offset, nreps)
+    _logger.info("Found %d valid frames in %s", n_frames, bin_path)
+
+    chunk_size = _frame_chunk_size(nreps)
+    filters = hdf5plugin.Blosc(cname="lz4", clevel=5, shuffle=1)
+    shape = (n_frames, _COLUMN_SIZE, nreps, _ROW_SIZE)
+    chunk_shape = (chunk_size, _COLUMN_SIZE, nreps, _ROW_SIZE)
+
+    # Keep all reps (no slice)
+    nreps_slice = slice(None)
+
+    with h5py.File(h5_path, "w") as f:
+        ds = f.create_dataset(dataset_name, shape=shape, dtype="uint16", chunks=chunk_shape, **filters)
+        ds.attrs["nreps"] = nreps
+        ds.attrs["offset"] = offset
+        ds.attrs["n_frames"] = n_frames
+        ds.attrs["column_size"] = _COLUMN_SIZE
+        ds.attrs["row_size"] = _ROW_SIZE
+        ds.attrs["raw_row_size"] = _RAW_ROW_SIZE
+
+        # Build delayed tasks — one per batch
+        delayed_tasks = []
+        for batch_start in range(0, n_frames, chunk_size):
+            batch_end = min(batch_start + chunk_size, n_frames)
+            delayed_tasks.append(
+                delayed(_write_h5_batch)(
+                    ds,
+                    batch_start,
+                    batch_end,
+                    bin_path,
+                    offset,
+                    frame_start_indices,
+                    frame_end_indices,
+                    nreps,
+                    nreps_slice,
+                )
+            )
+
+        # Execute in parallel (threads are fine here — GIL released by
+        # numpy/hdf5plugin under the hood)
+        compute(*delayed_tasks, scheduler="threads")
+
+    return h5_path
+
+
+def _write_h5_batch(ds, start, end, bin_path, offset, frame_start_indices, frame_end_indices, nreps, nreps_slice):
+    """Read one batch from binary and write it to a pre-opened h5py dataset."""
+    batch = _read_frame_batch(bin_path, offset, frame_start_indices, frame_end_indices, start, end, nreps, nreps_slice)
+    ds[start:end] = batch
+
+
+def _read_h5_batch(
+    h5_path: Path,
+    dataset_name: str,
+    batch_start: int,
+    batch_end: int,
+) -> np.ndarray:
+    """Read one batch of frames from an HDF5 dataset as a NumPy array.
+
+    This is the per-chunk worker for the Dask array in :func:`h5_to_zarr`. It
+    opens the HDF5 file *inside* the task (h5py file handles cannot cross
+    process boundaries) and returns ``(batch, COLUMN_SIZE, eval_nreps, ROW_SIZE)``
+    by applying the evaluation-rep slice. The only RAM it holds is that single
+    decoded batch.
+    """
+    with h5py.File(h5_path, "r") as f:
+        ds = f[dataset_name]
+        if not isinstance(ds, h5py.Dataset):
+            raise TypeError(f"{dataset_name} is not a dataset in {h5_path}")
+        batch = ds[batch_start:batch_end]
+
+    return batch[:, :, _NREPS_EVAL, :]
+
+
+def _find_h5_dataset(f: h5py.File) -> str:
+    """Return the single dataset path in an HDF5 file.
+
+    Used by :func:`h5_to_zarr` when no ``dataset_name`` is given; files written
+    by :func:`bin_to_h5` contain exactly one dataset.
+    """
+    datasets: list[str] = []
+
+    def visit(name: str, obj: object) -> None:
+        if isinstance(obj, h5py.Dataset):
+            datasets.append(name)
+
+    f.visititems(visit)
+    if len(datasets) != 1:
+        raise ValueError(f"Expected exactly one dataset in {f.filename}, found {len(datasets)}: {datasets}")
+    return datasets[0]
+
+
+def h5_to_zarr(
+    h5_path: str | Path,
+    zarr_path: str | Path,
+    dataset_name: str | None = None,
+) -> Path:
+    """Write the data of an HDF5 dataset to a Zarr v3 store.
+
+    The Dask-based counterpart of :func:`bin_to_zarr` for data that already went
+    through :func:`bin_to_h5`. It produces the same store that ``bin_to_zarr``
+    would: full-resolution frames are read from HDF5, reduced to the evaluation
+    repetitions (``_NREPS_EVAL``, dropping the first three) and stored with the
+    same sharding + Blosc/bitshuffle codec pipeline.
+
+    The array is built from one lazy block per Zarr chunk; each block is
+    produced by :func:`_read_h5_batch`, which opens the HDF5 file on the worker
+    and decodes only that batch, so memory stays bounded by concurrent tasks
+    (the same argument as in :func:`bin_to_zarr`).
+
+    Args:
+        h5_path: Path to the HDF5 file written by :func:`bin_to_h5`.
+        zarr_path: Path where the Zarr v3 store will be created
+            (``...store.zarr/group/path/dataset_name``).
+        dataset_name: Name of the source dataset in the HDF5 file. If ``None``,
+            the file must contain exactly one dataset, which is used.
+
+    Returns:
+        Path to the zarr store.
+    """
+    h5_path = Path(h5_path)
+    zarr_path = Path(zarr_path)
+
+    store_path, group_path, output_dataset_name = _parse_zarr_path(zarr_path)
+
+    # Read the layout metadata written by bin_to_h5 and resolve the source dataset.
+    with h5py.File(h5_path, "r") as f:
+        if dataset_name is None:
+            dataset_name = _find_h5_dataset(f)
+        ds = f[dataset_name]
+        if not isinstance(ds, h5py.Dataset):
+            raise TypeError(f"{dataset_name} is not a dataset in {h5_path}")
+        raw_nreps = ds.shape[2]
+        n_frames = ds.shape[0]
+        if ds.shape[1] != _COLUMN_SIZE or ds.shape[3] != _ROW_SIZE:
+            raise ValueError(
+                f"Unexpected frame layout {ds.shape} in {h5_path}:{dataset_name}; "
+                f"expected (n_frames, {_COLUMN_SIZE}, nreps, {_ROW_SIZE})"
+            )
+
+    eval_nreps = len(np.empty(raw_nreps)[_NREPS_EVAL])
+    chunk_size = _frame_chunk_size(eval_nreps)
+
+    array_shape = (n_frames, _COLUMN_SIZE, eval_nreps, _ROW_SIZE)
+    chunk_shape = (chunk_size, _COLUMN_SIZE, eval_nreps, _ROW_SIZE)
+    inner_chunk_shape = (chunk_size, 1, eval_nreps, _ROW_SIZE)
+
+    # Construct full zarr array path
+    full_array_path = (
+        f"{store_path}/{group_path}/{output_dataset_name}" if group_path else f"{store_path}/{output_dataset_name}"
+    )
+
+    # We create the empty array structure here so we control the v3 codec
+    # pipeline. Dask's store writes into it.
+    target = zarr.open_array(
+        full_array_path,
+        mode="w",
+        shape=array_shape,
+        chunks=chunk_shape,
+        dtype="uint16",
+        zarr_format=3,
+        codecs=_sharded_frame_codecs(inner_chunk_shape),
+    )
+
+    # Build one lazy Dask block per Zarr chunk along the frame axis. Each block
+    # is produced on a worker by _read_h5_batch, which opens the HDF5 file and
+    # decodes only that batch, so peak RAM scales with concurrent tasks.
+    n_batches = (n_frames + chunk_size - 1) // chunk_size
+    _logger.info(
+        "Building Dask array of %d frames in %d chunks (chunk_size=%d frames)...",
+        n_frames,
+        n_batches,
+        chunk_size,
+    )
+
+    blocks = []
+    for batch_start in range(0, n_frames, chunk_size):
+        batch_end = min(batch_start + chunk_size, n_frames)
+        block = da.from_delayed(
+            delayed(_read_h5_batch)(h5_path, dataset_name, batch_start, batch_end),
+            shape=(batch_end - batch_start, _COLUMN_SIZE, eval_nreps, _ROW_SIZE),
+            dtype=np.uint16,
+        )
+        blocks.append(block)
+
+    data = da.concatenate(blocks, axis=0)
+
+    # Stream the blocks into the pre-created compressed Zarr array. Writing into
+    # the existing array object preserves our Blosc/bitshuffle codec pipeline.
     da.store(data, target, lock=False)
 
     _logger.info("Successfully wrote %d frames to %s", n_frames, zarr_path)

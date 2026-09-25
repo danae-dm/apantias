@@ -62,3 +62,6 @@ apantias.code-workspace
 
 #default settings file
 default.yaml
+
+#ruff
+.ruff_cache/
