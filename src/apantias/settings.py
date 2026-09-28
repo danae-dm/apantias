@@ -45,6 +45,14 @@ class RangeSpec(BaseModel):
     def __len__(self) -> int:
         return max(0, (self.stop - self.start + self.step - 1) // self.step)
 
+    def __iter__(self) -> "RangeSpec":  # type: ignore[return-value]
+        """Iterate to produce indices via Python's range()."""
+        self._indices = range(self.start, self.stop, self.step)
+        return self
+
+    def __next__(self) -> int:
+        return next(iter(self._indices))
+
 
 class RuntimeSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
@@ -61,6 +69,15 @@ class FrameSettings(BaseModel):
     rows: int = Field(default=64, description="Number of frame rows")
     cols: int = Field(default=64, description="Number of frame columns")
     nreps: int = Field(default=200, description="Number of repetitions")
+    key_ints: int = Field(
+        default=3,
+        description="Number of key integers per row in the binary file format. "
+        "Changing this breaks compatibility with existing files.",
+    )
+    target_chunk_bytes: int = Field(
+        default=100 * 1024 * 1024,
+        description="Target chunk size in bytes for frame writes (~100 MB).",
+    )
 
 
 class AnalysisSettings(BaseModel):
@@ -77,7 +94,7 @@ class AnalysisSettings(BaseModel):
     h5_archive: Path = Field(default=Path("data/processed"), description="Path to h5 archive")
     ext_offset: Path | None = Field(default=None, description="Path to ext offset")
     nreps_range: RangeSpec = Field(
-        default=RangeSpec(start=3, stop=200, step=1), description="Nreps range [start, stop, step]"
+        default=RangeSpec(start=0, stop=200, step=1), description="Nreps range [start, stop, step]"
     )
     frames_range: RangeSpec = Field(
         default=RangeSpec(start=0, stop=100, step=1), description="Frames range [start, stop, step]"
