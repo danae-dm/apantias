@@ -45,6 +45,7 @@ class StandardAnalysis:
         self.signals = self.temp_zarr.joinpath("signals")
         self.msd = self.temp_zarr.joinpath("msd")
         self.signals_mean = self.temp_zarr.joinpath("signals_mean")
+        self.test_array = self.temp_zarr.joinpath("test_array")
 
     def run(self):
         client, cluster = self._client, self._cluster
@@ -106,4 +107,8 @@ class StandardAnalysis:
 
         _logger.info("Start calculating mean signals")
         utils.compute_signals_mean(signals, self.signals_mean)
+        _logger.info("Done.")
+
+        _logger.info("Try calculate pixelwise.")
+        utils.apply_pixelwise(data_p, self.test_array, lambda t: t.max() - t.min())
         _logger.info("Done.")
