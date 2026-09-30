@@ -45,6 +45,7 @@ class StandardAnalysis:
         self.signals = self.temp_zarr.joinpath("signals")
         self.msd = self.temp_zarr.joinpath("msd")
         self.signals_mean = self.temp_zarr.joinpath("signals_mean")
+        self.test_array = self.temp_zarr.joinpath("test_array")
 
     def run(self):
         client, cluster = self._client, self._cluster
@@ -60,7 +61,7 @@ class StandardAnalysis:
         zarr.open_group(self.zarr_data, mode="a")
 
         _logger.info("Start writing bin to zarr store.")
-        utils.h5_to_zarr(self.h5_path, self.raw_data_framewise)
+        utils.h5_to_zarr(self.h5_path, self.raw_data_framewise, self.config.frame, self.config.analysis)
         utils.rechunk_to_pixels(self.raw_data_framewise, self.raw_data_pixelwise)
         _logger.info("Done.")
         # Load pixelwise data. This must be used for calculations along frames.
@@ -71,7 +72,7 @@ class StandardAnalysis:
         # and downstream steps process full frames and don't fragment into tiny tasks.
         # This does not affect rechunk_to_pixels, which runs before this and reads
         # directly from the zarr store.
-        data_f = da.from_zarr(self.raw_data_framewise).rechunk({1: 64})
+        data_f = da.from_zarr(self.raw_data_framewise).rechunk({1: self.config.frame.cols})
 
         _logger.info("Start calculating offset.")
         utils.compute_median(data_p, self.median)
@@ -106,4 +107,8 @@ class StandardAnalysis:
 
         _logger.info("Start calculating mean signals")
         utils.compute_signals_mean(signals, self.signals_mean)
+        _logger.info("Done.")
+
+        _logger.info("Try calculate pixelwise.")
+        utils.apply_pixelwise(data_p, self.test_array, lambda t: t.max() - t.min())
         _logger.info("Done.")
