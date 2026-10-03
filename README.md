@@ -35,3 +35,9 @@ settings must now be passed to a Analysis Class and is owned by it, client is sh
 25.09.26:
 DONE:
 created new bin_to_h5 and h5_to_zarr functions and tested them
+
+03.10.26:
+DONE:
+(n_frames, n_rows, n_reps, n_cols)
+(frame_idx, row_idx, rep_idx, col_idx)
+is now followed everywhere

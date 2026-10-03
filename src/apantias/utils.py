@@ -79,14 +79,14 @@ def _blosc_codecs() -> list:
 def _sharded_frame_codecs(inner_chunk_shape: tuple[int, ...]) -> list:
     """Codec pipeline for the frame-chunked array using a sharding codec.
 
-    The Zarr chunk (= the write/transfer unit, ~100 MB) becomes a *shard* that
+    The Zarr chunk (= the write/transfer unit, ``target_chunk_mb``) becomes a *shard* that
     is internally subdivided into ``inner_chunk_shape`` inner chunks, each
     compressed separately with :func:`_blosc_codecs`.
 
-    Making the inner chunk one column wide ``(chunk_size, 1, nreps, n_row)`` is
-    what accelerates the downstream pixel rechunk: reading a single column then
-    becomes a *partial shard read* that decompresses only that column's inner
-    chunks instead of the whole shard. Across all 64 column passes every inner
+    Making the inner chunk one row high ``(chunk_size, 1, n_reps, n_cols)`` is
+    what accelerates the downstream pixel rechunk: reading a single row then
+    becomes a *partial shard read* that decompresses only that row's inner
+    chunks instead of the whole shard. Across all 64 row passes every inner
     chunk is decompressed exactly once (1x total) rather than once per pass
     (64x), with no increase in per-task memory.
     """
@@ -105,72 +105,77 @@ def _read_frame_batch(
     frame_end_indices: np.ndarray,
     batch_start: int,
     batch_end: int,
-    nreps: int,
-    nreps_slice: slice,
-    cols: int,
-    rows: int,
-    raw_row_size: int,
+    n_reps: int,
+    rep_slice: slice,
+    n_rows: int,
+    n_cols: int,
+    raw_line_size: int,
 ) -> np.ndarray:
     """Extract one batch of frames from the binary file as a NumPy array.
 
     This is the per-chunk worker for the Dask array. It memory-maps the file
     (only the pages for *this* batch are paged in by the OS), gathers the frame
-    rows for ``batch_start:batch_end`` and returns a
-    ``(batch, COLUMN_SIZE, eval_nreps, ROW_SIZE)`` array. The only RAM it holds is
+    lines for ``batch_start:batch_end`` and returns a
+    ``(batch, n_rows, eval_n_reps, n_cols)`` array. The only RAM it holds is
     that single decoded batch, so total memory is bounded by the number of
     Dask tasks running concurrently, not by the file size.
     """
 
     raw_uint16 = np.memmap(bin_file, dtype="uint16", mode="r", offset=offset)
-    n_complete_rows = len(raw_uint16) // raw_row_size
-    raw_data = raw_uint16[: n_complete_rows * raw_row_size].reshape(-1, raw_row_size)
+    n_complete_lines = len(raw_uint16) // raw_line_size
+    raw_data = raw_uint16[: n_complete_lines * raw_line_size].reshape(-1, raw_line_size)
 
     batch = np.stack([
-        raw_data[frame_start_indices[i] + 1 : frame_end_indices[i] + 1, :rows] for i in range(batch_start, batch_end)
+        raw_data[frame_start_indices[frame_idx] + 1 : frame_end_indices[frame_idx] + 1, :n_cols]
+        for frame_idx in range(batch_start, batch_end)
     ])
-    # Reshape to full nreps, apply the slice, then return
-    batch_full = batch.reshape(-1, cols, nreps, rows)
-    return batch_full[:, :, nreps_slice, :]
+    # Reshape to (frame_idx, row_idx, rep_idx, col_idx), apply the rep slice, then return
+    batch_full = batch.reshape(-1, n_rows, n_reps, n_cols)
+    return batch_full[:, :, rep_slice, :]
 
 
-def _frame_chunk_size(nreps: int, cols: int, rows: int, target_chunk_bytes: int) -> int:
-    """Number of frames per write/compression chunk for the given ``nreps``.
+def _frame_chunk_size(n_reps: int, n_rows: int, n_cols: int, target_chunk_mb: int, n_frames: int) -> int:
+    """Number of frames per write/compression chunk for the given ``n_reps``.
 
-    Bounded so each chunk is at most ``_TARGET_CHUNK_BYTES`` (~100 MB), then
+    Bounded so each chunk is at most ``target_chunk_mb`` MB, then
     rounded down to the nearest multiple of 10 (or kept as 1 if tiny), so the
-    same write-unit budget is used for the HDF5 and Zarr pipelines.
+    same write-unit budget is used for the HDF5 and Zarr pipelines. Finally
+    capped at ``n_frames``, since HDF5 rejects chunks larger than the dataset.
     """
-    bytes_per_frame = cols * nreps * rows * 2
-    chunk_size = max(1, target_chunk_bytes // bytes_per_frame)
+    bytes_per_frame = n_rows * n_reps * n_cols * 2
+    chunk_size = max(1, (target_chunk_mb * 1024 * 1024) // bytes_per_frame)
     if chunk_size >= 10:
         chunk_size = (chunk_size // 10) * 10
-    return chunk_size
+    return max(1, min(chunk_size, n_frames))
 
 
 def _parse_bin_frames(
-    bin_file: Path, offset: int, nreps: int, cols: int, rows: int, key_ints: int
+    bin_file: Path, offset: int, n_reps: int, n_rows: int, n_cols: int, key_ints: int
 ) -> tuple[np.ndarray, np.ndarray, int]:
     """Locate the valid frame boundaries in a binary file.
 
-    Memory-maps the raw file (only the pages actually touched are loaded by the
-    OS), finds every frame-key row (sentinel 65535 at column ``_COLUMN_SIZE``)
-    and returns the start/end row indices of consecutive key pairs whose
-    interiors span exactly ``_COLUMN_SIZE * nreps`` rows, plus the frame count.
-    """
-    rows_per_frame = cols * nreps
-    raw_row_size = rows + key_ints
-    raw_uint16 = np.memmap(bin_file, dtype="uint16", mode="r", offset=offset)
-    n_complete_rows = len(raw_uint16) // raw_row_size
-    raw_data = raw_uint16[: n_complete_rows * raw_row_size].reshape(-1, raw_row_size)
+    Each line of the binary file holds the ``n_cols`` pixel values of one sensor
+    row readout followed by ``key_ints`` key integers.
 
-    # Locate all frame-key rows (sentinel 65535 at column _COLUMN_SIZE).
-    frame_key_positions = np.where(raw_data[:, cols] == 65535)[0]
+    Memory-maps the raw file (only the pages actually touched are loaded by the
+    OS), finds every frame-key line (sentinel 65535 at position ``n_cols``)
+    and returns the start/end line indices of consecutive key pairs whose
+    interiors span exactly ``n_rows * n_reps`` lines, plus the frame count.
+    """
+    lines_per_frame = n_rows * n_reps
+    raw_line_size = n_cols + key_ints
+    raw_uint16 = np.memmap(bin_file, dtype="uint16", mode="r", offset=offset)
+    n_complete_lines = len(raw_uint16) // raw_line_size
+    raw_data = raw_uint16[: n_complete_lines * raw_line_size].reshape(-1, raw_line_size)
+
+    # Locate all frame-key lines (sentinel 65535 right after the pixel values).
+    frame_key_positions = np.where(raw_data[:, n_cols] == 65535)[0]
     if len(frame_key_positions) < 2:
         raise ValueError(f"No valid frames found in {bin_file}")
-    # A valid frame has exactly rows_per_frame rows between two consecutive keys.
+    # A valid frame has exactly lines_per_frame lines between two consecutive keys.
     starts = frame_key_positions[:-1]
     ends = frame_key_positions[1:]
-    valid_mask = (ends - starts) == rows_per_frame
+    valid_mask = (ends - starts) == lines_per_frame
     frame_start_indices = starts[valid_mask]
     frame_end_indices = ends[valid_mask]
     n_frames = len(frame_start_indices)
@@ -204,14 +209,14 @@ def _parse_zarr_path(zarr_path: str | Path) -> tuple[str, str | None, str]:
 
 
 def bin_to_h5(
-    bin_path: str | Path, nreps: int, h5_path: str | Path, dataset_name: str, frame: FrameSettings, offset: int = 8
+    bin_path: str | Path, n_reps: int, h5_path: str | Path, dataset_name: str, frame: FrameSettings, offset: int = 8
 ) -> Path:
     """Write the frames of a binary file to a compressed HDF5 dataset.
 
     The no-Dask counterpart of :func:`bin_to_zarr`: it parses the same frame
     boundaries (via :func:`_parse_bin_frames`) but keeps **all** repetitions and
     writes the full-resolution data as a uint16 dataset of shape
-    ``(n_frames, COLUMN_SIZE, nreps, ROW_SIZE)``. Dropping the first three
+    ``(n_frames, n_rows, n_reps, n_cols)``. Dropping the first three
     repetitions stays a property of the zarr target and is applied by
     :func:`h5_to_zarr`.
 
@@ -224,13 +229,13 @@ def bin_to_h5(
 
     Frames are written in batches of ``chunk_size`` (see
     :func:`_frame_chunk_size`) so memory stays bounded at roughly
-    ``_TARGET_CHUNK_BYTES`` regardless of the number of frames. The metadata
-    needed by :func:`h5_to_zarr` (``nreps``, frame count, layout) is stored as
+    ``frame.target_chunk_mb`` regardless of the number of frames. The metadata
+    needed by :func:`h5_to_zarr` (``n_reps``, frame count, layout) is stored as
     attributes on the dataset.
 
     Args:
         bin_path: Path to the source .bin file containing uint16 values.
-        nreps: Number of repetitions per frame column.
+        n_reps: Number of repetitions per frame row.
         h5_path: Path where the HDF5 file will be created (its parent directory
             must exist).
         dataset_name: Name of the dataset within the HDF5 file.
@@ -243,26 +248,26 @@ def bin_to_h5(
     h5_path = Path(h5_path)
 
     frame_start_indices, frame_end_indices, n_frames = _parse_bin_frames(
-        bin_path, offset, nreps, frame.cols, frame.rows, frame.key_ints
+        bin_path, offset, n_reps, frame.n_rows, frame.n_cols, frame.key_ints
     )
     _logger.info("Found %d valid frames in %s", n_frames, bin_path)
 
-    chunk_size = _frame_chunk_size(nreps, frame.cols, frame.rows, frame.target_chunk_bytes)
+    chunk_size = _frame_chunk_size(n_reps, frame.n_rows, frame.n_cols, frame.target_chunk_mb, n_frames)
     filters = hdf5plugin.Blosc(cname="lz4", clevel=5, shuffle=1)
-    shape = (n_frames, frame.cols, nreps, frame.rows)
-    chunk_shape = (chunk_size, frame.cols, nreps, frame.rows)
+    shape = (n_frames, frame.n_rows, n_reps, frame.n_cols)
+    chunk_shape = (chunk_size, frame.n_rows, n_reps, frame.n_cols)
 
     # Keep all reps (no slice)
-    nreps_slice = slice(None)
+    rep_slice = slice(None)
 
     with h5py.File(h5_path, "w") as f:
         ds = f.create_dataset(dataset_name, shape=shape, dtype="uint16", chunks=chunk_shape, **filters)
-        ds.attrs["nreps"] = nreps
+        ds.attrs["nreps"] = n_reps
         ds.attrs["offset"] = offset
         ds.attrs["n_frames"] = n_frames
-        ds.attrs["column_size"] = frame.cols
-        ds.attrs["row_size"] = frame.rows
-        ds.attrs["raw_row_size"] = frame.rows + frame.key_ints
+        ds.attrs["column_size"] = frame.n_cols
+        ds.attrs["row_size"] = frame.n_rows
+        ds.attrs["raw_row_size"] = frame.n_cols + frame.key_ints
 
         # Build delayed tasks — one per batch
         delayed_tasks = []
@@ -277,11 +282,11 @@ def bin_to_h5(
                     offset,
                     frame_start_indices,
                     frame_end_indices,
-                    nreps,
-                    nreps_slice,
-                    frame.cols,
-                    frame.rows,
-                    frame.rows + frame.key_ints,
+                    n_reps,
+                    rep_slice,
+                    frame.n_rows,
+                    frame.n_cols,
+                    frame.n_cols + frame.key_ints,
                 )
             )
 
@@ -300,11 +305,11 @@ def _write_h5_batch(
     offset,
     frame_start_indices,
     frame_end_indices,
-    nreps,
-    nreps_slice,
-    cols,
-    rows,
-    raw_row_size,
+    n_reps,
+    rep_slice,
+    n_rows,
+    n_cols,
+    raw_line_size,
 ):
     """Read one batch from binary and write it to a pre-opened h5py dataset."""
     batch = _read_frame_batch(
@@ -314,11 +319,11 @@ def _write_h5_batch(
         frame_end_indices,
         start,
         end,
-        nreps,
-        nreps_slice,
-        cols,
-        rows,
-        raw_row_size,
+        n_reps,
+        rep_slice,
+        n_rows,
+        n_cols,
+        raw_line_size,
     )
     ds[start:end] = batch
 
@@ -329,16 +334,16 @@ def _read_h5_batch(
     batch_start: int,
     batch_end: int,
     frame_indices: list[int] | None = None,
-    nreps_indices: list[int] | None = None,
+    rep_indices: list[int] | None = None,
 ) -> np.ndarray:
     """Read one batch of frames from an HDF5 dataset as a NumPy array.
 
-    Optional *frame_indices* and *nreps_indices* select specific positions
-    within the batch / nreps dimension.  When *frame_indices* is given it
+    Optional *frame_indices* and *rep_indices* select specific positions
+    within the batch / rep dimension.  When *frame_indices* is given it
     should contain indices into the original (un-batched) frame axis;
     they are translated to batch-relative indices before use.
 
-    Returns ``(frames, COLUMN_SIZE, nreps, ROW_SIZE)``.
+    Returns ``(n_frames, n_rows, n_reps, n_cols)``.
     """
     with h5py.File(h5_path, "r") as f:
         ds = f[dataset_name]
@@ -349,13 +354,15 @@ def _read_h5_batch(
     # Translate frame indices from original-axis → batch-relative.
     # Keep only those that fall within the actual batch.
     if frame_indices is not None:
-        batch_frame_indices = [i - batch_start for i in frame_indices if 0 <= i - batch_start < len(batch)]
+        batch_frame_indices = [
+            frame_idx - batch_start for frame_idx in frame_indices if 0 <= frame_idx - batch_start < len(batch)
+        ]
         if batch_frame_indices:
             batch = batch[batch_frame_indices]
 
-    # Nreps indices are applied directly (no translation needed).
-    if nreps_indices is not None:
-        batch = batch[:, :, nreps_indices, :]
+    # Rep indices are applied directly (no translation needed).
+    if rep_indices is not None:
+        batch = batch[:, :, rep_indices, :]
 
     return batch
 
@@ -418,27 +425,26 @@ def h5_to_zarr(
         ds = f[dataset_name]
         if not isinstance(ds, h5py.Dataset):
             raise TypeError(f"{dataset_name} is not a dataset in {h5_path}")
-        raw_nreps = ds.shape[2]
-        n_frames = ds.shape[0]
-        if ds.shape[1] != frame.cols or ds.shape[3] != frame.rows:
+        n_frames, n_rows, raw_n_reps, n_cols = ds.shape
+        if n_rows != frame.n_rows or n_cols != frame.n_cols:
             raise ValueError(
                 f"Unexpected frame layout {ds.shape} in {h5_path}:{dataset_name}; "
-                f"expected (n_frames, {frame.cols}, nreps, {frame.rows})"
+                f"expected (n_frames, {frame.n_rows}, n_reps, {frame.n_cols})"
             )
 
-    # Resolve nreps slice from analysis settings
-    nreps_indices = _resolve_range_indices(analysis.nreps_range, raw_nreps)
-    eval_nreps = len(nreps_indices)
-
-    chunk_size = _frame_chunk_size(eval_nreps, frame.cols, frame.rows, frame.target_chunk_bytes)
+    # Resolve rep indices from analysis settings
+    rep_indices = _resolve_range_indices(analysis.nreps_range, raw_n_reps)
+    eval_n_reps = len(rep_indices)
 
     # Resolve frame indices from analysis settings
     frame_indices = _resolve_range_indices(analysis.frames_range, n_frames)
     n_output_frames = len(frame_indices)
 
-    array_shape = (n_output_frames, frame.cols, eval_nreps, frame.rows)
-    chunk_shape = (chunk_size, frame.cols, eval_nreps, frame.rows)
-    inner_chunk_shape = (chunk_size, 1, eval_nreps, frame.rows)
+    chunk_size = _frame_chunk_size(eval_n_reps, n_rows, n_cols, frame.target_chunk_mb, n_output_frames)
+
+    array_shape = (n_output_frames, n_rows, eval_n_reps, n_cols)
+    chunk_shape = (chunk_size, n_rows, eval_n_reps, n_cols)
+    inner_chunk_shape = (chunk_size, 1, eval_n_reps, n_cols)
 
     full_array_path = (
         f"{store_path}/{group_path}/{output_dataset_name}" if group_path else f"{store_path}/{output_dataset_name}"
@@ -456,9 +462,9 @@ def h5_to_zarr(
 
     n_batches = (n_output_frames + chunk_size - 1) // chunk_size
     _logger.info(
-        "Building Dask array of %d frames (%d nreps) in %d chunks (chunk_size=%d frames)...",
+        "Building Dask array of %d frames (%d reps) in %d chunks (chunk_size=%d frames)...",
         n_output_frames,
-        eval_nreps,
+        eval_n_reps,
         n_batches,
         chunk_size,
     )
@@ -478,9 +484,9 @@ def h5_to_zarr(
                 h5_start,  # ← was batch_start
                 h5_end,  # ← was batch_end
                 frame_indices=frame_indices,
-                nreps_indices=nreps_indices,
+                rep_indices=rep_indices,
             ),
-            shape=(batch_end - batch_start, frame.cols, eval_nreps, frame.rows),
+            shape=(batch_end - batch_start, n_rows, eval_n_reps, n_cols),
             dtype=np.uint16,
         )
         blocks.append(block)
@@ -556,19 +562,19 @@ def print_store_info(zarr_path: str) -> None:
     print("\n".join(lines))
 
 
-def _rechunk_col_batch(
+def _rechunk_row_batch(
     source_store: str,
     source_array_path: str,
     target_store: str,
     target_array_path: str,
-    col: int,
-    col_batch: int,
-    n_col: int,
-    n_row: int,
+    row_start: int,
+    row_batch: int,
+    n_rows: int,
+    n_cols: int,
 ) -> None:
-    """Worker: read a ``col_batch``-wide column band, write single-pixel chunks.
+    """Worker: read a ``row_batch``-high row band, write single-pixel chunks.
 
-    The band ``(n_frames, col_batch, n_reps, n_row)`` is the entire RAM
+    The band ``(n_frames, row_batch, n_reps, n_cols)`` is the entire RAM
     footprint of the task. Each ``(n_frames, 1, n_reps, 1)`` target chunk is
     written individually so Zarr compresses one pixel at a time, avoiding any
     duplication of the band in parallel compression buffers.
@@ -576,50 +582,50 @@ def _rechunk_col_batch(
     source = zarr.open_array(source_store, path=source_array_path, mode="r")
     target = zarr.open_array(target_store, path=target_array_path, mode="r+")
 
-    col_end = min(col + col_batch, n_col)
-    band = np.asarray(source[:, col:col_end, :, :])  # (n_frames, col_batch, n_reps, n_row)
+    row_end = min(row_start + row_batch, n_rows)
+    band = np.asarray(source[:, row_start:row_end, :, :])  # (n_frames, row_batch, n_reps, n_cols)
 
-    for c in range(col_end - col):
-        for j in range(n_row):
+    for row_idx in range(row_start, row_end):
+        for col_idx in range(n_cols):
             # Each write targets exactly one pixel chunk -> conflict-free.
-            target[:, col + c, :, j] = band[:, c, :, j]
+            target[:, row_idx, :, col_idx] = band[:, row_idx - row_start, :, col_idx]
 
 
 def rechunk_to_pixels(
     source_path: str | Path,
     target_path: str | Path,
-    col_batch: int = 1,
+    row_batch: int = 1,
 ) -> None:
     """
     Rechunks a zarr store so that each chunk holds all frames and all readouts
     for a single spatial pixel. The target chunk shape is
-    ``(n_frames, 1, n_reps, 1)`` — i.e. one chunk per (column, row) pixel.
+    ``(n_frames, 1, n_reps, 1)`` — i.e. one chunk per (row, column) pixel.
 
-    The source is expected to have shape ``(frames, 64, nreps, 64)``.
+    The source is expected to have shape ``(n_frames, n_rows, n_reps, n_cols)``.
 
     Source shards cover the full spatial extent, so every shard must be
-    decompressed regardless of how many columns are requested. Each task reads
-    ``col_batch`` columns and writes their pixel chunks. Smaller ``col_batch``
+    decompressed regardless of how many rows are requested. Each task reads
+    ``row_batch`` rows and writes their pixel chunks. Smaller ``row_batch``
     means lower peak RAM per worker but more passes over (re-decompressions of)
-    the source. ``col_batch=1`` minimises memory. Independent column bands are
+    the source. ``row_batch=1`` minimises memory. Independent row bands are
     rechunked in parallel via Dask.
 
-    Memory per worker (the dominant term) is the column band held in RAM::
+    Memory per worker (the dominant term) is the row band held in RAM::
 
-        peak_band_bytes ≈ n_frames * col_batch * n_reps * n_row * itemsize
+        peak_band_bytes ≈ n_frames * row_batch * n_reps * n_cols * itemsize
 
-    For example, n_frames=2000, n_reps=50, n_row=64, uint16 (2 bytes),
-    col_batch=1::
+    For example, n_frames=2000, n_reps=50, n_cols=64, uint16 (2 bytes),
+    row_batch=1::
 
         2000 * 1 * 50 * 64 * 2  ≈ 1.22 GB
 
-    Doubling col_batch doubles this. Total concurrent RAM across the cluster is
+    Doubling row_batch doubles this. Total concurrent RAM across the cluster is
     roughly ``n_workers * peak_band_bytes`` plus modest Zarr write buffers.
 
     Args:
         source_path: Path to the source zarr store (chunked along frames).
         target_path: Path where the rechunked zarr store will be written.
-        col_batch: Number of columns read per task. Controls the memory/IO
+        row_batch: Number of rows read per task. Controls the memory/IO
             trade-off; 1 gives the smallest footprint.
     """
     source_path = Path(source_path)
@@ -637,7 +643,7 @@ def rechunk_to_pixels(
         source_array_path = ""
         source = cast(zarr.Array, zarr.open(source_str, mode="r"))
 
-    n_frames, n_col, n_reps, n_row = source.shape
+    n_frames, n_rows, n_reps, n_cols = source.shape
 
     # Parse target path to extract store and array path
     target_str = str(target_path)
@@ -671,9 +677,9 @@ def rechunk_to_pixels(
         )
 
     tasks = []
-    for i in range(0, n_col, col_batch):
-        task = delayed(_rechunk_col_batch)(
-            source_store, source_array_path, target_store, target_array_path, i, col_batch, n_col, n_row
+    for row_start in range(0, n_rows, row_batch):
+        task = delayed(_rechunk_row_batch)(
+            source_store, source_array_path, target_store, target_array_path, row_start, row_batch, n_rows, n_cols
         )
         tasks.append(task)
 
@@ -684,38 +690,41 @@ def rechunk_to_pixels(
 
 
 def compute_median(data_p: da.Array, path: str | Path) -> None:
+    # median over frame_idx (axis 0) and rep_idx (axis 2) -> (n_rows, n_cols)
     median_array = da.median(data_p, axis=(0, 2))
     # rechunk to a single chunk and write to zarr
     median_array.rechunk(-1).to_zarr(path)
 
 
 def compute_offset_corr(data_f: da.Array, median: da.Array, path: str | Path) -> None:
-    # Rechunk axis 1 (columns) to a single block so downstream output drops the
-    # inner column chunks and processes full frames.
+    # Rechunk axis 1 (row_idx) to a single block so downstream output drops the
+    # inner row chunks and processes full frames.
     data_f = data_f.rechunk(cast(Any, {1: -1}))
     offset_corr_array = data_f - median[np.newaxis, :, np.newaxis, :]
     offset_corr_array.to_zarr(path)
 
 
 def compute_common_modes(data: da.Array, path: str | Path) -> None:
+    # median over col_idx (axis 3) -> (n_frames, n_rows, n_reps)
     common_modes_array = da.median(data, axis=3)
     common_modes_array.to_zarr(path)
 
 
 def compute_slopes(data: da.Array, path: str | Path) -> None:
-    # shape is (frames, columns, nreps, rows)
-    n = data.shape[2]  # nreps is axis 2
-    x = np.arange(n, dtype=np.float64)  # plain NumPy, tiny
+    # shape is (n_frames, n_rows, n_reps, n_cols)
+    n_reps = data.shape[2]  # rep_idx is axis 2
+    x = np.arange(n_reps, dtype=np.float64)  # plain NumPy, tiny
     x_dev = x - x.mean()  # plain NumPy
     denominator = float((x_dev**2).sum())  # scalar, computed now
 
-    # Multiply along axis 2 (nreps), then sum along axis 2
-    # x_dev shape must broadcast to (1, 1, nreps, 1)
+    # Multiply along axis 2 (rep_idx), then sum along axis 2
+    # x_dev shape must broadcast to (1, 1, n_reps, 1)
     slopes_array = (data * x_dev[np.newaxis, np.newaxis, :, np.newaxis]).sum(axis=2) / denominator
     slopes_array.to_zarr(path)
 
 
 def subtract(data: da.Array, common_modes: da.Array, path: str | Path) -> None:
+    # common_modes (n_frames, n_rows, n_reps) is broadcast along col_idx (axis 3)
     signals_array = data - common_modes[:, :, :, np.newaxis]
     signals_array.to_zarr(path)
 
@@ -725,50 +734,51 @@ def compute_msd(data: da.Array, median: da.Array, path: str | Path) -> None:
     Computes the Mean Squared Deviation for each pixel.
 
     Args:
-        data: Dask array of shape (frames, 64, nreps, 64)
-        median: Dask/NumPy array of shape (64, 64)
-        path: Path to save the resulting (64, 64) array
+        data: Dask array of shape (n_frames, n_rows, n_reps, n_cols)
+        median: Dask/NumPy array of shape (n_rows, n_cols)
+        path: Path to save the resulting (n_rows, n_cols) array
     """
-    # 1. Align median for broadcasting: (64, 64) -> (1, 64, 1, 64)
-    # Axis 0 (frames) and Axis 2 (nreps) are new dimensions
+    # 1. Align median for broadcasting: (n_rows, n_cols) -> (1, n_rows, 1, n_cols)
+    # Axis 0 (frame_idx) and Axis 2 (rep_idx) are new dimensions
     median_aligned = median[np.newaxis, :, np.newaxis, :]
 
     # 2. Calculate squared differences
-    # Resulting shape: (frames, 64, nreps, 64)
+    # Resulting shape: (n_frames, n_rows, n_reps, n_cols)
     squared_diff = (data - median_aligned) ** 2
 
-    # 3. Average over frames (axis 0) and repetitions (axis 2)
-    # Resulting shape: (64, 64)
+    # 3. Average over frame_idx (axis 0) and rep_idx (axis 2)
+    # Resulting shape: (n_rows, n_cols)
     msd_array = da.mean(squared_diff, axis=(0, 2))
 
     # 4. Store the result
-    # We rechunk to -1 because the output is tiny (64x64)
+    # We rechunk to -1 because the output is tiny (n_rows x n_cols)
     msd_array.rechunk(-1).to_zarr(path)
 
 
 def compute_signals_mean(signals: da.Array, path: str | Path) -> None:
+    # mean over rep_idx (axis 2) -> (n_frames, n_rows, n_cols)
     signals_median_array = da.mean(signals, axis=2)
     signals_median_array.to_zarr(path)
 
 
 def apply_pixelwise(data: da.Array, path: str | Path, func) -> None:
-    """Apply a custom function to each pixel's time series along axis 0.
+    """Apply a custom function to each pixel's frames and repetitions.
 
     Parameters
     ----------
     data : da.Array
-        Pixelwise data of shape (n_frames, n_rows, n_cols), chunked
-        as (n_frames, 1, 1) — one chunk per pixel.
+        Pixelwise data of shape (n_frames, n_rows, n_reps, n_cols), chunked
+        as (n_frames, 1, n_reps, 1) — one chunk per pixel.
     path : str or Path
-        Output zarr path.
+        Output zarr path. The result has shape (n_rows, n_cols).
     func : callable
-        User function that takes a 1-D array of shape (n_frames,) and
+        User function that takes a 2-D array of shape (n_frames, n_reps) and
         returns a single scalar value. Applied independently to each
         pixel without loading the full array into memory.
     """
 
     def _apply_and_squeeze(chunk):
-        return np.asarray(func(chunk.squeeze()))
+        return np.asarray(func(chunk.squeeze(axis=(1, 3)))).reshape(1, 1)
 
-    result = da.map_blocks(_apply_and_squeeze, data, dtype=float, drop_axis=[1, 2])
+    result = da.map_blocks(_apply_and_squeeze, data, dtype=float, drop_axis=[0, 2])
     result.to_zarr(path)
