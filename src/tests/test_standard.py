@@ -146,3 +146,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     folders = args.folders or sorted(p for p in FIXTURES.glob("case_*") if p.is_dir())
     sys.exit(any(run_cases(folders, args.update).values()))
+# test
