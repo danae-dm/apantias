@@ -42,10 +42,17 @@ FIXTURES = Path(__file__).parent / "fixtures"
 RTOL = ATOL = 1e-10
 
 
+def _dataset(f: h5py.File, name: str) -> h5py.Dataset:
+    ds = f[name]
+    if not isinstance(ds, h5py.Dataset):
+        raise TypeError(f"{name} is not a dataset in {f.filename}")
+    return ds
+
+
 def _write_config(input_h5: Path, workdir: Path) -> Path:
     """Config analysing the whole input; everything run() writes goes into workdir."""
     with h5py.File(input_h5, "r") as f:
-        n_frames, cols, nreps, rows = f["raw_data"].shape
+        n_frames, cols, nreps, rows = _dataset(f, "raw_data").shape
     settings = AppSettings.model_validate({
         "runtime": {"cpus": 0, "ram_mb": 0, "dask_temp": workdir / "dask_temp"},
         "frame": {"rows": rows, "cols": cols, "nreps": nreps},
@@ -64,14 +71,14 @@ def _write_config(input_h5: Path, workdir: Path) -> Path:
     return path
 
 
-def _compare(name: str, actual: zarr.Array, expected, exact: bool) -> None:
+def _compare(name: str, actual: zarr.Array, expected: h5py.Dataset, exact: bool) -> None:
     """Raise an AssertionError naming the first differing index if the arrays differ."""
     if actual.shape != expected.shape or actual.dtype != expected.dtype:
         raise AssertionError(f"{name}: {actual.shape} {actual.dtype} != expected {expected.shape} {expected.dtype}")
     # Compare per zarr chunk along axis 0: bounded memory and every chunk is decompressed only once.
     step = actual.chunks[0]
     for start in range(0, actual.shape[0], step):
-        a, e = actual[start : start + step], expected[start : start + step]
+        a, e = np.asarray(actual[start : start + step]), np.asarray(expected[start : start + step])
         if np.array_equal(a, e, equal_nan=not exact):
             continue
         ok = (a == e) if exact else np.isclose(a, e, rtol=RTOL, atol=ATOL, equal_nan=True)
@@ -113,7 +120,7 @@ def _run_case(folder: Path, update: bool) -> None:
         with h5py.File(input_h5, "r") as f:
             for name in ("frame_chunked", "pixel_chunked"):
                 actual = zarr.open_array(analysis.zarr_data / name, mode="r")
-                _compare(f"zarr_data/{name}", actual, f["raw_data"], exact=True)
+                _compare(f"zarr_data/{name}", actual, _dataset(f, "raw_data"), exact=True)
 
         results = dict(zarr.open_group(analysis.temp_zarr, mode="r").arrays())
         if update:
@@ -122,8 +129,9 @@ def _run_case(folder: Path, update: bool) -> None:
             if sorted(results) != sorted(f):
                 raise AssertionError(f"outputs {sorted(results)} != expected {sorted(f)}")
             for name in sorted(f):
-                exact = not np.issubdtype(f[name].dtype, np.floating)
-                _compare(f"zarr_temp/{name}", results[name], f[name], exact)
+                expected = _dataset(f, name)
+                exact = not np.issubdtype(expected.dtype, np.floating)
+                _compare(f"zarr_temp/{name}", results[name], expected, exact)
 
 
 def run_cases(folders: list[Path], update: bool = False) -> dict[str, str | None]:
