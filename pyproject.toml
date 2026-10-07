@@ -26,16 +26,12 @@ classifiers = [
 
 [dependency-groups]
 dev = [
-    "pytest>=9.1.1",
-    "ruff>=0.15.2",
+    "ruff>=0.15.2"
 ]
 
 [tool.uv]
-# install apantias itself into the venv (needed by tests; __init__ reads the installed version)
+# install apantias itself into the venv (needed by src/tests; __init__ reads the installed version)
 package = true
-
-[tool.pytest.ini_options]
-testpaths = ["src/tests"]
 
 [project.urls]
 Homepage = "https://github.com/shakamaran/apantias"

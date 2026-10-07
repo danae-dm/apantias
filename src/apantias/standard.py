@@ -102,7 +102,7 @@ class StandardAnalysis:
         _logger.info("Done.")
 
         _logger.info("Start calculating mean squared deviation")
-        utils.compute_msd(signals, median, self.msd)
+        utils.compute_msd(signals, self.msd)
         _logger.info("Done.")
 
         _logger.info("Start calculating mean signals")

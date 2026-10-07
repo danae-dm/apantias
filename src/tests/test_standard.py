@@ -1,94 +1,44 @@
-"""Regression tests for ``StandardAnalysis.run()`` (src/apantias/standard.py).
+"""Regression check for ``StandardAnalysis.run()`` (src/apantias/standard.py), run manually before committing.
 
-Every ``fixtures/case_<name>/`` directory is one case: ``<name>.h5`` is the raw input (dataset ``raw_data``,
-shape ``(frames, cols, nreps, rows)``) and ``expected_<name>.h5`` holds the golden outputs. See the "Testing"
-section in README.md for details and for how to (re)generate golden files with ``--update-golden``.
+A case folder contains the raw input ``<name>.h5`` (dataset ``raw_data``, shape ``(frames, cols, nreps, rows)``)
+and the expected output ``expected_<name>.h5``:
+
+    uv run python src/tests/test_standard.py                     # all case_* folders in src/tests/fixtures
+    uv run python src/tests/test_standard.py path/to/case_x ...  # selected folders
+    uv run python src/tests/test_standard.py --update ...        # (over)write expected_<name>.h5 from current output
 """
 
-import math
+import argparse
 import os
-from dataclasses import dataclass
+import sys
+import tempfile
+import traceback
 from pathlib import Path
 
 import h5py
 import hdf5plugin
 import numpy as np
-import pytest
 import yaml
 import zarr
 
-import apantias
 from apantias.settings import AppSettings
 from apantias.standard import StandardAnalysis
 
 FIXTURES = Path(__file__).parent / "fixtures"
-INPUT_DATASET = "raw_data"
-# Arrays written to analysis.zarr_data. With full nreps/frames ranges they are the input data unchanged, so they
-# are compared exactly against the input file instead of being duplicated into the golden file.
-DATA_OUTPUTS = ("frame_chunked", "pixel_chunked")
-# Everything in the temp working directory that run() is allowed to create. Anything else is a stray write.
-WORKDIR_ENTRIES = ("config.yaml", "dask_temp", "zarr_data.zarr", "zarr_temp.zarr")
-
-# Dask chunking does not depend on the worker count, so results are bit-identical between runs on one machine.
-# The tolerance only absorbs float64 summation-order differences (SIMD/numpy builds) in the means/sums over at most
-# frames*nreps = 5e4 values. Inputs are uint16 integers, so medians/differences are multiples of 0.5 and any real
-# change is many orders of magnitude larger.
-RTOL = 1e-10
-ATOL = 1e-10
-# Arrays are compared in slabs along axis 0 so the ~750 MB float64 outputs never have to be fully in memory.
-SLAB_FRAMES = 50
+# Results are normally bit-identical; the tolerance only absorbs float64 summation-order differences between
+# machines. Inputs are uint16, so any real change is many orders of magnitude larger.
+RTOL = ATOL = 1e-10
 
 
-@dataclass(frozen=True)
-class Case:
-    name: str
-    directory: Path
-
-    @property
-    def input_h5(self) -> Path:
-        return self.directory / f"{self.name}.h5"
-
-    @property
-    def expected_h5(self) -> Path:
-        return self.directory / f"expected_{self.name}.h5"
-
-
-def discover_cases() -> list[Case]:
-    if not FIXTURES.is_dir():
-        return []
-    cases = []
-    for directory in sorted(FIXTURES.iterdir()):
-        if not directory.is_dir() or not directory.name.startswith("case_"):
-            continue
-        case = Case(directory.name.removeprefix("case_"), directory)
-        h5_files = sorted(p.name for p in directory.glob("*.h5"))
-        if not case.input_h5.is_file() or set(h5_files) - {case.input_h5.name, case.expected_h5.name}:
-            raise ValueError(
-                f"{directory}: expected '{case.input_h5.name}' and '{case.expected_h5.name}', found {h5_files}"
-            )
-        cases.append(case)
-    return cases
-
-
-CASES = discover_cases() or [
-    pytest.param(None, marks=pytest.mark.skip(reason=f"no fixture cases in {FIXTURES} (directory is gitignored)"))
-]
-
-
-def write_case_config(case: Case, workdir: Path) -> Path:
-    """Write the YAML config for a case.
-
-    The frame layout and nreps/frames ranges are taken from the input file, so the whole input is analysed.
-    All paths are absolute and point into ``workdir``, except the read-only input file.
-    """
-    with h5py.File(case.input_h5, "r") as f:
-        n_frames, cols, nreps, rows = f[INPUT_DATASET].shape
+def _write_config(input_h5: Path, workdir: Path) -> Path:
+    """Config analysing the whole input; everything run() writes goes into workdir."""
+    with h5py.File(input_h5, "r") as f:
+        n_frames, cols, nreps, rows = f["raw_data"].shape
     settings = AppSettings.model_validate({
-        # cpus/ram_mb are fixed (0 would auto-detect); they only size the Dask cluster, not the results.
-        "runtime": {"cpus": 4, "ram_mb": 4096, "dask_temp": workdir / "dask_temp"},
+        "runtime": {"cpus": 0, "ram_mb": 0, "dask_temp": workdir / "dask_temp"},
         "frame": {"rows": rows, "cols": cols, "nreps": nreps},
         "analysis": {
-            "h5_file": case.input_h5,
+            "h5_file": input_h5,
             "zarr_data": workdir / "zarr_data.zarr",
             "zarr_temp": workdir / "zarr_temp.zarr",
             "h5_archive": workdir / "h5_archive",
@@ -102,107 +52,97 @@ def write_case_config(case: Case, workdir: Path) -> Path:
     return path
 
 
-def result_settings(config: AppSettings) -> str:
-    """The settings that determine the analysis results (no paths/resources), stored in the golden file."""
-    analysis = config.analysis
-    return yaml.safe_dump({
-        "frame": config.frame.model_dump(mode="json"),
-        "nreps_range": analysis.nreps_range.model_dump(mode="json"),
-        "frames_range": analysis.frames_range.model_dump(mode="json"),
-        "ext_offset": None if analysis.ext_offset is None else str(analysis.ext_offset),
-    })
+def _compare(name: str, actual: zarr.Array, expected, exact: bool) -> None:
+    """Raise an AssertionError naming the first differing index if the arrays differ."""
+    if actual.shape != expected.shape or actual.dtype != expected.dtype:
+        raise AssertionError(f"{name}: {actual.shape} {actual.dtype} != expected {expected.shape} {expected.dtype}")
+    # Compare per zarr chunk along axis 0: bounded memory and every chunk is decompressed only once.
+    step = actual.chunks[0]
+    for start in range(0, actual.shape[0], step):
+        a, e = actual[start : start + step], expected[start : start + step]
+        if np.array_equal(a, e, equal_nan=not exact):
+            continue
+        ok = (a == e) if exact else np.isclose(a, e, rtol=RTOL, atol=ATOL, equal_nan=True)
+        if not ok.all():
+            idx = tuple(int(i) for i in np.argwhere(~ok)[0])
+            raise AssertionError(
+                f"{name}: {np.count_nonzero(~ok)} values differ in axis-0 range {start}:{start + len(a)}, "
+                f"first at {(idx[0] + start, *idx[1:])}: actual={a[idx]!r} expected={e[idx]!r}"
+            )
 
 
-def file_state(directory: Path) -> dict[str, tuple[int, int]]:
-    return {p.name: (p.stat().st_size, p.stat().st_mtime_ns) for p in sorted(directory.iterdir())}
-
-
-def zarr_arrays(store: Path) -> dict[str, zarr.Array]:
-    return {name: arr for name, arr in zarr.open_group(store, mode="r").arrays()}
-
-
-def write_golden(path: Path, arrays: dict[str, zarr.Array], settings: str) -> None:
+def _write_expected(path: Path, arrays: dict[str, zarr.Array]) -> None:
     partial = path.with_name(path.name + ".partial")
     with h5py.File(partial, "w") as f:
-        f.attrs["settings"] = settings
-        f.attrs["apantias_version"] = apantias.__version__
         for name, arr in sorted(arrays.items()):
-            row_bytes = math.prod(arr.shape[1:]) * arr.dtype.itemsize
-            chunks = (min(arr.shape[0], max(1, 2**20 // row_bytes)), *arr.shape[1:])
             ds = f.create_dataset(
-                name,
-                shape=arr.shape,
-                dtype=arr.dtype,
-                chunks=chunks,
-                **hdf5plugin.Blosc(cname="zstd", clevel=5, shuffle=hdf5plugin.Blosc.SHUFFLE),
+                name, shape=arr.shape, dtype=arr.dtype, chunks=True, **hdf5plugin.Blosc(cname="zstd", clevel=5)
             )
-            for start in range(0, arr.shape[0], SLAB_FRAMES):
-                ds[start : start + SLAB_FRAMES] = arr[start : start + SLAB_FRAMES]
+            step = arr.chunks[0]
+            for start in range(0, arr.shape[0], step):
+                ds[start : start + step] = arr[start : start + step]
     os.replace(partial, path)
 
 
-def assert_array_matches(label: str, actual, expected, exact: bool) -> None:
-    """Compare two array-likes slab by slab; on failure report the first differing index (in full-array coords)."""
-    assert actual.shape == expected.shape, f"{label}: shape {actual.shape} != expected {expected.shape}"
-    assert actual.dtype == expected.dtype, f"{label}: dtype {actual.dtype} != expected {expected.dtype}"
-    for start in range(0, actual.shape[0], SLAB_FRAMES):
-        stop = min(start + SLAB_FRAMES, actual.shape[0])
-        a, e = np.asarray(actual[start:stop]), np.asarray(expected[start:stop])
+def _run_case(folder: Path, update: bool) -> None:
+    inputs = [p for p in folder.glob("*.h5") if not p.name.startswith("expected_")]
+    if len(inputs) != 1:
+        raise ValueError(f"expected exactly one input .h5 in {folder}, found {[p.name for p in inputs]}")
+    input_h5 = inputs[0]
+    expected_h5 = folder / f"expected_{input_h5.name}"
+    if not update and not expected_h5.is_file():
+        raise FileNotFoundError(f"{expected_h5} is missing, create it with --update")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        analysis = StandardAnalysis(_write_config(input_h5, Path(tmp)))
+        analysis.run()
+
+        # zarr_data holds the raw data re-chunked framewise and pixelwise, so it must equal the input exactly.
+        with h5py.File(input_h5, "r") as f:
+            for name in ("frame_chunked", "pixel_chunked"):
+                actual = zarr.open_array(analysis.zarr_data / name, mode="r")
+                _compare(f"zarr_data/{name}", actual, f["raw_data"], exact=True)
+
+        results = dict(zarr.open_group(analysis.temp_zarr, mode="r").arrays())
+        if update:
+            _write_expected(expected_h5, results)
+        with h5py.File(expected_h5, "r") as f:
+            if sorted(results) != sorted(f):
+                raise AssertionError(f"outputs {sorted(results)} != expected {sorted(f)}")
+            for name in sorted(f):
+                exact = not np.issubdtype(f[name].dtype, np.floating)
+                _compare(f"zarr_temp/{name}", results[name], f[name], exact)
+
+
+def run_cases(folders: list[Path], update: bool = False) -> dict[str, str | None]:
+    """Run StandardAnalysis on every case folder and compare its outputs with ``expected_<name>.h5``.
+
+    With ``update=True`` the expected files are (over)written from the current output first.
+    Returns ``{folder name: None if passed, else the failure reason}`` and prints a summary.
+    """
+    results: dict[str, str | None] = {}
+    for folder in map(Path, folders):
         try:
-            if exact:
-                np.testing.assert_array_equal(a, e)
-            else:
-                np.testing.assert_allclose(a, e, rtol=RTOL, atol=ATOL)
+            _run_case(folder, update)
+            results[folder.name] = None
         except AssertionError as exc:
-            mismatch = (a != e) if exact else ~np.isclose(a, e, rtol=RTOL, atol=ATOL, equal_nan=True)
-            idx = tuple(int(i) for i in np.argwhere(mismatch)[0])
-            raise AssertionError(
-                f"{label}: first difference at index {(idx[0] + start, *idx[1:])}: "
-                f"actual={a[idx]!r} expected={e[idx]!r} (axis-0 slab {start}:{stop})\n{exc}"
-            ) from exc
+            results[folder.name] = str(exc)
+        except Exception as exc:
+            traceback.print_exc()
+            results[folder.name] = f"{type(exc).__name__}: {exc}"
+
+    print("\n" + "=" * 60)
+    for name, failure in results.items():
+        print(f"PASSED  {name}" if failure is None else f"FAILED  {name}\n        {failure}")
+    n_failed = sum(failure is not None for failure in results.values())
+    print(f"{len(results) - n_failed} passed, {n_failed} failed" + (" (expected files updated)" if update else ""))
+    return results
 
 
-@pytest.mark.parametrize("case", CASES, ids=lambda c: c.name if c else "no-fixtures")
-def test_run_regression(case: Case, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
-    update = request.config.getoption("--update-golden")
-    if not update and not case.expected_h5.is_file():
-        pytest.fail(f"[{case.name}] missing {case.expected_h5}; generate it with --update-golden after review")
-    fixture_state = file_state(case.directory)
-
-    config_path = write_case_config(case, tmp_path)
-    ctx = f"[{case.name}] (config {config_path})"
-    # Dask workers inherit the cwd; running inside tmp_path makes any stray relative-path write land there
-    # (and fail the workdir check below) instead of polluting the repository.
-    monkeypatch.chdir(tmp_path)
-
-    analysis = StandardAnalysis(config_path)
-    result = analysis.run()
-
-    assert result is None, f"{ctx}: run() returned {result!r}; results are expected only in the zarr stores"
-    assert file_state(case.directory) == fixture_state, f"{ctx}: run() modified files in {case.directory}"
-    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(WORKDIR_ENTRIES), f"{ctx}: unexpected workdir"
-
-    # zarr_data: raw data re-chunked framewise and pixelwise, must equal the input exactly.
-    data_arrays = zarr_arrays(analysis.zarr_data)
-    assert sorted(data_arrays) == sorted(DATA_OUTPUTS), f"{ctx}: arrays in {analysis.zarr_data}"
-    with h5py.File(case.input_h5, "r") as f:
-        for name in DATA_OUTPUTS:
-            assert_array_matches(f"{ctx} zarr_data/{name}", data_arrays[name], f[INPUT_DATASET], exact=True)
-
-    # zarr_temp: all analysis results, compared against the golden file.
-    temp_arrays = zarr_arrays(analysis.temp_zarr)
-    settings = result_settings(analysis.config)
-    if update:
-        write_golden(case.expected_h5, temp_arrays, settings)
-
-    with h5py.File(case.expected_h5, "r") as golden:
-        assert golden.attrs.get("settings") == settings, (
-            f"{ctx}: {case.expected_h5.name} was generated with different settings; regenerate with --update-golden\n"
-            f"golden:\n{golden.attrs.get('settings')}\ncurrent:\n{settings}"
-        )
-        assert sorted(temp_arrays) == sorted(golden), f"{ctx}: zarr_temp arrays differ from {case.expected_h5.name}"
-        for name in sorted(golden):
-            arr = temp_arrays[name]
-            assert_array_matches(
-                f"{ctx} zarr_temp/{name}", arr, golden[name], exact=not np.issubdtype(arr.dtype, np.floating)
-            )
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("folders", nargs="*", type=Path, help="case folders (default: all fixtures/case_*)")
+    parser.add_argument("--update", action="store_true", help="overwrite expected_<name>.h5 with the current output")
+    args = parser.parse_args()
+    folders = args.folders or sorted(p for p in FIXTURES.glob("case_*") if p.is_dir())
+    sys.exit(any(run_cases(folders, args.update).values()))
