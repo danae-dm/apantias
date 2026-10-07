@@ -56,7 +56,7 @@ pip-delete-this-directory.txt
 *_data/
 
 #Exclude testing file
-src/tests/*
+tests*
 default*.json
 apantias.code-workspace
 
@@ -65,4 +65,5 @@ default.yaml
 
 #ruff
 .ruff_cache/
-src/tests/test_standard.py
+.pytest_cache/
+.claude/
