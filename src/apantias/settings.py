@@ -85,7 +85,7 @@ class AnalysisSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
     h5_file: Path = Field(default=Path("data/bin"), description="Path to h5 file with raw data")
     zarr_data: Path = Field(
-        default=Path("/scratch-cbe/users/florian.heinrich/zarr_data"),
+        default=Path("/scratch-cbe/users/florian.heinrich/zarr_data.zarr"),
         description="Path to zarr data storage, for raw data.",
     )
     zarr_temp: Path = Field(
