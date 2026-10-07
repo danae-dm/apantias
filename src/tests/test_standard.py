@@ -24,6 +24,7 @@ import argparse
 import os
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -141,7 +142,10 @@ def run_cases(folders: list[Path], update: bool = False) -> dict[str, str | None
     Returns ``{folder name: None if passed, else the failure reason}`` and prints a summary.
     """
     results: dict[str, str | None] = {}
-    for folder in map(Path, folders):
+    for i, folder in enumerate(map(Path, folders), 1):
+        progress = f"[{i}/{len(folders)}] {folder.name}"
+        print(f"{progress} ...", flush=True)
+        start = time.perf_counter()
         try:
             _run_case(folder, update)
             results[folder.name] = None
@@ -150,6 +154,8 @@ def run_cases(folders: list[Path], update: bool = False) -> dict[str, str | None
         except Exception as exc:
             traceback.print_exc()
             results[folder.name] = f"{type(exc).__name__}: {exc}"
+        status = "PASSED" if results[folder.name] is None else "FAILED"
+        print(f"{progress} {status} ({time.perf_counter() - start:.0f} s)", flush=True)
 
     print("\n" + "=" * 60)
     for name, failure in results.items():
