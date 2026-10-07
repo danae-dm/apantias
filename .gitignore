@@ -56,7 +56,7 @@ pip-delete-this-directory.txt
 *_data/
 
 #Exclude testing file
-test*
+src/tests/fixtures*
 default*.json
 apantias.code-workspace
 
