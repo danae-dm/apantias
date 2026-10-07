@@ -135,6 +135,9 @@ def _run_case(folder: Path, update: bool) -> None:
                 _compare(f"zarr_temp/{name}", results[name], expected, exact)
 
 
+# test
+
+
 def run_cases(folders: list[Path], update: bool = False) -> dict[str, str | None]:
     """Run StandardAnalysis on every case folder and compare its outputs with ``expected_<name>.h5``.
 
