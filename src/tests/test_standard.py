@@ -12,12 +12,10 @@ How it works:
     A summary of passed/failed cases is printed; the exit code is 1 if any case failed. Inputs are only read,
     and expected files are only written with ``--update``.
 
-Run manually from the repository root:
+Run manually from the repository root, e.g. before committing:
     uv run python src/tests/test_standard.py                     # all case_* folders in src/tests/fixtures
     uv run python src/tests/test_standard.py path/to/case_x ...  # selected folders
     uv run python src/tests/test_standard.py --update ...        # (over)write expected_<name>.h5 from current output
-
-The pre-commit hook (.git/hooks/pre-commit) runs it automatically; skip it once with ``git commit --no-verify``.
 """
 
 import argparse
