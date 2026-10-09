@@ -31,4 +31,4 @@ __all__ = ["core", "settings", "standard"]
 # something like 'ForkProcess-1', 'SpawnPoolWorker-2', etc.
 if multiprocessing.current_process().name == "MainProcess":
     # print(f"test APANTIAS version {__version__} loaded.")
-    print("APANTIAS version 3.0a2 loaded.")
+    print("tAPANTIAS version 3.0a2 loaded.")

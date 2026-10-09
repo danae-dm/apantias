@@ -102,14 +102,6 @@ class StandardAnalysis:
         utils.compute_slopes(signals, self.slopes)
         _logger.info("Done.")
 
-        _logger.info("Start calculating mean squared deviation")
-        utils.compute_msd(signals, self.msd)
-        _logger.info("Done.")
-
         _logger.info("Start calculating mean signals")
         utils.compute_signals_mean(signals, self.signals_mean)
-        _logger.info("Done.")
-
-        _logger.info("Try calculate pixelwise.")
-        utils.apply_pixelwise(data_p, self.test_array, lambda t: t.max() - t.min())
         _logger.info("Done.")

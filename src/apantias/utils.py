@@ -729,34 +729,6 @@ def subtract(data: da.Array, common_modes: da.Array, path: str | Path) -> None:
     signals_array.to_zarr(path)
 
 
-def compute_msd(data: da.Array, path: str | Path) -> None:
-    """
-    Computes the Mean Squared Deviation for each pixel.
-
-    The data must already be offset (and common mode) corrected, so the deviation is taken from zero.
-
-    Args:
-        data: Dask array of shape (n_frames, n_rows, n_reps, n_cols)
-        median: Dask/NumPy array of shape (n_rows, n_cols)
-        path: Path to save the resulting (n_rows, n_cols) array
-    """
-    # 1. Align median for broadcasting: (n_rows, n_cols) -> (1, n_rows, 1, n_cols)
-    # Axis 0 (frame_idx) and Axis 2 (rep_idx) are new dimensions
-    median_aligned = median[np.newaxis, :, np.newaxis, :]
-
-    # 2. Calculate squared differences
-    # Resulting shape: (n_frames, n_rows, n_reps, n_cols)
-    squared_diff = (data - median_aligned) ** 2
-
-    # 3. Average over frame_idx (axis 0) and rep_idx (axis 2)
-    # Resulting shape: (n_rows, n_cols)
-    msd_array = da.mean(squared_diff, axis=(0, 2))
-
-    # 4. Store the result
-    # We rechunk to -1 because the output is tiny (n_rows x n_cols)
-    msd_array.rechunk(-1).to_zarr(path)
-
-
 def compute_signals_mean(signals: da.Array, path: str | Path) -> None:
     # mean over rep_idx (axis 2) -> (n_frames, n_rows, n_cols)
     signals_median_array = da.mean(signals, axis=2)
