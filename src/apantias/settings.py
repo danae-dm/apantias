@@ -38,11 +38,28 @@ class RangeSpec(BaseModel):
     model_config = ConfigDict(frozen=True)
     # start is inclusive
     start: int
-    # stop is exlusive! so stop=100 goes until index 99
+    # stop is exclusive! -1 means up to the end of the dataset dimension
     stop: int
     step: int = Field(default=1, ge=1)
 
+    def resolve_stop(self, size: int) -> int:
+        """Resolve stop: -1 becomes dataset size."""
+        return size if self.stop == -1 else self.stop
+
+    def indices(self, size: int) -> list[int]:
+        """Generate concrete indices resolved against dataset dimension size."""
+        return list(range(self.start, self.resolve_stop(size), self.step))
+
+    def count(self, size: int) -> int:
+        """Return the number of elements selected when resolved against size."""
+        return len(self.indices(size))
+
     def __len__(self) -> int:
+        if self.stop == -1:
+            raise ValueError(
+                "Cannot compute len() of RangeSpec with stop=-1 without dataset size. "
+                "Use .count(size) or .indices(size)."
+            )
         return max(0, (self.stop - self.start + self.step - 1) // self.step)
 
     def __iter__(self) -> "RangeSpec":  # type: ignore[return-value]
@@ -66,14 +83,14 @@ class RuntimeSettings(BaseModel):
 
 class FrameSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
-    n_rows: int = Field(default=64, description="Number of frame rows")
-    n_cols: int = Field(default=64, description="Number of frame columns")
-    n_reps: int = Field(default=200, description="Number of repetitions")
-    key_ints: int = Field(
-        default=3,
-        description="Number of key integers per row in the binary file format. "
-        "Changing this breaks compatibility with existing files.",
-    )
+
+    # Inferred from HDF5 at runtime (hidden from YAML)
+    n_frames: int = Field(default=0, exclude=True, description="Total number of frames (inferred from HDF5)")
+    n_rows: int = Field(default=0, exclude=True, description="Number of frame rows (inferred from HDF5)")
+    n_cols: int = Field(default=0, exclude=True, description="Number of frame columns (inferred from HDF5)")
+    n_reps: int = Field(default=0, exclude=True, description="Number of repetitions (inferred from HDF5)")
+
+    # User-visible configuration (kept in YAML)
     target_chunk_mb: int = Field(
         default=100,
         ge=1,
@@ -83,22 +100,22 @@ class FrameSettings(BaseModel):
 
 class AnalysisSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
-    h5_file: Path = Field(default=Path("data/bin"), description="Path to h5 file with raw data")
+    h5_file: Path = Field(default=Path("data.h5"), description="Path to h5 file with raw data")
     zarr_data: Path = Field(
-        default=Path("/scratch-cbe/users/florian.heinrich/zarr_data.zarr"),
+        default=Path("data.zarr"),
         description="Path to zarr data storage, for raw data.",
     )
     zarr_temp: Path = Field(
-        default=Path("/scratch-cbe/users/florian.heinrich/zarr_temp"),
+        default=Path("temp.zarr"),
         description="Path to zarr temp storage, use fast storage options here",
     )
-    h5_archive: Path = Field(default=Path("data/processed"), description="Path to h5 archive")
+    h5_archive: Path = Field(default=Path("archive.h5"), description="Path to h5 archive")
     ext_offset: Path | None = Field(default=None, description="Path to ext offset")
     nreps_range: RangeSpec = Field(
-        default=RangeSpec(start=0, stop=200, step=1), description="Nreps range [start, stop, step]"
+        default=RangeSpec(start=0, stop=-1, step=1), description="Nreps range [start, stop, step] default stop=-1"
     )
     frames_range: RangeSpec = Field(
-        default=RangeSpec(start=0, stop=100, step=1), description="Frames range [start, stop, step]"
+        default=RangeSpec(start=0, stop=-1, step=1), description="Frames range [start, stop, step] default stop=-1"
     )
 
 
@@ -144,21 +161,28 @@ def _dump_config(cfg: AppSettings, path: Path) -> None:
 def _validate_complete(data: dict[str, Any], path: Path) -> None:
     """Raise if the loaded config is missing any required section or field.
 
-    Dynamic: iterates AppSettings.model_fields, so adding a new section
-    to AppSettings is automatically picked up.
+    Fields marked with `exclude=True` in their Pydantic definition are internal
+    runtime parameters (e.g. inferred from HDF5) and are not expected in YAML.
+    All other fields must be explicitly present in the YAML file.
     """
     missing: list[str] = []
 
     for field_name, field_info in AppSettings.model_fields.items():
+        if field_info.exclude:
+            continue
+
         if field_name not in data:
-            # A top-level section key is entirely missing
             missing.append(field_name)
             continue
+
         section_data = data[field_name]
-        # If the field's type is a BaseModel subclass, validate its fields too
         origin = field_info.annotation
         if origin is not None and issubclass(origin, BaseModel):
-            for sub_name in origin.model_fields:
+            for sub_name, sub_info in origin.model_fields.items():
+                # Skip internal fields marked with exclude=True
+                if sub_info.exclude:
+                    continue
+                # All other fields MUST be present in the YAML
                 if sub_name not in section_data:
                     missing.append(f"{field_name}.{sub_name}")
 

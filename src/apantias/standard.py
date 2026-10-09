@@ -5,7 +5,8 @@ import dask.array as da
 import zarr
 
 from apantias.core import init
-from apantias.settings import load_config
+from apantias.preflight_check import PreflightValidator
+from apantias.settings import AppSettings, load_config
 
 from . import utils
 
@@ -24,12 +25,19 @@ class StandardAnalysis:
     # config can be passed in, otherwise defaults to the shared frozen instance
     def __init__(self, path: Path | str | None = None) -> None:
         if path is None:
-            config = load_config()
+            raw_config = load_config()
+        elif isinstance(path, AppSettings):
+            raw_config = path
         else:
-            config = load_config(Path(path))
-        self._client, self._cluster = init(config.runtime.dask_temp, config.runtime.cpus)
-        self.config = config
-        self.h5_path = Path(config.analysis.h5_file)
+            raw_config = load_config(Path(path))
+
+        # Fail fast: validate inputs and infer FrameSettings before Dask starts
+        self.config = PreflightValidator(raw_config).validate()
+
+        # Dask cluster starts only after inputs are proven valid
+        self._client, self._cluster = init(self.config.runtime.dask_temp, self.config.runtime.cpus)
+
+        self.h5_path = Path(self.config.analysis.h5_file)
         self.zarr_data = Path(self.config.analysis.zarr_data)
         self.temp_zarr = Path(self.config.analysis.zarr_temp)
         self.raw_ext = self.config.analysis.ext_offset

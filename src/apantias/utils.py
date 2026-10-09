@@ -28,12 +28,10 @@ def _resolve_range_indices(
 ) -> list[int]:
     """Resolve a RangeSpec into a list of concrete indices.
 
-    Negative indices in *spec* are resolved relative to *size* using
-    Python's standard range semantics (e.g. stop=-1  →  size-1).
-    Out-of-bounds indices are silently kept — the caller should
-    filter them if the underlying data is smaller than expected.
+    If spec.stop is -1, it resolves to size (the end of the dataset).
     """
-    return list(range(spec.start, spec.stop, spec.step))
+    effective_stop = size if spec.stop == -1 else spec.stop
+    return list(range(spec.start, effective_stop, spec.step))
 
 
 def get_node_name() -> str:
@@ -142,6 +140,11 @@ def _frame_chunk_size(n_reps: int, n_rows: int, n_cols: int, target_chunk_mb: in
     same write-unit budget is used for the HDF5 and Zarr pipelines. Finally
     capped at ``n_frames``, since HDF5 rejects chunks larger than the dataset.
     """
+    if n_reps <= 0 or n_rows <= 0 or n_cols <= 0:
+        raise ValueError(
+            f"Cannot calculate chunk size for non-positive dimensions: "
+            f"n_reps={n_reps}, n_rows={n_rows}, n_cols={n_cols}."
+        )
     bytes_per_frame = n_rows * n_reps * n_cols * 2
     chunk_size = max(1, (target_chunk_mb * 1024 * 1024) // bytes_per_frame)
     if chunk_size >= 10:
@@ -209,67 +212,74 @@ def _parse_zarr_path(zarr_path: str | Path) -> tuple[str, str | None, str]:
 
 
 def bin_to_h5(
-    bin_path: str | Path, n_reps: int, h5_path: str | Path, dataset_name: str, frame: FrameSettings, offset: int = 8
+    bin_path: str | Path,
+    h5_path: str | Path,
+    n_reps: int,
+    n_rows: int = 64,
+    n_cols: int = 64,
+    *,
+    dataset_name: str = "raw_data",
+    key_ints: int = 3,
+    target_chunk_mb: int = 100,
+    offset: int = 8,
 ) -> Path:
-    """Write the frames of a binary file to a compressed HDF5 dataset.
+    """Convert raw binary acquisition data into a compressed 4D HDF5 dataset.
 
-    The no-Dask counterpart of :func:`bin_to_zarr`: it parses the same frame
-    boundaries (via :func:`_parse_bin_frames`) but keeps **all** repetitions and
-    writes the full-resolution data as a uint16 dataset of shape
-    ``(n_frames, n_rows, n_reps, n_cols)``. Dropping the first three
-    repetitions stays a property of the zarr target and is applied by
-    :func:`h5_to_zarr`.
+    Parses valid frame boundaries from a binary file and writes the full-resolution
+    data as a uint16 dataset of shape `(n_frames, n_rows, n_reps, n_cols)` compressed
+    with Blosc (lz4 + shuffle).
 
-    The dataset is compressed with Blosc (zstd-level-9 + bitshuffle) via
-    ``hdf5plugin``, mirroring the bitshuffle codec of the zarr store: the
-    narrow-range uint16 values have near-constant high bytes, so bitshuffle
-    groups them into zero-heavy bitplanes that Zstd then encodes almost for
-    free. uint16 is the natural storage dtype — the values (~47000 ± 100)
-    exceed int16, and any wider dtype would only compress fewer values per byte.
-
-    Frames are written in batches of ``chunk_size`` (see
-    :func:`_frame_chunk_size`) so memory stays bounded at roughly
-    ``frame.target_chunk_mb`` regardless of the number of frames. The metadata
-    needed by :func:`h5_to_zarr` (``n_reps``, frame count, layout) is stored as
-    attributes on the dataset.
+    This is a standalone conversion function that does not depend on `AppSettings`
+    or `FrameSettings`.
 
     Args:
-        bin_path: Path to the source .bin file containing uint16 values.
-        n_reps: Number of repetitions per frame row.
-        h5_path: Path where the HDF5 file will be created (its parent directory
-            must exist).
-        dataset_name: Name of the dataset within the HDF5 file.
-        offset: Byte offset into the binary file to start reading from.
+        bin_path: Path to the raw input `.bin` file.
+        h5_path: Destination path for the output `.h5` file.
+        n_reps: Number of repetitions per sensor readout row.
+        n_rows: Number of frame rows (default: 64).
+        n_cols: Number of frame columns (default: 64).
+        dataset_name: Name of the dataset within the HDF5 file (default: "raw_data").
+        key_ints: Number of key integers per row in the binary format (default: 3).
+        target_chunk_mb: Target uncompressed size in MB for each frame batch write (default: 100).
+        offset: Byte offset into the binary file to start reading from (default: 8).
 
     Returns:
-        Path to the created HDF5 file.
+        Path to the generated HDF5 file.
+
+    Raises:
+        ValueError: If no valid frames could be parsed from the binary file.
     """
     bin_path = Path(bin_path)
     h5_path = Path(h5_path)
+    h5_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # 1. Parse valid frame boundaries from the binary file
     frame_start_indices, frame_end_indices, n_frames = _parse_bin_frames(
-        bin_path, offset, n_reps, frame.n_rows, frame.n_cols, frame.key_ints
+        bin_path, offset, n_reps, n_rows, n_cols, key_ints
     )
     _logger.info("Found %d valid frames in %s", n_frames, bin_path)
 
-    chunk_size = _frame_chunk_size(n_reps, frame.n_rows, frame.n_cols, frame.target_chunk_mb, n_frames)
+    # 2. Compute chunking and compression configuration
+    chunk_size = _frame_chunk_size(n_reps, n_rows, n_cols, target_chunk_mb, n_frames)
     filters = hdf5plugin.Blosc(cname="lz4", clevel=5, shuffle=1)
-    shape = (n_frames, frame.n_rows, n_reps, frame.n_cols)
-    chunk_shape = (chunk_size, frame.n_rows, n_reps, frame.n_cols)
+    shape = (n_frames, n_rows, n_reps, n_cols)
+    chunk_shape = (chunk_size, n_rows, n_reps, n_cols)
 
-    # Keep all reps (no slice)
+    # Keep all repetitions (slicing is deferred to downstream Zarr processing)
     rep_slice = slice(None)
+    raw_line_size = n_cols + key_ints
 
+    # 3. Create HDF5 dataset and populate attributes
     with h5py.File(h5_path, "w") as f:
         ds = f.create_dataset(dataset_name, shape=shape, dtype="uint16", chunks=chunk_shape, **filters)
         ds.attrs["nreps"] = n_reps
         ds.attrs["offset"] = offset
         ds.attrs["n_frames"] = n_frames
-        ds.attrs["column_size"] = frame.n_cols
-        ds.attrs["row_size"] = frame.n_rows
-        ds.attrs["raw_row_size"] = frame.n_cols + frame.key_ints
+        ds.attrs["column_size"] = n_cols
+        ds.attrs["row_size"] = n_rows
+        ds.attrs["raw_row_size"] = raw_line_size
 
-        # Build delayed tasks — one per batch
+        # 4. Write frame batches in parallel using Dask delayed threads
         delayed_tasks = []
         for batch_start in range(0, n_frames, chunk_size):
             batch_end = min(batch_start + chunk_size, n_frames)
@@ -284,16 +294,16 @@ def bin_to_h5(
                     frame_end_indices,
                     n_reps,
                     rep_slice,
-                    frame.n_rows,
-                    frame.n_cols,
-                    frame.n_cols + frame.key_ints,
+                    n_rows,
+                    n_cols,
+                    raw_line_size,
                 )
             )
 
-        # Execute in parallel (threads are fine here — GIL released by
-        # numpy/hdf5plugin under the hood)
+        # Execute threads (safe because numpy and hdf5plugin release the GIL)
         compute(*delayed_tasks, scheduler="threads")
 
+    _logger.info("Successfully wrote %s (dataset: '%s', shape: %s)", h5_path, dataset_name, shape)
     return h5_path
 
 
@@ -693,7 +703,7 @@ def compute_median(data_p: da.Array, path: str | Path) -> None:
     # median over frame_idx (axis 0) and rep_idx (axis 2) -> (n_rows, n_cols)
     median_array = da.median(data_p, axis=(0, 2))
     # rechunk to a single chunk and write to zarr
-    median_array.rechunk(-1).to_zarr(path)
+    median_array.rechunk(-1).to_zarr(path, overwrite=True)
 
 
 def compute_offset_corr(data_f: da.Array, median: da.Array, path: str | Path) -> None:
@@ -701,13 +711,13 @@ def compute_offset_corr(data_f: da.Array, median: da.Array, path: str | Path) ->
     # inner row chunks and processes full frames.
     data_f = data_f.rechunk(cast(Any, {1: -1}))
     offset_corr_array = data_f - median[np.newaxis, :, np.newaxis, :]
-    offset_corr_array.to_zarr(path)
+    offset_corr_array.to_zarr(path, overwrite=True)
 
 
 def compute_common_modes(data: da.Array, path: str | Path) -> None:
     # median over col_idx (axis 3) -> (n_frames, n_rows, n_reps)
     common_modes_array = da.median(data, axis=3)
-    common_modes_array.to_zarr(path)
+    common_modes_array.to_zarr(path, overwrite=True)
 
 
 def compute_slopes(data: da.Array, path: str | Path) -> None:
@@ -720,19 +730,19 @@ def compute_slopes(data: da.Array, path: str | Path) -> None:
     # Multiply along axis 2 (rep_idx), then sum along axis 2
     # x_dev shape must broadcast to (1, 1, n_reps, 1)
     slopes_array = (data * x_dev[np.newaxis, np.newaxis, :, np.newaxis]).sum(axis=2) / denominator
-    slopes_array.to_zarr(path)
+    slopes_array.to_zarr(path, overwrite=True)
 
 
 def subtract(data: da.Array, common_modes: da.Array, path: str | Path) -> None:
     # common_modes (n_frames, n_rows, n_reps) is broadcast along col_idx (axis 3)
     signals_array = data - common_modes[:, :, :, np.newaxis]
-    signals_array.to_zarr(path)
+    signals_array.to_zarr(path, overwrite=True)
 
 
 def compute_signals_mean(signals: da.Array, path: str | Path) -> None:
     # mean over rep_idx (axis 2) -> (n_frames, n_rows, n_cols)
     signals_median_array = da.mean(signals, axis=2)
-    signals_median_array.to_zarr(path)
+    signals_median_array.to_zarr(path, overwrite=True)
 
 
 def apply_pixelwise(data: da.Array, path: str | Path, func) -> None:
@@ -755,4 +765,4 @@ def apply_pixelwise(data: da.Array, path: str | Path, func) -> None:
         return np.asarray(func(chunk.squeeze(axis=(1, 3)))).reshape(1, 1)
 
     result = da.map_blocks(_apply_and_squeeze, data, dtype=float, drop_axis=[0, 2])
-    result.to_zarr(path)
+    result.to_zarr(path, overwrite=True)
