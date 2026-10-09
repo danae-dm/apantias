@@ -57,7 +57,6 @@ pip-delete-this-directory.txt
 
 #Exclude testing files (fixtures etc.), except the regression check
 /src/tests/*
-!/src/tests/test_standard.py
 default*.json
 apantias.code-workspace
 
