@@ -66,17 +66,18 @@ class RuntimeSettings(BaseModel):
 
 class FrameSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
-    rows: int = Field(default=64, description="Number of frame rows")
-    cols: int = Field(default=64, description="Number of frame columns")
-    nreps: int = Field(default=200, description="Number of repetitions")
+    n_rows: int = Field(default=64, description="Number of frame rows")
+    n_cols: int = Field(default=64, description="Number of frame columns")
+    n_reps: int = Field(default=200, description="Number of repetitions")
     key_ints: int = Field(
         default=3,
         description="Number of key integers per row in the binary file format. "
         "Changing this breaks compatibility with existing files.",
     )
-    target_chunk_bytes: int = Field(
-        default=100 * 1024 * 1024,
-        description="Target chunk size in bytes for frame writes (~100 MB).",
+    target_chunk_mb: int = Field(
+        default=100,
+        ge=1,
+        description="Target chunk size in MB for frame writes.",
     )
 
 
@@ -84,7 +85,7 @@ class AnalysisSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
     h5_file: Path = Field(default=Path("data/bin"), description="Path to h5 file with raw data")
     zarr_data: Path = Field(
-        default=Path("/scratch-cbe/users/florian.heinrich/zarr_data"),
+        default=Path("/scratch-cbe/users/florian.heinrich/zarr_data.zarr"),
         description="Path to zarr data storage, for raw data.",
     )
     zarr_temp: Path = Field(

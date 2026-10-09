@@ -17,7 +17,8 @@ class StandardAnalysis:
     Performs standard statistical analysis on zarr arrays.
 
     Supports computing statistics (mean, std, etc.) over frames or spatial dimensions
-    for multi-dimensional arrays with shape (frames, columns, repetitions, rows).
+    for multi-dimensional arrays with shape (n_frames, n_rows, n_reps, n_cols),
+    indexed as (frame_idx, row_idx, rep_idx, col_idx).
     """
 
     # config can be passed in, otherwise defaults to the shared frozen instance
@@ -67,12 +68,12 @@ class StandardAnalysis:
         # Load pixelwise data. This must be used for calculations along frames.
         # The pixelwise data is saved in chunks per pixel, not per frame.
         data_p = da.from_zarr(self.raw_data_pixelwise)
-        # Load frame-chunked data. Dask defaults to the inner chunk shape (e.g. col=1).
-        # We explicitly rechunk axis 1 to full width (64) here so that offset_corr
+        # Load frame-chunked data. Dask defaults to the inner chunk shape (one row per chunk).
+        # We explicitly rechunk axis 1 (row_idx) to n_rows here so that offset_corr
         # and downstream steps process full frames and don't fragment into tiny tasks.
         # This does not affect rechunk_to_pixels, which runs before this and reads
         # directly from the zarr store.
-        data_f = da.from_zarr(self.raw_data_framewise).rechunk({1: self.config.frame.cols})
+        data_f = da.from_zarr(self.raw_data_framewise).rechunk({1: self.config.frame.n_rows})
 
         _logger.info("Start calculating offset.")
         utils.compute_median(data_p, self.median)
