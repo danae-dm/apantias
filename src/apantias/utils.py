@@ -10,6 +10,7 @@ import numpy as np
 import zarr
 from dask import delayed  # pyright: ignore
 from dask.base import compute
+from scipy.stats import norm
 from zarr.codecs import (
     BloscCodec,
     BloscShuffle,
@@ -706,11 +707,18 @@ def compute_median(data_p: da.Array, path: str | Path) -> None:
     median_array.rechunk(-1).to_zarr(path, overwrite=True)
 
 
-def compute_offset_corr(data_f: da.Array, median: da.Array, path: str | Path) -> None:
+def compute_offset(data_p: da.Array, path: str | Path) -> None:
+    # median over frame_idx (axis 0) -> (n_rows,n_reps, n_cols)
+    median_array = da.median(data_p, axis=0)
+    # rechunk to a single chunk and write to zarr
+    median_array.rechunk(-1).to_zarr(path, overwrite=True)
+
+
+def compute_offset_corr(data_f: da.Array, offset: da.Array, path: str | Path) -> None:
     # Rechunk axis 1 (row_idx) to a single block so downstream output drops the
     # inner row chunks and processes full frames.
     data_f = data_f.rechunk(cast(Any, {1: -1}))
-    offset_corr_array = data_f - median[np.newaxis, :, np.newaxis, :]
+    offset_corr_array = data_f - offset[np.newaxis, :, :, :]
     offset_corr_array.to_zarr(path, overwrite=True)
 
 
@@ -745,24 +753,100 @@ def compute_signals_mean(signals: da.Array, path: str | Path) -> None:
     signals_median_array.to_zarr(path, overwrite=True)
 
 
+def remove_bad_slopes(
+    signals_mean: str | Path,
+    slopes: str | Path,
+    threshold: int,
+    output: str | Path | None = None,
+) -> None:
+    if output is None:
+        output = signals_mean
+
+    # Fit normal distribution to all slope values
+    slopes_flat = da.from_zarr(slopes).compute().flatten()
+    loc, scale = norm.fit(slopes_flat)
+    _logger.info("Slope fit: loc=%.4f, scale=%.4f", loc, scale)
+
+    # Threshold bounds: mean ± threshold * std
+    upper = loc + threshold * scale
+    lower = loc - threshold * scale
+    _logger.info("Threshold bounds: [%.4f, %.4f]", lower, upper)
+
+    # Create boolean mask for bad slopes — keep it lazy
+    slopes_arr = da.from_zarr(slopes)
+    bad_mask = (slopes_arr < lower) | (slopes_arr > upper)
+
+    # Load signals as float64, apply mask
+    signals_arr = da.from_zarr(signals_mean).astype(np.float64)
+    signals_masked = da.where(bad_mask, np.nan, signals_arr)
+
+    signals_masked.to_zarr(output, overwrite=True)
+
+    n_bad = int(((slopes_arr < lower) | (slopes_arr > upper)).sum().compute())
+    _logger.info(
+        "Removed %d/%d slope values (%.1f%%) beyond ±%dσ threshold → %s",
+        n_bad,
+        bad_mask.size,
+        100 * n_bad / bad_mask.size,
+        threshold,
+        output,
+    )
+
+
 def apply_pixelwise(data: da.Array, path: str | Path, func) -> None:
-    """Apply a custom function to each pixel's frames and repetitions.
+    """Apply a custom function to each pixel's frame values.
 
     Parameters
     ----------
     data : da.Array
-        Pixelwise data of shape (n_frames, n_rows, n_reps, n_cols), chunked
-        as (n_frames, 1, n_reps, 1) — one chunk per pixel.
+        Pixelwise data of shape (n_frames, n_rows, n_cols), any chunking.
     path : str or Path
         Output zarr path. The result has shape (n_rows, n_cols).
     func : callable
-        User function that takes a 2-D array of shape (n_frames, n_reps) and
+        User function that takes a 1-D array of shape (n_frames,) and
         returns a single scalar value. Applied independently to each
         pixel without loading the full array into memory.
     """
+    ndim = data.ndim
 
     def _apply_and_squeeze(chunk):
-        return np.asarray(func(chunk.squeeze(axis=(1, 3)))).reshape(1, 1)
+        spatial_shape = chunk.shape[1:]  # e.g. (R, C)
+        chunk_2d = chunk.reshape(chunk.shape[0], -1)  # (F, R*C)
+        n_pixels = chunk_2d.shape[1]
+        results = np.empty(n_pixels, dtype=float)
+        for i in range(n_pixels):
+            results[i] = func(chunk_2d[:, i])  # func receives (F,)
+        return results.reshape(spatial_shape)  # -> (R, C)
 
-    result = da.map_blocks(_apply_and_squeeze, data, dtype=float, drop_axis=[0, 2])
+    # For 3D: drop axis 0 (frames). For 4D: drop axes 0, 2 (frames, reps).
+    drop_axis = [0] if ndim == 3 else [0, 2]
+    result = da.map_blocks(_apply_and_squeeze, data, dtype=float, drop_axis=drop_axis)
     result.to_zarr(path, overwrite=True)
+
+
+def fit_pixels(signal_mean: da.Array, path: str | Path) -> None:
+    """Fit a Gaussian to every pixel's signal distribution.
+
+    For each pixel (r, c), fits a Gaussian to the n_frames values in
+    single_mean[:, r, c]. Writes the fitted mean (loc) as a
+    (n_rows, n_cols) zarr array.
+
+    Parameters
+    ----------
+    single_mean : da.Array
+        Mean signal data of shape (n_frames, n_rows, n_cols).
+    path : str or Path
+        Output zarr path.
+    """
+
+    def _gauss_fit(signal: np.ndarray) -> float:
+        valid = signal[~np.isnan(signal)]
+        if len(valid) < 3:
+            return float("nan")
+        try:
+            loc, _ = norm.fit(valid)
+        except ValueError:
+            return float("nan")  # constant / zero-variance data
+        return float(loc)
+
+    apply_pixelwise(signal_mean, path, _gauss_fit)

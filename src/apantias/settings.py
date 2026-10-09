@@ -117,6 +117,8 @@ class AnalysisSettings(BaseModel):
     frames_range: RangeSpec = Field(
         default=RangeSpec(start=0, stop=-1, step=1), description="Frames range [start, stop, step] default stop=-1"
     )
+    slope_threshold: int = Field(default=3, description="Threshold for the Slope Filter.")
+    second_offset: bool = Field(default=True, description="Shifts the signals according to the pixel hist fit.")
 
 
 class AppSettings(BaseModel):

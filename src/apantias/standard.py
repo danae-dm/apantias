@@ -45,16 +45,18 @@ class StandardAnalysis:
             self.ext_offset = Path(self.raw_ext)
         else:
             self.ext_offset = None
+        self.slope_threshold = self.config.analysis.slope_threshold
         self.raw_data_pixelwise = self.zarr_data.joinpath("pixel_chunked")
         self.raw_data_framewise = self.zarr_data.joinpath("frame_chunked")
-        self.median = self.temp_zarr.joinpath("median")
+        self.offset = self.temp_zarr.joinpath("offset")
         self.offset_corr = self.temp_zarr.joinpath("offset_corr")
         self.common_modes = self.temp_zarr.joinpath("common_modes")
         self.slopes = self.temp_zarr.joinpath("slopes")
         self.signals = self.temp_zarr.joinpath("signals")
         self.msd = self.temp_zarr.joinpath("msd")
         self.signals_mean = self.temp_zarr.joinpath("signals_mean")
-        self.test_array = self.temp_zarr.joinpath("test_array")
+        self.signals_mean_slopes_removed = self.temp_zarr.joinpath("signals_mean_slopes_removed")
+        self.signals_fit = self.temp_zarr.joinpath("signals_fit")
 
     def run(self):
         client, cluster = self._client, self._cluster
@@ -84,13 +86,13 @@ class StandardAnalysis:
         data_f = da.from_zarr(self.raw_data_framewise).rechunk({1: self.config.frame.n_rows})
 
         _logger.info("Start calculating offset.")
-        utils.compute_median(data_p, self.median)
-        # load the median as dask array
-        median = da.from_zarr(self.median)
+        utils.compute_offset(data_p, self.offset)
+        # load the offset as dask array
+        offset = da.from_zarr(self.offset)
         _logger.info("Done.")
 
         if self.ext_offset is None:
-            offset = median
+            offset = offset
         else:
             offset = da.from_zarr(self.ext_offset)
 
@@ -112,4 +114,14 @@ class StandardAnalysis:
 
         _logger.info("Start calculating mean signals")
         utils.compute_signals_mean(signals, self.signals_mean)
+        _logger.info("Done.")
+
+        # TODO: use of path vs dask array is not consistent
+        _logger.info("Start removing bad slopes")
+        utils.remove_bad_slopes(self.signals_mean, self.slopes, self.slope_threshold, self.signals_mean_slopes_removed)
+        _logger.info("Done.")
+
+        _logger.info("Start fitting Gaussian to each pixel's signal distribution")
+        signals_mean_slopes = da.from_zarr(self.signals_mean_slopes_removed)
+        utils.fit_pixels(signals_mean_slopes, self.signals_fit)
         _logger.info("Done.")
