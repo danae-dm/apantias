@@ -1,21 +1,4 @@
-## Testing
 
-`src/tests/test_standard.py` is a manual regression check for `StandardAnalysis.run()`; run it before committing:
-
-```sh
-uv run python src/tests/test_standard.py                       # all src/tests/fixtures/case_* folders
-uv run python src/tests/test_standard.py src/tests/fixtures/case_small_nn   # selected folders
-uv run python src/tests/test_standard.py --update case_folder  # (over)write expected_<name>.h5
-```
-
-A case folder contains the raw input `<name>.h5` (dataset `raw_data`, shape `(frames, cols, nreps, rows)`) and
-`expected_<name>.h5`. For each folder the analysis runs on the whole input in a temporary directory, configured
-through a generated `config.yaml` that is loaded by `settings.load_config`. Then `zarr_data` must equal the input and
-every `zarr_temp` array must match the dataset of the same name in the expected file (floats within 1e-10).
-At the end it prints which cases passed or failed; the exit code is non-zero if any failed.
-
-Expected files are only written with `--update`; use it for new cases or after verifying an intended result change.
-Reading them elsewhere needs `import hdf5plugin`.
 
 historical notes:
 
