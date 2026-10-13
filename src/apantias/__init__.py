@@ -7,9 +7,7 @@ import logging
 import multiprocessing
 import sys
 
-from . import core, settings, standard
-
-# test comment
+from . import cluster, settings, standard
 
 # Set up logging for interactive environments (Jupyter)
 _logger = logging.getLogger(__name__)
@@ -23,7 +21,7 @@ __version__ = importlib.metadata.version("apantias")
 __author__ = "Florian Heinrich"
 __credits__ = "HEPHY Vienna"
 # controls what is imported by "from apantiuas import *"
-__all__ = ["core", "settings", "standard"]
+__all__ = ["cluster", "settings", "standard"]
 
 
 # multiprocessing.current_process().name is 'MainProcess' in the parent Jupyter kernel.

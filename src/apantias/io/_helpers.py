@@ -1,0 +1,88 @@
+"""Private helpers shared across I/O modules."""
+
+from pathlib import Path
+
+import numpy as np
+
+from apantias.settings import RangeSpec
+
+
+def _resolve_range_indices(
+    spec: RangeSpec,
+    size: int,
+) -> list[int]:
+    """Resolve a RangeSpec into a list of concrete indices.
+
+    Negative indices in *spec* are resolved relative to *size* using
+    Python's standard range semantics (e.g. stop=-1  →  size-1).
+    Out-of-bounds indices are silently kept — the caller should
+    filter them if the underlying data is smaller than expected.
+    """
+    return list(range(spec.start, spec.stop, spec.step))
+
+
+def _frame_chunk_size(nreps: int, cols: int, rows: int, target_chunk_bytes: int) -> int:
+    """Number of frames per write/compression chunk for the given ``nreps``.
+
+    Bounded so each chunk is at most ``target_chunk_bytes``, then
+    rounded down to the nearest multiple of 10 (or kept as 1 if tiny), so the
+    same write-unit budget is used for the HDF5 and Zarr pipelines.
+    """
+    bytes_per_frame = cols * nreps * rows * 2
+    chunk_size = max(1, target_chunk_bytes // bytes_per_frame)
+    if chunk_size >= 10:
+        chunk_size = (chunk_size // 10) * 10
+    return chunk_size
+
+
+def _read_frame_batch(
+    bin_file: Path,
+    offset: int,
+    frame_start_indices: np.ndarray,
+    frame_end_indices: np.ndarray,
+    batch_start: int,
+    batch_end: int,
+    nreps: int,
+    nreps_slice: slice,
+    cols: int,
+    rows: int,
+    raw_row_size: int,
+) -> np.ndarray:
+    """Extract one batch of frames from the binary file as a NumPy array."""
+    raw_uint16 = np.memmap(bin_file, dtype="uint16", mode="r", offset=offset)
+    n_complete_rows = len(raw_uint16) // raw_row_size
+    raw_data = raw_uint16[: n_complete_rows * raw_row_size].reshape(-1, raw_row_size)
+
+    batch = np.stack([
+        raw_data[frame_start_indices[i] + 1 : frame_end_indices[i] + 1, :rows] for i in range(batch_start, batch_end)
+    ])
+    # Reshape to full nreps, apply the slice, then return
+    batch_full = batch.reshape(-1, cols, nreps, rows)
+    return batch_full[:, :, nreps_slice, :]
+
+
+def _parse_bin_frames(
+    bin_file: Path, offset: int, nreps: int, cols: int, rows: int, key_ints: int
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Locate the valid frame boundaries in a binary file."""
+    rows_per_frame = cols * nreps
+    raw_row_size = rows + key_ints
+    raw_uint16 = np.memmap(bin_file, dtype="uint16", mode="r", offset=offset)
+    n_complete_rows = len(raw_uint16) // raw_row_size
+    raw_data = raw_uint16[: n_complete_rows * raw_row_size].reshape(-1, raw_row_size)
+
+    # Locate all frame-key rows (sentinel 65535 at column cols).
+    frame_key_positions = np.where(raw_data[:, cols] == 65535)[0]
+    if len(frame_key_positions) < 2:
+        raise ValueError(f"No valid frames found in {bin_file}")
+    # A valid frame has exactly rows_per_frame rows between two consecutive keys.
+    starts = frame_key_positions[:-1]
+    ends = frame_key_positions[1:]
+    valid_mask = (ends - starts) == rows_per_frame
+    frame_start_indices = starts[valid_mask]
+    frame_end_indices = ends[valid_mask]
+    n_frames = len(frame_start_indices)
+
+    if n_frames == 0:
+        raise ValueError(f"No valid frames found in {bin_file}")
+    return frame_start_indices, frame_end_indices, n_frames

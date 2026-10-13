@@ -6,8 +6,6 @@ from dask.distributed import Client, LocalCluster
 
 from apantias.get_resources import get_resources
 
-from .utils import get_node_name
-
 _logger = logging.getLogger(__name__)
 
 # these environment variables ensure that numpy runs single threaded. we want only one thread running per core.
@@ -18,6 +16,25 @@ env_vars = {
     "NUMEXPR_NUM_THREADS": "1",
     "BLOSC_NTHREADS": "1",
 }
+
+
+def get_node_name() -> str:
+    """Get the name of the compute node the process is running on.
+
+    Uses the SLURMD_NODENAME environment variable set by SLURM,
+    or falls back to the hostname if not running on a SLURM cluster.
+
+    Returns
+    -------
+    str
+        The name of the node.
+    """
+    node_name = os.environ.get("SLURMD_NODENAME")
+    if node_name is None:
+        import socket
+
+        node_name = socket.gethostname()
+    return node_name
 
 
 def init(local_dir, cores=None):
