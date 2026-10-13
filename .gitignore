@@ -56,7 +56,6 @@ pip-delete-this-directory.txt
 *_data/
 
 #Exclude testing files (fixtures etc.), except the regression check
-/src/tests/*
 default*.json
 apantias.code-workspace
 
@@ -67,3 +66,4 @@ default.yaml
 .ruff_cache/
 .pytest_cache/
 .claude/
+tests/fixtures/

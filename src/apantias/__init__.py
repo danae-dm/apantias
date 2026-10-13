@@ -17,7 +17,10 @@ if not _logger.handlers:
     _logger.addHandler(handler)
     _logger.setLevel(logging.DEBUG)
 
-__version__ = importlib.metadata.version("apantias")
+try:
+    __version__ = importlib.metadata.version("apantias")
+except importlib.metadata.PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
 __author__ = "Florian Heinrich"
 __credits__ = "HEPHY Vienna"
 # controls what is imported by "from apantiuas import *"

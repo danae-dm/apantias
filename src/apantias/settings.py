@@ -47,11 +47,11 @@ class RangeSpec(BaseModel):
 
     def __iter__(self) -> "RangeSpec":  # type: ignore[return-value]
         """Iterate to produce indices via Python's range()."""
-        self._indices = range(self.start, self.stop, self.step)
+        self._iterator = iter(range(self.start, self.stop, self.step))
         return self
 
     def __next__(self) -> int:
-        return next(iter(self._indices))
+        return next(self._iterator)
 
 
 class RuntimeSettings(BaseModel):

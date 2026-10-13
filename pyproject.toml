@@ -17,6 +17,7 @@ dependencies = [
     "zarr>=3.1.6",
     "h5py>=3.14.0",
     "hdf5plugin>=6.0.0",
+    "pytest>=9.1.1",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -26,7 +27,9 @@ classifiers = [
 
 [dependency-groups]
 dev = [
-    "ruff>=0.15.2"
+    "ruff>=0.15.2",
+    "pytest>=8.3",
+    "pre-commit>=4.0"
 ]
 
 [tool.uv]
@@ -49,3 +52,11 @@ ignore = ["F821"]
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "standard"
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
