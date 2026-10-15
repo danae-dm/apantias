@@ -4,11 +4,13 @@ from pathlib import Path
 import dask.array as da
 import zarr
 
-from apantias.core import init
-from apantias.preflight_check import PreflightValidator
-from apantias.settings import AppSettings, load_config
+from apantias.cluster import init
+from apantias.settings import load_config
 
-from . import utils
+from .compute import stats
+from .compute.reductions import apply_pixelwise
+from .io.zarr import h5_to_zarr
+from .transform.rechunk import rechunk_to_pixels
 
 _logger = logging.getLogger(__name__)
 
@@ -72,23 +74,23 @@ class StandardAnalysis:
         zarr.open_group(self.zarr_data, mode="a")
 
         _logger.info("Start writing bin to zarr store.")
-        utils.h5_to_zarr(self.h5_path, self.raw_data_framewise, self.config.frame, self.config.analysis)
-        utils.rechunk_to_pixels(self.raw_data_framewise, self.raw_data_pixelwise)
+        h5_to_zarr(self.h5_path, self.raw_data_framewise, self.config.frame, self.config.analysis)
+        rechunk_to_pixels(self.raw_data_framewise, self.raw_data_pixelwise)
         _logger.info("Done.")
         # Load pixelwise data. This must be used for calculations along frames.
         # The pixelwise data is saved in chunks per pixel, not per frame.
         data_p = da.from_zarr(self.raw_data_pixelwise)
-        # Load frame-chunked data. Dask defaults to the inner chunk shape (one row per chunk).
-        # We explicitly rechunk axis 1 (row_idx) to n_rows here so that offset_corr
+        # Load frame-chunked data. Dask defaults to the inner chunk shape (e.g. col=1).
+        # We explicitly rechunk axis 1 (columns) to full width (64) here so that offset_corr
         # and downstream steps process full frames and don't fragment into tiny tasks.
         # This does not affect rechunk_to_pixels, which runs before this and reads
         # directly from the zarr store.
         data_f = da.from_zarr(self.raw_data_framewise).rechunk({1: self.config.frame.n_rows})
 
         _logger.info("Start calculating offset.")
-        utils.compute_offset(data_p, self.offset)
-        # load the offset as dask array
-        offset = da.from_zarr(self.offset)
+        stats.compute_median(data_p, self.median)
+        # load the median as dask array
+        median = da.from_zarr(self.median)
         _logger.info("Done.")
 
         if self.ext_offset is None:
@@ -97,31 +99,29 @@ class StandardAnalysis:
             offset = da.from_zarr(self.ext_offset)
 
         _logger.info("Start applying offset.")
-        utils.compute_offset_corr(data_f, offset, self.offset_corr)
+        stats.compute_offset_corr(data_f, offset, self.offset_corr)
         offset_corr = da.from_zarr(self.offset_corr)
         _logger.info("Done.")
 
         _logger.info("Start Common Mode Correction")
-        utils.compute_common_modes(offset_corr, self.common_modes)
+        stats.compute_common_modes(offset_corr, self.common_modes)
         common_modes = da.from_zarr(self.common_modes)
-        utils.subtract(offset_corr, common_modes, self.signals)
+        stats.subtract(offset_corr, common_modes, self.signals)
         signals = da.from_zarr(self.signals)
         _logger.info("Done.")
 
         _logger.info("Start calculating slopes")
-        utils.compute_slopes(signals, self.slopes)
+        stats.compute_slopes(signals, self.slopes)
+        _logger.info("Done.")
+
+        _logger.info("Start calculating mean squared deviation")
+        stats.compute_msd(signals, self.msd)
         _logger.info("Done.")
 
         _logger.info("Start calculating mean signals")
-        utils.compute_signals_mean(signals, self.signals_mean)
+        stats.compute_signals_mean(signals, self.signals_mean)
         _logger.info("Done.")
 
-        # TODO: use of path vs dask array is not consistent
-        _logger.info("Start removing bad slopes")
-        utils.remove_bad_slopes(self.signals_mean, self.slopes, self.slope_threshold, self.signals_mean_slopes_removed)
-        _logger.info("Done.")
-
-        _logger.info("Start fitting Gaussian to each pixel's signal distribution")
-        signals_mean_slopes = da.from_zarr(self.signals_mean_slopes_removed)
-        utils.fit_pixels(signals_mean_slopes, self.signals_fit)
+        _logger.info("Try calculate pixelwise.")
+        apply_pixelwise(data_p, self.test_array, lambda t: t.max() - t.min())
         _logger.info("Done.")

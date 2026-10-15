@@ -1,0 +1,54 @@
+# Publishes the package to PyPI via Trusted Publishing (OIDC, no API token).
+# Triggered by pushing a version tag (e.g. v3.0a3). The tag must match the
+# version in pyproject.toml.
+#
+# One-time setup on PyPI (before the first release):
+#   pypi.org -> Account settings -> Publishing -> "Add a new pending publisher"
+#     - PyPI project name:  apantias
+#     - Owner:              shakamaran
+#     - Repository:         apantias
+#     - Workflow filename:  python-publish.yml
+#     - Environment:        pypi
+
+name: Upload Python Package
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Check tag matches pyproject version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PROJECT_VERSION="$(uv version --short)"
+          if [ "$TAG_VERSION" != "$PROJECT_VERSION" ]; then
+            echo "Tag v$TAG_VERSION does not match pyproject.toml version $PROJECT_VERSION"
+            echo "Bump the version in pyproject.toml (or re-tag) and try again."
+            exit 1
+          fi
+
+      - name: Build package
+        run: uv build
+
+      - name: Publish package to PyPI
+        run: uv publish --trusted-publishing always

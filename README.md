@@ -1,4 +1,14 @@
 
+
+historical notes:
+
+Tested RAM requirements:
+Minimum is 2GB RAM per physical core.
+A chunk size of 100MB should reliably work. Must be lowered if RAM runs low.
+This chunk size is for the raw_data which is stored in uint16
+
+leave all parameters in the settings instance!
+
 TODO:
 move functions from utils to a compute module
 edit the compute functions to use the new config
