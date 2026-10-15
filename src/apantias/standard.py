@@ -5,7 +5,8 @@ import dask.array as da
 import zarr
 
 from apantias.cluster import init
-from apantias.settings import load_config
+from apantias.preflight_check import PreflightValidator
+from apantias.settings import AppSettings, load_config
 
 from .compute import stats
 from .compute.reductions import apply_pixelwise
@@ -59,6 +60,8 @@ class StandardAnalysis:
         self.signals_mean = self.temp_zarr.joinpath("signals_mean")
         self.signals_mean_slopes_removed = self.temp_zarr.joinpath("signals_mean_slopes_removed")
         self.signals_fit = self.temp_zarr.joinpath("signals_fit")
+        self.test_array = self.temp_zarr.joinpath("test_array")
+        self.median = self.temp_zarr.joinpath("median")
 
     def run(self):
         client, cluster = self._client, self._cluster
@@ -90,11 +93,11 @@ class StandardAnalysis:
         _logger.info("Start calculating offset.")
         stats.compute_median(data_p, self.median)
         # load the median as dask array
-        median = da.from_zarr(self.median)
+        _median = da.from_zarr(self.median)
         _logger.info("Done.")
 
         if self.ext_offset is None:
-            offset = offset
+            offset = da.zeros(data_f.shape[1:], chunks=-1)
         else:
             offset = da.from_zarr(self.ext_offset)
 
