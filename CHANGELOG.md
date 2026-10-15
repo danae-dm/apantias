@@ -4,6 +4,23 @@ Historical development notes for `apantias`. New entries go on top.
 
 ## Unreleased / TODO
 
+## 2026-10-15
+
+- refactored `standard.py` into a typed, lazy Dask pipeline:
+  - added `AnalysisPaths` and `AnalysisArrays` dataclasses
+  - split `StandardAnalysis` into `_load_inputs`, `_build_pipeline`, and `_save_outputs`
+  - introduced `_persist_or_store` for branch-point materialization (memory or Zarr)
+  - final outputs are now written together via `da.store`
+- made `compute.stats` functions pure (return `da.Array` instead of writing to paths)
+- made `compute.reductions.apply_pixelwise` pure and integrated it as a real stage on `data_p`
+- fixed rechunk value: axis 1 is now rechunked to `n_cols` instead of `n_rows`
+- fixed offset correction logic: `compute_offset_corr` now subtracts both the external
+  offset and the computed median; previously the median was computed but unused and the
+  external offset was passed as if it were the median
+- fixed default zero-offset shape to `(n_cols, n_rows)`
+- updated `tests/test_compute_stats.py` for the new pure-function API
+
+
 - move functions from utils to a compute module
 - edit the compute functions to use the new config
 - test a fresh run (without reusing, just recalculate everything — think about adding that later on)

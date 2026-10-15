@@ -41,7 +41,7 @@ def test_compute_median(tmp_path: Path) -> None:
     data: npt.NDArray[np.float64] = np.arange(4 * 2 * 3 * 2, dtype=np.float64).reshape(4, 2, 3, 2)
     d = _from_array(data, chunks=(4, 2, 3, 2))
     out = tmp_path / "median.zarr"
-    compute_median(d, out)
+    compute_median(d).to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
     result = _read_zarr(out)
     expected = np.median(data, axis=(0, 2))
     np.testing.assert_allclose(result, expected)
@@ -49,13 +49,15 @@ def test_compute_median(tmp_path: Path) -> None:
 
 def test_compute_offset_corr(tmp_path: Path) -> None:
     data: npt.NDArray[np.float64] = np.ones((4, 2, 3, 2), dtype=np.float64)
+    offset: npt.NDArray[np.float64] = np.zeros((2, 2), dtype=np.float64)
     median: npt.NDArray[np.float64] = np.ones((2, 2), dtype=np.float64) * 0.5
     d = _from_array(data, chunks=(4, 2, 3, 2))
+    o = _from_array(offset, chunks=(2, 2))
     m = _from_array(median, chunks=(2, 2))
     out = tmp_path / "offset_corr.zarr"
-    compute_offset_corr(d, m, out)
+    compute_offset_corr(d, o, m).to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
     result = _read_zarr(out)
-    expected = data - median[np.newaxis, :, np.newaxis, :]
+    expected = data - offset[None, :, None, :] - median[None, :, None, :]
     np.testing.assert_allclose(result, expected)
 
 
@@ -63,7 +65,7 @@ def test_compute_common_modes(tmp_path: Path) -> None:
     data: npt.NDArray[np.float64] = np.arange(4 * 2 * 3 * 2, dtype=np.float64).reshape(4, 2, 3, 2)
     d = _from_array(data, chunks=(4, 2, 3, 2))
     out = tmp_path / "common_modes.zarr"
-    compute_common_modes(d, out)
+    compute_common_modes(d).to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
     result = _read_zarr(out)
     expected = np.median(data, axis=3)
     np.testing.assert_allclose(result, expected)
@@ -75,9 +77,9 @@ def test_subtract(tmp_path: Path) -> None:
     d = _from_array(data, chunks=(2, 2, 3, 2))
     c = _from_array(common, chunks=(2, 2, 3))
     out = tmp_path / "signals.zarr"
-    subtract(d, c, out)
+    subtract(d, c).to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
     result = _read_zarr(out)
-    expected = data - common[:, :, :, np.newaxis]
+    expected = data - common[:, :, :, None]
     np.testing.assert_allclose(result, expected)
 
 
@@ -85,7 +87,7 @@ def test_compute_msd(tmp_path: Path) -> None:
     data: npt.NDArray[np.float64] = np.ones((4, 2, 3, 2), dtype=np.float64)
     d = _from_array(data, chunks=(4, 2, 3, 2))
     out = tmp_path / "msd.zarr"
-    compute_msd(d, out)
+    compute_msd(d).to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
     result = _read_zarr(out)
     np.testing.assert_allclose(result, 1.0)
 
@@ -94,7 +96,7 @@ def test_compute_signals_mean(tmp_path: Path) -> None:
     data: npt.NDArray[np.float64] = np.arange(4 * 2 * 3 * 2, dtype=np.float64).reshape(4, 2, 3, 2)
     d = _from_array(data, chunks=(4, 2, 3, 2))
     out = tmp_path / "signals_mean.zarr"
-    compute_signals_mean(d, out)
+    compute_signals_mean(d).to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
     result = _read_zarr(out)
     expected = np.mean(data, axis=2)
     np.testing.assert_allclose(result, expected)
@@ -108,6 +110,6 @@ def test_compute_slopes(tmp_path: Path) -> None:
         data[:, :, i, :] = i
     d = _from_array(data, chunks=(2, 2, nreps, 2))
     out = tmp_path / "slopes.zarr"
-    compute_slopes(d, out)
+    compute_slopes(d).to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
     result = _read_zarr(out)
     np.testing.assert_allclose(result, 1.0, atol=1e-10)
