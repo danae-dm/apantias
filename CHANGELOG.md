@@ -19,6 +19,21 @@ Historical development notes for `apantias`. New entries go on top.
   external offset was passed as if it were the median
 - fixed default zero-offset shape to `(n_cols, n_rows)`
 - updated `tests/test_compute_stats.py` for the new pure-function API
+- fixed `apply_pixelwise`: it now truly reduces per pixel, returning shape
+  `(n_cols, n_rows)` (the previous implementation passed per-row slabs of shape
+  `(n_frames, n_cols, n_reps)` to the user function and crashed with
+  scalar-returning functions at compute time)
+- added axis constants (`FRAME`, `COL`, `REP`, `ROW`) in `compute/axis.py` and
+  replaced the hardcoded axis numbers in `compute.stats`
+- tightened exception handling in `preflight_check.py`:
+  `except Exception` became `except (OSError, KeyError, ValueError)`
+- added `write_analysis_outputs_to_h5` in `io/hdf5.py`: writes all final Zarr
+  outputs into a single HDF5 archive (`AnalysisSettings.h5_archive`) as the
+  last step of `_run_analysis`; large 4D arrays use frame-sized chunks with
+  lzf (streamed frame by frame), small results are contiguous with gzip
+- added an end-to-end integration test (`tests/test_standard_analysis_integration.py`)
+  running `StandardAnalysis` on tiny synthetic data and checking every Zarr
+  output and the HDF5 archive for existence, shape and value agreement
 
 
 - move functions from utils to a compute module

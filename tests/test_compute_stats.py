@@ -11,6 +11,7 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
+from apantias.compute.reductions import apply_pixelwise
 from apantias.compute.stats import (
     compute_common_modes,
     compute_median,
@@ -113,3 +114,27 @@ def test_compute_slopes(tmp_path: Path) -> None:
     compute_slopes(d).to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
     result = _read_zarr(out)
     np.testing.assert_allclose(result, 1.0, atol=1e-10)
+
+
+def test_apply_pixelwise() -> None:
+    """apply_pixelwise reduces each pixel's time series to one scalar.
+
+    Input (n_frames, n_cols, n_reps, n_rows) chunked per pixel must produce
+    output (n_cols, n_rows), with each value computed from that pixel's
+    (n_frames, n_reps) series only.
+    """
+    n_frames, n_cols, n_reps, n_rows = 4, 2, 3, 2
+    data: npt.NDArray[np.float64] = np.arange(n_frames * n_cols * n_reps * n_rows, dtype=np.float64).reshape(
+        n_frames, n_cols, n_reps, n_rows
+    )
+    d = _from_array(data, chunks=(n_frames, 1, n_reps, 1))  # one chunk per pixel
+
+    result = apply_pixelwise(d, lambda t: t.max() - t.min())
+
+    assert result.shape == (n_cols, n_rows)
+    expected = np.empty((n_cols, n_rows), dtype=np.float64)
+    for c in range(n_cols):
+        for r in range(n_rows):
+            series = data[:, c, :, r]
+            expected[c, r] = series.max() - series.min()
+    np.testing.assert_allclose(np.asarray(result), expected)

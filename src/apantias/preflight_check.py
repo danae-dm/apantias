@@ -150,7 +150,7 @@ class PreflightValidator:
                         f"Dataset '{ds_name}' must be 4-dimensional (n_frames, n_rows, n_reps, n_cols), "
                         f"got shape {shape} with {len(shape)} dimensions."
                     )
-        except Exception as exc:
+        except (OSError, KeyError, ValueError) as exc:
             self.ctx.add_error(f"Failed to open or inspect HDF5 file '{path}': {exc}")
 
     def check_ranges_consistency(self) -> None:

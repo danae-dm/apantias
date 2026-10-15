@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "apantias"
-version = "3.0b2"
+version = "3.0b3"
 license = "MIT"
 authors = [
     { name="Florian Heinrich", email="florian@fheinrich.at" },

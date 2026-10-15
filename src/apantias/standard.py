@@ -16,6 +16,7 @@ from apantias.settings import AnalysisSettings, AppSettings, load_config
 
 from .compute import stats
 from .compute.reductions import apply_pixelwise
+from .io.hdf5 import write_analysis_outputs_to_h5
 from .io.zarr import h5_to_zarr
 from .transform.rechunk import rechunk_to_pixels
 
@@ -83,7 +84,7 @@ class StandardAnalysis:
     Data shape is (n_frames, n_cols, n_reps, n_rows).
     """
 
-    def __init__(self, path: Path | str | None = None) -> None:
+    def __init__(self, path: Path | str | AppSettings | None = None) -> None:
         if path is None:
             raw_config = load_config()
         elif isinstance(path, AppSettings):
@@ -127,6 +128,9 @@ class StandardAnalysis:
         arrays = self._build_pipeline(data_f, data_p)
         self._save_outputs(arrays)
 
+        _logger.info("Writing HDF5 archive.")
+        write_analysis_outputs_to_h5(self.paths, self.config.analysis.h5_archive)
+
     def _load_inputs(self) -> tuple[da.Array, da.Array]:
         # da.from_zarr sees the inner Zarr chunks (single-column) because the
         # frame-chunked store uses sharding. Downstream steps need full columns,
@@ -156,6 +160,9 @@ class StandardAnalysis:
 
         _logger.info("Start common mode correction.")
         common_modes = stats.compute_common_modes(offset_corr)
+        # Materialized too: it is a final output and must exist in Zarr for
+        # the archive pass, not only as an intermediate for subtract.
+        common_modes = self._persist_or_store(common_modes, self.paths.common_modes)
         signals = stats.subtract(offset_corr, common_modes)
         # Branch point: used by slopes, msd and signals_mean.
         signals = self._persist_or_store(signals, self.paths.signals)
@@ -191,7 +198,11 @@ class StandardAnalysis:
         threshold = self._in_memory_threshold()
         if 0 < arr.nbytes < threshold:
             _logger.info("Persist %s in memory (%.2f MB).", path.name, arr.nbytes / 1e6)
-            return cast(da.Array, self._client.persist(arr))
+            persisted = cast(da.Array, self._client.persist(arr))
+            # Also write the store: downstream stages read from memory, but the
+            # HDF5 archive pass needs every stage materialized in Zarr.
+            persisted.to_zarr(path, overwrite=True)
+            return persisted
 
         _logger.info("Store %s to zarr (%.2f MB).", path.name, arr.nbytes / 1e6)
         arr.to_zarr(path, overwrite=True)
@@ -220,5 +231,18 @@ class StandardAnalysis:
             self.paths.signals_mean,
             self.paths.pixelwise,
         ]
-        da.store(outputs, paths, lock=False)
+        # da.store needs writable array targets; Path objects do not support
+        # item assignment, so open one Zarr array per output first.
+        targets = [
+            zarr.open_array(
+                str(path),
+                mode="w-",
+                shape=out.shape,
+                chunks=out.chunksize,
+                dtype=out.dtype,
+                zarr_format=3,
+            )
+            for out, path in zip(outputs, paths, strict=True)
+        ]
+        da.store(outputs, targets, lock=False)
         _logger.info("Done.")
