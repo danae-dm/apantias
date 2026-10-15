@@ -5,7 +5,7 @@
 # One-time setup on PyPI (before the first release):
 #   pypi.org -> Account settings -> Publishing -> "Add a new pending publisher"
 #     - PyPI project name:  apantias
-#     - Owner:              shakamaran
+#     - Owner:              danae-dm
 #     - Repository:         apantias
 #     - Workflow filename:  python-publish.yml
 #     - Environment:        pypi

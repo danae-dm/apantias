@@ -31,5 +31,4 @@ __all__ = ["cluster", "settings", "standard"]
 # Dask's LocalCluster spawns workers via multiprocessing, where the name becomes
 # something like 'ForkProcess-1', 'SpawnPoolWorker-2', etc.
 if multiprocessing.current_process().name == "MainProcess":
-    # print(f"test APANTIAS version {__version__} loaded.")
-    print("tAPANTIAS version 3.0a2 loaded.")
+    print(f"APANTIAS version {__version__} loaded.")
