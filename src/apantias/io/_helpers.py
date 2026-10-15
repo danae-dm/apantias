@@ -1,8 +1,15 @@
+# pyright: reportUnusedFunction=false
+# The functions in this module are intentionally small, reusable helpers that are
+# imported by the other I/O submodules and exercised directly by unit tests. They
+# are not called inside this file, so Pyright's strict unused-function check is
+# disabled here rather than adding noise to every helper.
+
 """Private helpers shared across I/O modules."""
 
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 
 from apantias.settings import RangeSpec
 
@@ -38,8 +45,8 @@ def _frame_chunk_size(nreps: int, cols: int, rows: int, target_chunk_bytes: int)
 def _read_frame_batch(
     bin_file: Path,
     offset: int,
-    frame_start_indices: np.ndarray,
-    frame_end_indices: np.ndarray,
+    frame_start_indices: npt.NDArray[np.intp],
+    frame_end_indices: npt.NDArray[np.intp],
     batch_start: int,
     batch_end: int,
     nreps: int,
@@ -47,7 +54,7 @@ def _read_frame_batch(
     cols: int,
     rows: int,
     raw_row_size: int,
-) -> np.ndarray:
+) -> npt.NDArray[np.uint16]:
     """Extract one batch of frames from the binary file as a NumPy array."""
     raw_uint16 = np.memmap(bin_file, dtype="uint16", mode="r", offset=offset)
     n_complete_rows = len(raw_uint16) // raw_row_size
@@ -63,7 +70,7 @@ def _read_frame_batch(
 
 def _parse_bin_frames(
     bin_file: Path, offset: int, nreps: int, cols: int, rows: int, key_ints: int
-) -> tuple[np.ndarray, np.ndarray, int]:
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp], int]:
     """Locate the valid frame boundaries in a binary file."""
     rows_per_frame = cols * nreps
     raw_row_size = rows + key_ints

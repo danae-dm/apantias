@@ -57,7 +57,7 @@ ignore = ["F821"]
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
-typeCheckingMode = "standard"
+typeCheckingMode = "strict"
 
 
 [tool.pytest.ini_options]

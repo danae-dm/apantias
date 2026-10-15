@@ -1,10 +1,16 @@
 """Zarr codecs, path parsing, store inspection and HDF5-to-Zarr conversion."""
 
+# Dask and Zarr expose only partial type information in their shipped stubs; the
+# runtime semantics are well understood, so we relax Pyright's strict "unknown"
+# checks inside this I/O-heavy module.
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
+
 import logging
 from pathlib import Path
+from typing import Any, cast
 
 import dask.array as da
-import h5py
+import h5py  # pyright: ignore[reportMissingTypeStubs]
 import numpy as np
 import zarr
 from dask import delayed  # pyright: ignore
@@ -17,13 +23,15 @@ from zarr.codecs import (
 
 from apantias.settings import AnalysisSettings, FrameSettings
 
-from ._helpers import _frame_chunk_size, _resolve_range_indices
-from .hdf5 import _find_h5_dataset, _read_h5_batch
+# Helpers live in a package-internal helper module; the underscore signals
+# "not part of the public API" rather than "never imported elsewhere".
+from ._helpers import _frame_chunk_size, _resolve_range_indices  # pyright: ignore[reportPrivateUsage]
+from .hdf5 import _find_h5_dataset, _read_h5_batch  # pyright: ignore[reportPrivateUsage]
 
 _logger = logging.getLogger(__name__)
 
 
-def _blosc_codecs() -> list:
+def _blosc_codecs() -> list[BytesCodec | BloscCodec]:
     """Inner codec pipeline for the raw uint16 detector data.
 
     LZ4 + bitshuffle is chosen for speed: bitshuffle groups the near-constant
@@ -40,7 +48,7 @@ def _blosc_codecs() -> list:
     ]
 
 
-def _sharded_frame_codecs(inner_chunk_shape: tuple[int, ...]) -> list:
+def _sharded_frame_codecs(inner_chunk_shape: tuple[int, ...]) -> list[ShardingCodec]:
     """Codec pipeline for the frame-chunked array using a sharding codec."""
     return [
         ShardingCodec(
@@ -75,24 +83,26 @@ def _parse_zarr_path(zarr_path: str | Path) -> tuple[str, str | None, str]:
 
 def get_chunk_info(zarr_path: str) -> tuple[tuple[int, ...], tuple[int, ...] | None]:
     """Return the outer and inner chunk shape for a Zarr v3 array."""
-    z = zarr.open(zarr_path, mode="r")  # type: ignore[return-value]
+    # zarr.open may return Array or Group; this helper only makes sense for Arrays.
+    z = cast(zarr.Array[Any], zarr.open(zarr_path, mode="r"))
 
-    outer_chunk: tuple[int, ...] = z.metadata.chunk_grid.chunk_shape  # type: ignore[attr-defined]
+    # zarr's type stubs expose these attributes dynamically on the metadata object.
+    outer: tuple[int, ...] = z.metadata.chunk_grid.chunk_shape  # type: ignore[attr-defined]
 
     inner_chunk: tuple[int, ...] | None = None
     for codec in z.metadata.codecs:  # type: ignore[attr-defined]
         if hasattr(codec, "chunk_shape"):  # type: ignore[attr-defined]
-            inner_chunk = codec.chunk_shape  # type: ignore
+            inner_chunk = codec.chunk_shape  # type: ignore[attr-defined]
             break
 
-    return outer_chunk, inner_chunk  # type: ignore
+    return outer, inner_chunk
 
 
 def print_store_info(zarr_path: str) -> None:
     """Print a combined tree and chunk layout summary for a zarr store."""
 
     def _lines(
-        node: zarr.Array | zarr.Group,
+        node: zarr.Array[Any] | zarr.Group,
         prefix: str = "",
         last: bool = True,
     ) -> list[str]:
@@ -127,7 +137,8 @@ def print_store_info(zarr_path: str) -> None:
             result.extend(_lines(child, child_prefix, last=(i == len(members) - 1)))
         return result
 
-    root = zarr.open(zarr_path, mode="r")
+    # zarr.open may return Array or Group; both are handled below.
+    root: zarr.Array[Any] | zarr.Group = zarr.open(zarr_path, mode="r")  # type: ignore[assignment]
     lines = [zarr_path]
     if isinstance(root, zarr.Group):
         members = list(root.members())
@@ -155,14 +166,14 @@ def h5_to_zarr(
     with h5py.File(h5_path, "r") as f:
         if dataset_name is None:
             dataset_name = _find_h5_dataset(f)
-        ds = f[dataset_name]
-        if not isinstance(ds, h5py.Dataset):
-            raise TypeError(f"{dataset_name} is not a dataset in {h5_path}")
-        raw_nreps = ds.shape[2]
-        n_frames = ds.shape[0]
-        if ds.shape[1] != frame.cols or ds.shape[3] != frame.rows:
+        # h5py has no type stubs; cast to Dataset so shape/dtype are treated as known.
+        ds = cast(h5py.Dataset, f[dataset_name])
+        shape: tuple[int, ...] = ds.shape  # type: ignore[attr-defined]
+        raw_nreps: int = shape[2]
+        n_frames: int = shape[0]
+        if shape[1] != frame.cols or shape[3] != frame.rows:
             raise ValueError(
-                f"Unexpected frame layout {ds.shape} in {h5_path}:{dataset_name}; "
+                f"Unexpected frame layout {shape} in {h5_path}:{dataset_name}; "
                 f"expected (n_frames, {frame.cols}, nreps, {frame.rows})"
             )
 
@@ -203,7 +214,7 @@ def h5_to_zarr(
         chunk_size,
     )
 
-    blocks = []
+    blocks: list[da.Array] = []
     for batch_start in range(0, n_output_frames, chunk_size):
         batch_end = min(batch_start + chunk_size, n_output_frames)
 
@@ -211,8 +222,8 @@ def h5_to_zarr(
         h5_start = frame_indices[batch_start]
         h5_end = frame_indices[batch_end] if batch_end < n_output_frames else frame_indices[-1] + 1
 
-        block = da.from_delayed(
-            delayed(_read_h5_batch)(
+        block = da.from_delayed(  # type: ignore[reportUnknownMemberType]
+            delayed(_read_h5_batch)(  # type: ignore[reportUnknownArgumentType]
                 h5_path,
                 dataset_name,
                 h5_start,
@@ -225,8 +236,8 @@ def h5_to_zarr(
         )
         blocks.append(block)
 
-    data = da.concatenate(blocks, axis=0)
-    da.store(data, target, lock=False)
+    data: da.Array = da.concatenate(blocks, axis=0)  # type: ignore[reportUnknownMemberType]
+    da.store(data, target, lock=False)  # type: ignore[reportUnknownMemberType]
 
     _logger.info("Successfully wrote %d frames to %s", n_output_frames, zarr_path)
     return zarr_path

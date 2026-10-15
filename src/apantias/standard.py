@@ -1,5 +1,10 @@
+# Standard analysis orchestrates Dask/Zarr calls; both libraries ship incomplete
+# stubs, so strict-mode unknown-type checks are relaxed here.
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
+
 import logging
 from pathlib import Path
+from typing import cast
 
 import dask.array as da
 import zarr
@@ -63,7 +68,7 @@ class StandardAnalysis:
         self.test_array = self.temp_zarr.joinpath("test_array")
         self.median = self.temp_zarr.joinpath("median")
 
-    def run(self):
+    def run(self) -> None:
         client, cluster = self._client, self._cluster
         try:
             self._run_analysis()
@@ -71,10 +76,10 @@ class StandardAnalysis:
             client.close()
             cluster.close()
 
-    def _run_analysis(self):
+    def _run_analysis(self) -> None:
 
-        zarr.open_group(self.temp_zarr, mode="a")
-        zarr.open_group(self.zarr_data, mode="a")
+        zarr.open_group(self.temp_zarr, mode="a")  # type: ignore[reportUnknownMemberType]
+        zarr.open_group(self.zarr_data, mode="a")  # type: ignore[reportUnknownMemberType]
 
         _logger.info("Start writing bin to zarr store.")
         h5_to_zarr(self.h5_path, self.raw_data_framewise, self.config.frame, self.config.analysis)
@@ -82,35 +87,38 @@ class StandardAnalysis:
         _logger.info("Done.")
         # Load pixelwise data. This must be used for calculations along frames.
         # The pixelwise data is saved in chunks per pixel, not per frame.
-        data_p = da.from_zarr(self.raw_data_pixelwise)
+        data_p = cast(da.Array, da.from_zarr(self.raw_data_pixelwise))  # type: ignore[reportUnknownMemberType]
         # Load frame-chunked data. Dask defaults to the inner chunk shape (e.g. col=1).
         # We explicitly rechunk axis 1 (columns) to full width (64) here so that offset_corr
         # and downstream steps process full frames and don't fragment into tiny tasks.
         # This does not affect rechunk_to_pixels, which runs before this and reads
         # directly from the zarr store.
-        data_f = da.from_zarr(self.raw_data_framewise).rechunk({1: self.config.frame.n_rows})
+        data_f = cast(
+            da.Array,
+            da.from_zarr(self.raw_data_framewise).rechunk({1: self.config.frame.n_rows}),  # type: ignore[reportUnknownMemberType]
+        )
 
         _logger.info("Start calculating offset.")
         stats.compute_median(data_p, self.median)
         # load the median as dask array
-        _median = da.from_zarr(self.median)
+        _median = cast(da.Array, da.from_zarr(self.median))  # type: ignore[reportUnknownMemberType]
         _logger.info("Done.")
 
         if self.ext_offset is None:
-            offset = da.zeros(data_f.shape[1:], chunks=-1)
+            offset = da.zeros(data_f.shape[1:], chunks=-1)  # type: ignore[reportUnknownMemberType]
         else:
-            offset = da.from_zarr(self.ext_offset)
+            offset = cast(da.Array, da.from_zarr(self.ext_offset))  # type: ignore[reportUnknownMemberType]
 
         _logger.info("Start applying offset.")
         stats.compute_offset_corr(data_f, offset, self.offset_corr)
-        offset_corr = da.from_zarr(self.offset_corr)
+        offset_corr = cast(da.Array, da.from_zarr(self.offset_corr))  # type: ignore[reportUnknownMemberType]
         _logger.info("Done.")
 
         _logger.info("Start Common Mode Correction")
         stats.compute_common_modes(offset_corr, self.common_modes)
-        common_modes = da.from_zarr(self.common_modes)
+        common_modes = cast(da.Array, da.from_zarr(self.common_modes))  # type: ignore[reportUnknownMemberType]
         stats.subtract(offset_corr, common_modes, self.signals)
-        signals = da.from_zarr(self.signals)
+        signals = cast(da.Array, da.from_zarr(self.signals))  # type: ignore[reportUnknownMemberType]
         _logger.info("Done.")
 
         _logger.info("Start calculating slopes")

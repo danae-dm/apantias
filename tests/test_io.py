@@ -1,5 +1,9 @@
 """Tests for apantias.io helpers and zarr utilities."""
 
+# Tests import package-internal helpers and exercise Zarr's runtime API, which
+# has incomplete stubs in strict mode.
+# pyright: reportPrivateUsage=false, reportUnknownMemberType=false, reportUnknownVariableType=false
+
 from pathlib import Path
 
 import numpy as np
@@ -92,9 +96,7 @@ def test_parse_bin_frames(tmp_path: Path) -> None:
     arr = np.array(data_rows, dtype="uint16")
     arr.tofile(bin_file)
 
-    starts, ends, n_frames = _parse_bin_frames(
-        bin_file, offset=0, nreps=nreps, cols=cols, rows=rows, key_ints=key_ints
-    )
+    starts, ends, n_frames = _parse_bin_frames(bin_file, offset=0, nreps=nreps, cols=cols, rows=rows, key_ints=key_ints)
     assert n_frames == 2
     assert len(starts) == 2
     assert len(ends) == 2

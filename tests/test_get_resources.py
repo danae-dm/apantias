@@ -1,7 +1,5 @@
 """Tests for apantias.get_resources."""
 
-
-
 from apantias.get_resources import _parse_slurm_mem, get_resources
 
 

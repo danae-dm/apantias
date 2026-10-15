@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import yaml
+from pytest import MonkeyPatch
 
 from apantias.settings import AppSettings, RangeSpec, load_config
 
@@ -25,7 +26,7 @@ def test_appsettings_defaults() -> None:
     assert cfg.frame.nreps == 200
 
 
-def test_load_config_creates_default(tmp_path: Path, monkeypatch) -> None:
+def test_load_config_creates_default(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     # Avoid hanging on resource auto-detection in restricted environments.
     monkeypatch.setattr("apantias.get_resources.get_resources", lambda: (4, 8192))
     config_path = tmp_path / "default.yaml"

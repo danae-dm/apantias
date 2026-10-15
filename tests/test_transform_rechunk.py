@@ -1,5 +1,8 @@
 """Tests for apantias.transform.rechunk."""
 
+# Tests exercise Zarr's runtime API; its stubs are incomplete in strict mode.
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
+
 from pathlib import Path
 
 import numpy as np

@@ -1,7 +1,10 @@
 """Tests for apantias.compute.stats."""
 
+# Zarr's stubs report open_array as partially unknown in strict mode; this is a
+# test file, so we relax that check rather than cluttering each assertion.
+# pyright: reportUnknownMemberType=false
+
 from pathlib import Path
-from typing import cast
 
 import dask.array as da
 import numpy as np
@@ -21,7 +24,7 @@ from apantias.compute.stats import (
 
 def _read_zarr(path: Path) -> npt.NDArray[np.float64]:
     """Read a zarr array as a float64 ndarray."""
-    arr = cast(zarr.Array, zarr.open_array(str(path), mode="r"))
+    arr = zarr.open_array(str(path), mode="r")
     return np.asarray(arr[:], dtype=np.float64)
 
 

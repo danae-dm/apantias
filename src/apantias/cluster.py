@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 
 import dask.config
 from dask.distributed import Client, LocalCluster
@@ -37,13 +38,13 @@ def get_node_name() -> str:
     return node_name
 
 
-def init(local_dir, cores=None):
+def init(local_dir: str | Path, cores: int | None = None) -> tuple[Client, LocalCluster]:
     # initialize the config
     if cores is None:
         cores = get_resources()[0]
     else:
         cores = max(1, cores - 1)
-    local_directory = local_dir
+    local_directory = str(local_dir)
 
     # Route the Dask dashboard through JupyterHub's server proxy
     prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")

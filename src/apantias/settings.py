@@ -22,7 +22,7 @@ Add validation here later, so only sensible settings will be loaded before a run
 """
 
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast, get_origin
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -86,9 +86,9 @@ class FrameSettings(BaseModel):
 
     # Inferred from HDF5 at runtime (hidden from YAML)
     n_frames: int = Field(default=0, exclude=True, description="Total number of frames (inferred from HDF5)")
-    n_rows: int = Field(default=0, exclude=True, description="Number of frame rows (inferred from HDF5)")
-    n_cols: int = Field(default=0, exclude=True, description="Number of frame columns (inferred from HDF5)")
-    n_reps: int = Field(default=0, exclude=True, description="Number of repetitions (inferred from HDF5)")
+    n_rows: int = Field(default=64, exclude=True, description="Number of frame rows (inferred from HDF5)")
+    n_cols: int = Field(default=64, exclude=True, description="Number of frame columns (inferred from HDF5)")
+    n_reps: int = Field(default=200, exclude=True, description="Number of repetitions (inferred from HDF5)")
 
     # User-visible configuration (kept in YAML)
     target_chunk_mb: int = Field(
@@ -96,6 +96,26 @@ class FrameSettings(BaseModel):
         ge=1,
         description="Target chunk size in MB for frame writes.",
     )
+
+    # Backwards-compatible aliases used by the binary/Zarr I/O pipeline.
+    # These are simple property aliases so the public API can use the shorter
+    # names (rows/cols/nreps) while the YAML/serialised model keeps the more
+    # explicit n_* names.
+    @property
+    def rows(self) -> int:
+        return self.n_rows
+
+    @property
+    def cols(self) -> int:
+        return self.n_cols
+
+    @property
+    def nreps(self) -> int:
+        return self.n_reps
+
+    @property
+    def target_chunk_bytes(self) -> int:
+        return self.target_chunk_mb * 1024 * 1024
 
 
 class AnalysisSettings(BaseModel):
@@ -141,18 +161,22 @@ def _dump_config(cfg: AppSettings, path: Path) -> None:
     """Write default config to YAML with comments from field descriptions."""
     lines: list[str] = []
 
-    for section_name, section_data in cfg.model_dump().items():
-        model = type(getattr(cfg, section_name))
+    dumped: dict[str, Any] = cfg.model_dump()
+    for section_name, section_data in dumped.items():
+        section_value = getattr(cfg, section_name)
+        model = cast(type[BaseModel], type(section_value))
         descriptions = _get_field_descriptions(model)
 
         lines.append(f"{section_name}:")
-        for key, value in section_data.items():
+        section_dict = cast(dict[str, Any], section_data)
+        for key, value in section_dict.items():
             if key in descriptions:
                 lines.append(f"  # {descriptions[key]}")
             if isinstance(value, dict):
                 # Emit nested dicts as proper YAML blocks
                 lines.append(f"  {key}:")
-                for sub_key, sub_value in value.items():
+                nested = cast(dict[str, Any], value)
+                for sub_key, sub_value in nested.items():
                     lines.append(f"    {sub_key}: {sub_value}")
             else:
                 lines.append(f"  {key}: {value}")
@@ -177,9 +201,9 @@ def _validate_complete(data: dict[str, Any], path: Path) -> None:
             missing.append(field_name)
             continue
 
-        section_data = data[field_name]
-        origin = field_info.annotation
-        if origin is not None and issubclass(origin, BaseModel):
+        section_data = cast(dict[str, Any], data[field_name])
+        origin = get_origin(field_info.annotation)
+        if isinstance(origin, type) and issubclass(origin, BaseModel):
             for sub_name, sub_info in origin.model_fields.items():
                 # Skip internal fields marked with exclude=True
                 if sub_info.exclude:
@@ -226,10 +250,10 @@ def load_config(path: Path | None = None, *, quiet: bool = False) -> AppSettings
             print_config(cfg)
         return cfg
 
-    data = yaml.safe_load(path.read_text())
+    data: Any = yaml.safe_load(path.read_text())
     if not isinstance(data, dict):
         raise ValueError(f"Config file {path} is empty or not a mapping")
-    _validate_complete(data, path)
+    _validate_complete(cast(dict[str, Any], data), path)
     cfg = _resolve_auto(AppSettings.model_validate(data))
     if not quiet:
         print_config(cfg)
@@ -242,10 +266,13 @@ def print_config(config: AppSettings) -> None:
     print("Configuration Loaded:")
     print("=" * 50)
 
-    for section_name, section in config.model_dump().items():
+    dumped: dict[str, Any] = config.model_dump()
+    for section_name, section in dumped.items():
         print(f"\n{section_name.upper()}:")
-        descriptions = _get_field_descriptions(type(getattr(config, section_name)))
-        for field_name, value in section.items():
+        section_value = getattr(config, section_name)
+        descriptions = _get_field_descriptions(cast(type[BaseModel], type(section_value)))
+        section_dict = cast(dict[str, Any], section)
+        for field_name, value in section_dict.items():
             if field_name in descriptions:
                 print(f"  # {descriptions[field_name]}")
             print(f"  {field_name}: {value}")

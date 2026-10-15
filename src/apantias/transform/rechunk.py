@@ -1,15 +1,20 @@
+# This module is a thin orchestration layer over Zarr and Dask, both of which ship
+# incomplete type stubs. We relax strict "unknown" checks here rather than
+# cluttering every library call with an ignore comment.
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
+
 """Array rechunking transformations."""
 
 import logging
 from pathlib import Path
-from typing import cast
+from typing import Any
 
 import numpy as np
 import zarr
 from dask import delayed  # pyright: ignore
 from dask.base import compute
 
-from apantias.io.zarr import _blosc_codecs
+from apantias.io.zarr import _blosc_codecs  # pyright: ignore[reportPrivateUsage]
 
 _logger = logging.getLogger(__name__)
 
@@ -56,11 +61,11 @@ def rechunk_to_pixels(
         store_end = source_str.find(".zarr") + len(".zarr")
         source_store = source_str[:store_end]
         source_array_path = source_str[store_end:].lstrip("/")
-        source = cast(zarr.Array, zarr.open_array(source_store, path=source_array_path, mode="r"))  # type: ignore
+        source = zarr.open_array(source_store, path=source_array_path, mode="r")
     else:
         source_store = source_str
         source_array_path = ""
-        source = cast(zarr.Array, zarr.open(source_str, mode="r"))
+        source = zarr.open_array(source_str, mode="r")
 
     n_frames, n_col, n_reps, n_row = source.shape
 
@@ -80,7 +85,7 @@ def rechunk_to_pixels(
             dtype=source.dtype,
             zarr_format=3,
             codecs=_blosc_codecs(),
-        )  # type: ignore
+        )
     else:
         target_store = target_str
         target_array_path = ""
@@ -95,7 +100,7 @@ def rechunk_to_pixels(
             codecs=_blosc_codecs(),
         )
 
-    tasks = []
+    tasks: list[Any] = []
     for i in range(0, n_col, col_batch):
         task = delayed(_rechunk_col_batch)(
             source_store, source_array_path, target_store, target_array_path, i, col_batch, n_col, n_row

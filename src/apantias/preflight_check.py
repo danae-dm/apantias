@@ -17,11 +17,16 @@ How to add more checks:
     4. Register your method in the `checks` list in `validate()`.
 """
 
+# h5py ships without type stubs, so shape/dtype/visititems appear partially
+# unknown to Pyright. We keep the code explicit and relax the strict unknown checks.
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
+
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, cast
 
-import h5py
+import h5py  # pyright: ignore[reportMissingTypeStubs]
 
 from apantias.settings import AppSettings
 
@@ -67,7 +72,7 @@ class PreflightValidator:
         Returns:
             AppSettings: Copy of config with `frame` settings populated from the HDF5 shape.
         """
-        checks = [
+        checks: list[Any] = [
             self.check_h5_file_exists,
             self.check_single_dataset_and_shape,
             self.check_ranges_consistency,
@@ -117,7 +122,8 @@ class PreflightValidator:
                     if isinstance(obj, h5py.Dataset):
                         datasets.append(name)
 
-                f.visititems(visitor)
+                # h5py's visititems callback is untyped in the available stubs.
+                f.visititems(visitor)  # type: ignore[reportUnknownMemberType]
 
                 if len(datasets) == 0:
                     self.ctx.add_error(f"HDF5 file '{path}' contains no datasets.")
@@ -129,20 +135,20 @@ class PreflightValidator:
                     return
 
                 ds_name = datasets[0]
-                ds = f[ds_name]
-                if not isinstance(ds, h5py.Dataset):
-                    self.ctx.add_error(f"Object '{ds_name}' is not an HDF5 Dataset.")
-                    return
+                # h5py has no type stubs; cast so shape/dtype are treated as known below.
+                ds = cast(h5py.Dataset, f[ds_name])
+                shape: tuple[int, ...] = ds.shape  # type: ignore[attr-defined]
+                dtype: str = str(ds.dtype)  # type: ignore[attr-defined]
 
                 self.ctx.dataset_name = ds_name
-                self.ctx.dataset_shape = ds.shape
-                self.ctx.dataset_dtype = str(ds.dtype)
+                self.ctx.dataset_shape = shape
+                self.ctx.dataset_dtype = dtype
 
                 # Expect 4D: (n_frames, n_rows, n_reps, n_cols)
-                if len(ds.shape) != 4:
+                if len(shape) != 4:
                     self.ctx.add_error(
                         f"Dataset '{ds_name}' must be 4-dimensional (n_frames, n_rows, n_reps, n_cols), "
-                        f"got shape {ds.shape} with {len(ds.shape)} dimensions."
+                        f"got shape {shape} with {len(shape)} dimensions."
                     )
         except Exception as exc:
             self.ctx.add_error(f"Failed to open or inspect HDF5 file '{path}': {exc}")
