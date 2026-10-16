@@ -85,9 +85,16 @@ class FrameSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
 
     # Inferred from HDF5 at runtime (hidden from YAML)
+    # Array layout (see README): (n_frames, n_rows, n_reps, n_cols) — n_rows is
+    # the number of readout lines per frame (axis 1), n_cols the pixels per
+    # readout line (axis 3).
     n_frames: int = Field(default=0, exclude=True, description="Total number of frames (inferred from HDF5)")
-    n_rows: int = Field(default=64, exclude=True, description="Number of frame rows (inferred from HDF5)")
-    n_cols: int = Field(default=64, exclude=True, description="Number of frame columns (inferred from HDF5)")
+    n_rows: int = Field(
+        default=64, exclude=True, description="Readout lines per frame, array axis 1 (inferred from HDF5)"
+    )
+    n_cols: int = Field(
+        default=64, exclude=True, description="Pixels per readout line, array axis 3 (inferred from HDF5)"
+    )
     n_reps: int = Field(default=200, exclude=True, description="Number of repetitions (inferred from HDF5)")
 
     # User-visible configuration (kept in YAML)
@@ -258,6 +265,13 @@ def load_config(path: Path | None = None, *, quiet: bool = False) -> AppSettings
     if not quiet:
         print_config(cfg)
     return cfg
+
+
+def resolve_config(source: Path | str | AppSettings | None = None) -> AppSettings:
+    """Load settings from a YAML path, or return an existing AppSettings unchanged."""
+    if isinstance(source, AppSettings):
+        return source
+    return load_config(None if source is None else Path(source))
 
 
 def print_config(config: AppSettings) -> None:

@@ -26,7 +26,7 @@ def test_rechunk_to_pixels(tmp_path: Path) -> None:
     arr = zarr.open_array(str(source), mode="r+")
     arr[:] = data
 
-    rechunk_to_pixels(source, target, col_batch=2)
+    rechunk_to_pixels(source, target, row_batch=2)
 
     result = zarr.open_array(str(target), mode="r")[:]
     np.testing.assert_array_equal(result, data)

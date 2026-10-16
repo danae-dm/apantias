@@ -1,5 +1,6 @@
 """Statistical and generic reductions on Dask arrays."""
 
+from .materialize import Materializer
 from .reductions import apply_pixelwise
 from .stats import (
     compute_common_modes,
@@ -12,6 +13,7 @@ from .stats import (
 )
 
 __all__ = [
+    "Materializer",
     "apply_pixelwise",
     "compute_common_modes",
     "compute_median",

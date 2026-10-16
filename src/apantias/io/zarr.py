@@ -171,25 +171,25 @@ def h5_to_zarr(
         shape: tuple[int, ...] = ds.shape  # type: ignore[attr-defined]
         raw_nreps: int = shape[2]
         n_frames: int = shape[0]
-        if shape[1] != frame.cols or shape[3] != frame.rows:
+        if shape[1] != frame.rows or shape[3] != frame.cols:
             raise ValueError(
                 f"Unexpected frame layout {shape} in {h5_path}:{dataset_name}; "
-                f"expected (n_frames, {frame.cols}, nreps, {frame.rows})"
+                f"expected (n_frames, {frame.rows}, nreps, {frame.cols})"
             )
 
     # Resolve nreps slice from analysis settings
     nreps_indices = _resolve_range_indices(analysis.nreps_range, raw_nreps)
     eval_nreps = len(nreps_indices)
 
-    chunk_size = _frame_chunk_size(eval_nreps, frame.cols, frame.rows, frame.target_chunk_bytes)
+    chunk_size = _frame_chunk_size(eval_nreps, frame.rows, frame.cols, frame.target_chunk_bytes)
 
     # Resolve frame indices from analysis settings
     frame_indices = _resolve_range_indices(analysis.frames_range, n_frames)
     n_output_frames = len(frame_indices)
 
-    array_shape = (n_output_frames, frame.cols, eval_nreps, frame.rows)
-    chunk_shape = (chunk_size, frame.cols, eval_nreps, frame.rows)
-    inner_chunk_shape = (chunk_size, 1, eval_nreps, frame.rows)
+    array_shape = (n_output_frames, frame.rows, eval_nreps, frame.cols)
+    chunk_shape = (chunk_size, frame.rows, eval_nreps, frame.cols)
+    inner_chunk_shape = (chunk_size, 1, eval_nreps, frame.cols)
 
     full_array_path = (
         f"{store_path}/{group_path}/{output_dataset_name}" if group_path else f"{store_path}/{output_dataset_name}"
@@ -231,7 +231,7 @@ def h5_to_zarr(
                 frame_indices=frame_indices,
                 nreps_indices=nreps_indices,
             ),
-            shape=(batch_end - batch_start, frame.cols, eval_nreps, frame.rows),
+            shape=(batch_end - batch_start, frame.rows, eval_nreps, frame.cols),
             dtype=np.uint16,
         )
         blocks.append(block)

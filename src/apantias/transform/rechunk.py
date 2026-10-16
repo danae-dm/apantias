@@ -19,38 +19,38 @@ from apantias.io.zarr import _blosc_codecs  # pyright: ignore[reportPrivateUsage
 _logger = logging.getLogger(__name__)
 
 
-def _rechunk_col_batch(
+def _rechunk_row_batch(
     source_store: str,
     source_array_path: str,
     target_store: str,
     target_array_path: str,
-    col: int,
-    col_batch: int,
-    n_col: int,
-    n_row: int,
+    row: int,
+    row_batch: int,
+    n_rows: int,
+    n_cols: int,
 ) -> None:
-    """Worker: read a ``col_batch``-wide column band, write single-pixel chunks."""
+    """Worker: read a ``row_batch``-wide row band, write single-pixel chunks."""
     source = zarr.open_array(source_store, path=source_array_path, mode="r")
     target = zarr.open_array(target_store, path=target_array_path, mode="r+")
 
-    col_end = min(col + col_batch, n_col)
-    band = np.asarray(source[:, col:col_end, :, :])  # (n_frames, col_batch, n_reps, n_row)
+    row_end = min(row + row_batch, n_rows)
+    band = np.asarray(source[:, row:row_end, :, :])  # (n_frames, row_batch, n_reps, n_cols)
 
-    for c in range(col_end - col):
-        for j in range(n_row):
+    for r in range(row_end - row):
+        for j in range(n_cols):
             # Each write targets exactly one pixel chunk -> conflict-free.
-            target[:, col + c, :, j] = band[:, c, :, j]
+            target[:, row + r, :, j] = band[:, r, :, j]
 
 
 def rechunk_to_pixels(
     source_path: str | Path,
     target_path: str | Path,
-    col_batch: int = 1,
+    row_batch: int = 1,
 ) -> None:
     """
     Rechunks a zarr store so that each chunk holds all frames and all readouts
     for a single spatial pixel. The target chunk shape is
-    ``(n_frames, 1, n_reps, 1)`` — i.e. one chunk per (column, row) pixel.
+    ``(n_frames, 1, n_reps, 1)`` — i.e. one chunk per (row, column) pixel.
     """
     source_path = Path(source_path)
     target_path = Path(target_path)
@@ -67,7 +67,7 @@ def rechunk_to_pixels(
         source_array_path = ""
         source = zarr.open_array(source_str, mode="r")
 
-    n_frames, n_col, n_reps, n_row = source.shape
+    n_frames, n_rows, n_reps, n_cols = source.shape
 
     # Parse target path to extract store and array path
     target_str = str(target_path)
@@ -101,9 +101,9 @@ def rechunk_to_pixels(
         )
 
     tasks: list[Any] = []
-    for i in range(0, n_col, col_batch):
-        task = delayed(_rechunk_col_batch)(
-            source_store, source_array_path, target_store, target_array_path, i, col_batch, n_col, n_row
+    for i in range(0, n_rows, row_batch):
+        task = delayed(_rechunk_row_batch)(
+            source_store, source_array_path, target_store, target_array_path, i, row_batch, n_rows, n_cols
         )
         tasks.append(task)
 

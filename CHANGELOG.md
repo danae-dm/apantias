@@ -4,6 +4,27 @@ Historical development notes for `apantias`. New entries go on top.
 
 ## Unreleased / TODO
 
+## 2026-10-16
+
+- standardized the array convention to `(n_frames, n_rows, n_reps, n_cols)` (the README
+  layout) in names as well as positions: axis 1 (`n_rows`) is the number of readout
+  lines per frame, axis 3 (`n_cols`) the pixels per readout line. The previous internal
+  naming had `cols`/`rows` swapped relative to these meanings; the on-disk byte layout
+  is unchanged, so existing HDF5/Zarr data stay valid
+- fixed frame-key sentinel detection in `_parse_bin_frames`: the sentinel was looked up
+  at word index `cols`, which is only correct when rows == cols; it now uses the pixel
+  word count per line (this is a behaviour fix for asymmetric detectors)
+- renamed HDF5 dataset attrs `column_size`/`row_size` to `n_rows`/`n_cols` (attrs were
+  never read by the code)
+- renamed `rechunk_to_pixels(col_batch=...)` and its internal helper to `row_batch/...`
+- fixed final-output writing: `_save_outputs` passed `Path` objects to the batch
+  form of `da.store`, which requires array targets (`'PosixPath' object does not
+  support item assignment` on the workers); it now opens a zarr array per output
+  (matching chunks, overwrite) before storing
+- added asymmetric-dimension regression tests for binary frame parsing and the
+  raw-to-4D mapping
+- added regression tests for batch `da.store` into zarr output arrays
+
 ## 2026-10-15
 
 - refactored `standard.py` into a typed, lazy Dask pipeline:

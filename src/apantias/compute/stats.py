@@ -14,17 +14,18 @@ def compute_median(data_p: da.Array) -> da.Array:
 
 
 def compute_offset_corr(data_f: da.Array, offset: da.Array, median: da.Array) -> da.Array:
-    # Both offset and median have shape (n_cols, n_rows) and broadcast into
-    # the 4D frame array as (1, n_cols, 1, n_rows).
+    # Both offset and median have shape (n_rows, n_cols) and broadcast into
+    # the 4D frame array as (1, n_rows, 1, n_cols).
     return data_f - offset[None, :, None, :] - median[None, :, None, :]  # type: ignore[reportUnknownVariableType]
 
 
 def compute_common_modes(data: da.Array) -> da.Array:
+    # Median over axis 3: the n_cols pixel values of a single readout.
     return da.median(data, axis=3)  # type: ignore[reportUnknownMemberType]
 
 
 def compute_slopes(data: da.Array) -> da.Array:
-    # shape is (frames, columns, nreps, rows)
+    # shape is (frames, rows, nreps, columns)
     n = data.shape[2]  # nreps is axis 2
     x = np.arange(n, dtype=np.float64)  # plain NumPy, tiny
     x_dev = x - x.mean()  # plain NumPy
@@ -43,7 +44,7 @@ def subtract(data: da.Array, common_modes: da.Array) -> da.Array:
 def compute_msd(data: da.Array) -> da.Array:
     squared_diff = data**2  # type: ignore[reportUnknownVariableType]
     msd_array: da.Array = da.mean(squared_diff, axis=(0, 2))  # type: ignore[reportUnknownMemberType]
-    # Output is tiny (n_cols, n_rows); one chunk is fine.
+    # Output is tiny (n_rows, n_cols); one chunk is fine.
     return msd_array.rechunk(-1)  # type: ignore[reportUnknownMemberType]
 
 

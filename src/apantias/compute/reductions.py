@@ -18,7 +18,7 @@ def apply_pixelwise(data: da.Array, func: Callable[[npt.NDArray[Any]], Any]) -> 
     Parameters
     ----------
     data : da.Array
-        Pixelwise data of shape (n_frames, n_cols, n_reps, n_rows), chunked
+        Pixelwise data of shape (n_frames, n_rows, n_reps, n_cols), chunked
         as (n_frames, 1, n_reps, 1) — one chunk per spatial pixel.
     func : callable
         User function that takes a chunk of shape (n_frames, n_reps) and

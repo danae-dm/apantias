@@ -20,7 +20,9 @@ is started.
 ## Data layout
 
 Arrays are stored as `(n_frames, n_rows, n_reps, n_cols)`, indexed as
-`(frame_idx, row_idx, rep_idx, col_idx)`. Raw data is stored as `uint16`.
+`(frame_idx, row_idx, rep_idx, col_idx)`. `n_rows` is the number of readout
+lines per frame (axis 1); `n_cols` is the pixels per readout line (axis 3).
+Raw data is stored as `uint16`.
 
 ## Requirements
 

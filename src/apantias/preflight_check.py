@@ -5,10 +5,21 @@ heavy computational resources (such as Dask clusters or Zarr stores) are allocat
 
 Key responsibilities:
     1. Inspects the HDF5 input file and confirms it contains exactly one 4D dataset.
-    2. Infers frame dimensions (n_frames, n_rows, n_cols, n_reps) from the shape.
+    2. Infers frame dimensions (n_frames, n_rows, n_reps, n_cols) from the shape.
     3. Validates analysis boundaries (frames_range, nreps_range, external offset).
     4. Prints and logs a clear summary of the discovered dataset and applied settings.
     5. Fails fast with an aggregated error report if any inconsistencies exist.
+
+Axis layout assumption:
+    The shape is interpreted positionally as (n_frames, n_rows, n_reps, n_cols)
+    (see README "Data layout"). Only the dimensionality is verified here; the
+    axis *order* is assumed, not checked. For symmetric dimensions (e.g. 64x64)
+    a transposed input is undetectable from shapes alone, and for asymmetric
+    data it would run through the whole pipeline with the two spatial axes
+    silently swapped in every output map. Datasets written by `bin_to_h5`
+    always follow the documented layout (and carry matching n_rows/n_cols
+    attrs). If an H5 file originates elsewhere, it is the user's responsibility
+    to ensure its axes are in the documented order before running the analysis.
 
 How to add more checks:
     1. Define a check method on `PreflightValidator`, e.g. `check_disk_space(self) -> None`.

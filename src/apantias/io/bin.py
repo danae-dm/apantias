@@ -38,14 +38,14 @@ def bin_to_h5(
     h5_path = Path(h5_path)
 
     frame_start_indices, frame_end_indices, n_frames = _parse_bin_frames(
-        bin_path, offset, nreps, frame.cols, frame.rows, key_ints
+        bin_path, offset, nreps, frame.rows, frame.cols, key_ints
     )
     _logger.info("Found %d valid frames in %s", n_frames, bin_path)
 
-    chunk_size = _frame_chunk_size(nreps, frame.cols, frame.rows, frame.target_chunk_bytes)
+    chunk_size = _frame_chunk_size(nreps, frame.rows, frame.cols, frame.target_chunk_bytes)
     filters = hdf5plugin.Blosc(cname="lz4", clevel=5, shuffle=1)
-    shape = (n_frames, frame.cols, nreps, frame.rows)
-    chunk_shape = (chunk_size, frame.cols, nreps, frame.rows)
+    shape = (n_frames, frame.rows, nreps, frame.cols)
+    chunk_shape = (chunk_size, frame.rows, nreps, frame.cols)
 
     # Keep all reps (no slice)
     nreps_slice = slice(None)
@@ -58,9 +58,9 @@ def bin_to_h5(
         ds.attrs["nreps"] = nreps
         ds.attrs["offset"] = offset
         ds.attrs["n_frames"] = n_frames
-        ds.attrs["column_size"] = frame.cols
-        ds.attrs["row_size"] = frame.rows
-        ds.attrs["raw_row_size"] = frame.rows + key_ints
+        ds.attrs["n_rows"] = frame.rows
+        ds.attrs["n_cols"] = frame.cols
+        ds.attrs["raw_row_size"] = frame.cols + key_ints
 
         # Build delayed tasks — one per batch
         delayed_tasks: list[Any] = []
@@ -77,9 +77,9 @@ def bin_to_h5(
                     frame_end_indices,
                     nreps,
                     nreps_slice,
-                    frame.cols,
                     frame.rows,
-                    frame.rows + key_ints,
+                    frame.cols,
+                    frame.cols + key_ints,
                 )
             )
 
@@ -100,8 +100,8 @@ def _write_h5_batch(
     frame_end_indices: npt.NDArray[np.intp],
     nreps: int,
     nreps_slice: slice,
-    cols: int,
     rows: int,
+    cols: int,
     raw_row_size: int,
 ) -> None:
     """Read one batch from binary and write it to a pre-opened h5py dataset."""
@@ -114,8 +114,8 @@ def _write_h5_batch(
         end,
         nreps,
         nreps_slice,
-        cols,
         rows,
+        cols,
         raw_row_size,
     )
     ds[start:end] = batch
