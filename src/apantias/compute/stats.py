@@ -13,10 +13,11 @@ def compute_median(data_p: da.Array) -> da.Array:
     return median_array.rechunk(-1)  # type: ignore[reportUnknownMemberType]
 
 
-def compute_offset_corr(data_f: da.Array, offset: da.Array, median: da.Array) -> da.Array:
-    # Both offset and median have shape (n_rows, n_cols) and broadcast into
-    # the 4D frame array as (1, n_rows, 1, n_cols).
-    return data_f - offset[None, :, None, :] - median[None, :, None, :]  # type: ignore[reportUnknownVariableType]
+def compute_offset_corr(data_f: da.Array, offset: da.Array) -> da.Array:
+    # offset has shape (n_rows, n_cols) and broadcasts into the 4D frame array
+    # as (1, n_rows, 1, n_cols). It is either the external offset map or the
+    # internally computed per-pixel median (the "own" offset) — never both.
+    return data_f - offset[None, :, None, :]  # type: ignore[reportUnknownVariableType]
 
 
 def compute_common_modes(data: da.Array) -> da.Array:

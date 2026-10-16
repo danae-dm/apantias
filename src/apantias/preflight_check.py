@@ -38,7 +38,9 @@ from pathlib import Path
 from typing import Any, cast
 
 import h5py  # pyright: ignore[reportMissingTypeStubs]
+import zarr
 
+from apantias.io.hdf5 import split_h5_dataset_path
 from apantias.settings import AppSettings
 
 _logger = logging.getLogger(__name__)
@@ -59,6 +61,7 @@ class PreflightContext:
     dataset_name: str | None = None
     dataset_shape: tuple[int, ...] | None = None
     dataset_dtype: str | None = None
+    ext_offset_shape: tuple[int, ...] | None = None
 
     def add_error(self, message: str) -> None:
         """Record an error without raising immediately, allowing batch reporting."""
@@ -213,12 +216,95 @@ class PreflightValidator:
             )
 
     def check_external_offset(self) -> None:
-        """Verify the external offset path exists if configured."""
+        """Verify the external offset (zarr store or HDF5 dataset) exists and fits the data."""
         ext = self.ctx.config.analysis.ext_offset
-        if ext is not None and str(ext) != "None":
-            ext_path = Path(ext)
-            if not ext_path.exists():
-                self.ctx.add_error(f"External offset path does not exist: {ext_path}")
+        if ext is None or str(ext) == "None":
+            return
+
+        h5_ref = split_h5_dataset_path(ext)
+        if h5_ref is None:
+            self._check_zarr_ext_offset(Path(ext))
+        else:
+            self._check_h5_ext_offset(*h5_ref)
+        self._check_ext_offset_shape()
+
+    def _check_h5_ext_offset(self, file_path: Path, dataset_name: str) -> None:
+        """Verify the external offset HDF5 file/dataset exist and record their shape."""
+        if not file_path.is_file():
+            self.ctx.add_error(f"External offset HDF5 file does not exist: {file_path}")
+            return
+        try:
+            with h5py.File(file_path, "r") as f:
+                if dataset_name:
+                    if dataset_name not in f or not isinstance(f[dataset_name], h5py.Dataset):
+                        self.ctx.add_error(
+                            f"External offset dataset '{dataset_name}' not found in HDF5 file: {file_path}"
+                        )
+                        return
+                    ds = cast(h5py.Dataset, f[dataset_name])
+                else:
+                    # No dataset path given: the file must hold exactly one dataset.
+                    datasets: list[str] = []
+
+                    def visitor(name: str, obj: object) -> None:
+                        if isinstance(obj, h5py.Dataset):
+                            datasets.append(name)
+
+                    f.visititems(visitor)
+                    if len(datasets) != 1:
+                        self.ctx.add_error(
+                            f"External offset HDF5 file '{file_path}' must contain exactly 1 dataset when no "
+                            f"dataset path is given, but found {len(datasets)}: {datasets}"
+                        )
+                        return
+                    ds = cast(h5py.Dataset, f[datasets[0]])
+                shape: tuple[int, ...] = ds.shape  # type: ignore[attr-defined]
+                self.ctx.ext_offset_shape = shape
+        except Exception as exc:
+            self.ctx.add_error(f"Failed to open external offset HDF5 file '{file_path}': {exc}")
+
+    def _check_zarr_ext_offset(self, ext_path: Path) -> None:
+        """Verify the external offset zarr array exists and record its shape."""
+        if not ext_path.exists():
+            self.ctx.add_error(f"External offset path does not exist: {ext_path}")
+            return
+
+        path_str = str(ext_path)
+        if ".zarr" not in path_str:
+            # Neither HDF5 nor zarr: existence is all we can verify here.
+            return
+        # Split "store.zarr/group/array" so nested array paths resolve the same
+        # way they are loaded in StandardAnalysis._load_offset.
+        store_end = path_str.find(".zarr") + len(".zarr")
+        store = path_str[:store_end]
+        component = path_str[store_end:].lstrip("/") or None
+        try:
+            # component=None (bare store.zarr root array) is valid at runtime;
+            # zarr's stubs only type the parameter as PathLike.
+            node = zarr.open_array(store=store, path=component, mode="r")  # type: ignore[arg-type]
+            self.ctx.ext_offset_shape = tuple(node.shape)
+        except Exception as exc:
+            self.ctx.add_error(f"Failed to open external offset zarr array '{ext_path}': {exc}")
+
+    def _check_ext_offset_shape(self) -> None:
+        """Verify the offset shape broadcasts onto the effective frame layout.
+
+        Allowed shapes are (n_rows, n_cols) and (n_rows, n_reps, n_cols), where
+        n_reps is the number of repetitions *selected* by nreps_range (the
+        pipeline applies the range before the offset is subtracted).
+        """
+        shape = self.ctx.ext_offset_shape
+        if shape is None or self.ctx.dataset_shape is None or len(self.ctx.dataset_shape) != 4:
+            return
+        _n_frames, n_rows, raw_n_reps, n_cols = self.ctx.dataset_shape
+        n_reps = self.ctx.config.analysis.nreps_range.count(raw_n_reps)
+        if shape == (n_rows, n_cols) or shape == (n_rows, n_reps, n_cols):
+            return
+        self.ctx.add_error(
+            f"External offset shape {shape} cannot be applied to the data: expected "
+            f"({n_rows}, {n_cols}) or ({n_rows}, {n_reps}, {n_cols}) for dataset shape "
+            f"(n_frames, {n_rows}, n_reps, {n_cols}) with nreps_range selecting {n_reps} reps."
+        )
 
     def _populate_frame_settings(self) -> AppSettings:
         """Create an AppSettings copy populated with all 4 dimensions and resolved slice ranges."""
@@ -257,12 +343,22 @@ class PreflightValidator:
         n_selected_frames = analysis.frames_range.count(n_frames)
         n_selected_reps = analysis.nreps_range.count(n_reps)
 
+        ext_offset = analysis.ext_offset
+        ext_offset_line = None
+        if ext_offset is not None and str(ext_offset) != "None":
+            shape_str = str(self.ctx.ext_offset_shape) if self.ctx.ext_offset_shape is not None else "unknown"
+            ext_offset_line = f"  Ext offset:  {ext_offset} (shape={shape_str})"
+
         summary_lines = [
             "\n" + "=" * 50,
             f"Preflight Check: {analysis.h5_file}",
             "=" * 50,
             f"  Dataset:     '{self.ctx.dataset_name}' (dtype: {self.ctx.dataset_dtype})",
             f"  H5 Shape:    (n_frames={n_frames}, n_rows={n_rows}, n_reps={n_reps}, n_cols={n_cols})",
+        ]
+        if ext_offset_line is not None:
+            summary_lines.append(ext_offset_line)
+        summary_lines.extend([
             "",
             "Frame Settings Applied:",
             f"  n_frames:    {config.frame.n_frames}",
@@ -276,7 +372,7 @@ class PreflightValidator:
             f"  Reps:        {analysis.nreps_range.start} to {analysis.nreps_range.stop} "
             f"(of {n_reps} total, step={analysis.nreps_range.step}) -> {n_selected_reps} selected",
             "=" * 50 + "\n",
-        ]
+        ])
         summary_text = "\n".join(summary_lines)
         print(summary_text)
         _logger.info("Preflight check passed for %s: shape %s", analysis.h5_file, self.ctx.dataset_shape)

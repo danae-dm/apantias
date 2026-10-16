@@ -13,7 +13,9 @@ from pathlib import Path
 from typing import Any
 
 import h5py  # pyright: ignore[reportMissingTypeStubs]
+import numpy as np
 import yaml
+import zarr
 from pydantic import BaseModel
 
 from apantias.settings import AppSettings
@@ -43,7 +45,7 @@ def _model_dump_recursive(obj: object) -> Any:
     return obj
 
 
-def archive(config: AppSettings, outputs: Sequence[tuple[str, Any]]) -> None:
+def archive(config: AppSettings, outputs: Sequence[tuple[str, Path]]) -> None:
     """Archive analysis outputs and settings into a single HDF5 file.
 
     Parameters
@@ -51,19 +53,21 @@ def archive(config: AppSettings, outputs: Sequence[tuple[str, Any]]) -> None:
     config : AppSettings
         Full application settings; used to determine the archive path and are
         serialized into the file.
-    outputs : sequence of (name, dask array) pairs
-        Final pipeline outputs. Each array is computed to a NumPy array before
-        writing because h5py cannot store lazy Dask arrays.
+    outputs : sequence of (name, zarr path) pairs
+        Final pipeline outputs as previously stored to their zarr locations by
+        the analysis. Each array is read back from disk — nothing is
+        recomputed — and written to the HDF5 archive.
     """
     archive_path = Path(config.analysis.h5_archive)
     archive_path.parent.mkdir(parents=True, exist_ok=True)
 
     _logger.info("Writing analysis archive to %s", archive_path)
     with h5py.File(archive_path, "a") as f:
-        for name, arr in outputs:
+        for name, path in outputs:
             if name in f:
                 del f[name]
-            f.create_dataset(name, data=arr.compute())
+            data = np.asarray(zarr.open_array(str(path), mode="r"))
+            f.create_dataset(name, data=data)
 
         settings_yaml = yaml.dump(_model_dump_recursive(config))
         if "settings" in f:

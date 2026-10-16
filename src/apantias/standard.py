@@ -25,6 +25,7 @@ from apantias.cluster import init
 from apantias.compute import stats
 from apantias.compute.materialize import Materializer
 from apantias.compute.reductions import apply_pixelwise
+from apantias.io.hdf5 import load_h5_dataset, split_h5_dataset_path
 from apantias.io.paths import AnalysisPaths
 from apantias.io.zarr import h5_to_zarr
 from apantias.preflight_check import PreflightValidator
@@ -75,7 +76,9 @@ class StandardAnalysis:
         self.config = PreflightValidator(resolve_config(path)).validate()
 
         # Dask cluster starts only after inputs are proven valid
-        self._client, self._cluster = init(self.config.runtime.dask_temp, self.config.runtime.cpus)
+        self._client, self._cluster = init(
+            self.config.runtime.dask_temp, self.config.runtime.cpus, self.config.runtime.ram_mb
+        )
 
         self.paths = AnalysisPaths.from_settings(self.config.analysis)
         self._materializer = Materializer(self._client, self.config.runtime.ram_mb)
@@ -91,7 +94,10 @@ class StandardAnalysis:
         client, cluster = self._client, self._cluster
         try:
             self._run_analysis()
-            archive(self.config, self.arrays.final_outputs())
+            # The final outputs are already stored to zarr by _save_outputs;
+            # archive reads them back from disk instead of recomputing.
+            outputs = [(name, self.paths.path_for(name)) for name, _ in self.arrays.final_outputs()]
+            archive(self.config, outputs)
         finally:
             client.close()
             cluster.close()
@@ -122,10 +128,24 @@ class StandardAnalysis:
         data_p = cast(da.Array, da.from_zarr(self.paths.raw_pixelwise))
         return data_f, data_p
 
-    def _load_offset(self) -> da.Array:
+    def _load_offset(self, median: da.Array) -> da.Array:
+        """Return the offset map to subtract.
+
+        The external offset map if configured, otherwise the "own" offset:
+        the per-pixel median across all frames computed in the previous step.
+        """
         if self.ext_offset is None:
-            # Shape (n_rows, n_cols) broadcasts into the 4D frame array.
-            return da.zeros((self.config.frame.n_rows, self.config.frame.n_cols), chunks=-1)
+            return median
+        h5_ref = split_h5_dataset_path(self.ext_offset)
+        if h5_ref is not None:
+            return load_h5_dataset(*h5_ref)
+        # Split "store.zarr/group/array" so nested array paths resolve correctly;
+        # a bare store.zarr whose root is an array loads with component=None.
+        path_str = str(self.ext_offset)
+        if ".zarr" in path_str:
+            store_end = path_str.find(".zarr") + len(".zarr")
+            component = path_str[store_end:].lstrip("/")
+            return cast(da.Array, da.from_zarr(path_str[:store_end], component=component or None))
         return cast(da.Array, da.from_zarr(self.ext_offset))
 
     def _build_pipeline(self, data_f: da.Array, data_p: da.Array) -> AnalysisArrays:
@@ -133,8 +153,8 @@ class StandardAnalysis:
         median = stats.compute_median(data_p)
 
         _logger.info("Start applying offset.")
-        offset = self._load_offset()
-        offset_corr = stats.compute_offset_corr(data_f, offset, median)
+        offset = self._load_offset(median)
+        offset_corr = stats.compute_offset_corr(data_f, offset)
         # Branch point: used by common_modes and subtract.
         offset_corr = self._materializer.persist_or_store(offset_corr, self.paths.offset_corr)
 

@@ -23,6 +23,8 @@ Historical development notes for `apantias`. New entries go on top.
   (matching chunks, overwrite) before storing
 - added asymmetric-dimension regression tests for binary frame parsing and the
   raw-to-4D mapping
+- archive no longer recomputes: it takes (name, zarr path) pairs and reads the
+  outputs back from their stored zarr locations
 - added regression tests for batch `da.store` into zarr output arrays
 
 ## 2026-10-15

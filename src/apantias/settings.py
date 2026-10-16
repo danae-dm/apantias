@@ -137,7 +137,10 @@ class AnalysisSettings(BaseModel):
         description="Path to zarr temp storage, use fast storage options here",
     )
     h5_archive: Path = Field(default=Path("archive.h5"), description="Path to h5 archive")
-    ext_offset: Path | None = Field(default=None, description="Path to ext offset")
+    ext_offset: Path | None = Field(
+        default=None,
+        description="Path to ext offset: a zarr store, or an HDF5 dataset ('offsets.h5/internal/dataset/path')",
+    )
     nreps_range: RangeSpec = Field(
         default=RangeSpec(start=0, stop=-1, step=1), description="Nreps range [start, stop, step] default stop=-1"
     )

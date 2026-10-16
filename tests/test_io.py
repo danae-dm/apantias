@@ -6,6 +6,8 @@
 
 from pathlib import Path
 
+import cloudpickle  # pyright: ignore[reportMissingTypeStubs]
+import h5py  # pyright: ignore[reportMissingTypeStubs]
 import numpy as np
 import pytest
 import zarr
@@ -16,6 +18,7 @@ from apantias.io._helpers import (
     _read_frame_batch,
     _resolve_range_indices,
 )
+from apantias.io.hdf5 import load_h5_dataset, split_h5_dataset_path
 from apantias.io.zarr import _blosc_codecs, _parse_zarr_path, get_chunk_info
 from apantias.settings import RangeSpec
 
@@ -50,6 +53,62 @@ def test_parse_zarr_path_no_group() -> None:
 def test_parse_zarr_path_missing_dot_zarr() -> None:
     with pytest.raises(ValueError, match=".zarr"):
         _parse_zarr_path("/tmp/data.h5/dataset")
+
+
+def test_split_h5_dataset_path() -> None:
+    assert split_h5_dataset_path("/tmp/offsets.h5/group/ds") == (Path("/tmp/offsets.h5"), "group/ds")
+    assert split_h5_dataset_path("/tmp/offsets.H5/ds") == (Path("/tmp/offsets.H5"), "ds")
+    assert split_h5_dataset_path("/tmp/offsets.hdf5/group/ds") == (Path("/tmp/offsets.hdf5"), "group/ds")
+    # No dataset part: auto-detect the single dataset in the file.
+    assert split_h5_dataset_path(Path("/tmp/offsets.h5")) == (Path("/tmp/offsets.h5"), "")
+    # Zarr stores are not HDF5 references.
+    assert split_h5_dataset_path("/tmp/store.zarr/array") is None
+
+
+def test_load_h5_dataset(tmp_path: Path) -> None:
+    h5_file = tmp_path / "offsets.h5"
+    data = np.arange(12, dtype="float64").reshape(3, 4)
+    with h5py.File(h5_file, "w") as f:
+        f.create_dataset("offset", data=data)
+
+    arr = load_h5_dataset(h5_file, "offset")
+    assert arr.shape == (3, 4)
+    np.testing.assert_array_equal(np.asarray(arr), data)
+
+
+def test_load_h5_dataset_auto_detect(tmp_path: Path) -> None:
+    h5_file = tmp_path / "single.h5"
+    data = np.ones((2, 2))
+    with h5py.File(h5_file, "w") as f:
+        f.create_dataset("only", data=data)
+
+    arr = load_h5_dataset(h5_file)
+    np.testing.assert_array_equal(np.asarray(arr), data)
+
+
+def test_load_h5_dataset_missing_dataset(tmp_path: Path) -> None:
+    h5_file = tmp_path / "offsets.h5"
+    with h5py.File(h5_file, "w") as f:
+        f.create_dataset("offset", data=np.zeros((2, 2)))
+
+    with pytest.raises(ValueError, match="not found"):
+        load_h5_dataset(h5_file, "nope")
+
+
+def test_load_h5_dataset_no_h5py_objects_in_graph(tmp_path: Path) -> None:
+    """Regression: a lazily wrapped h5py dataset broke distributed pickling.
+
+    The graph must not reference h5py objects (they cannot be pickled to
+    Dask workers); the data must be materialized as a plain ndarray.
+    """
+    h5_file = tmp_path / "offsets.h5"
+    data = np.arange(6, dtype="float64").reshape(2, 3)
+    with h5py.File(h5_file, "w") as f:
+        f.create_dataset("offset", data=data)
+
+    arr = load_h5_dataset(h5_file, "offset")
+    graph_bytes = cloudpickle.dumps(arr.__dask_graph__())  # type: ignore[reportUnknownArgumentType]
+    assert isinstance(graph_bytes, bytes)
 
 
 def test_get_chunk_info(tmp_path: Path) -> None:
