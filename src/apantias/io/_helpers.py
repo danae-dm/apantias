@@ -25,7 +25,7 @@ def _resolve_range_indices(
     Out-of-bounds indices are silently kept — the caller should
     filter them if the underlying data is smaller than expected.
     """
-    return list(range(spec.start, spec.stop, spec.step))
+    return list(range(spec.start, spec.resolve_stop(size), spec.step))
 
 
 def _frame_chunk_size(nreps: int, rows: int, cols: int, target_chunk_bytes: int) -> int:

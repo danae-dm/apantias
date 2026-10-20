@@ -52,12 +52,12 @@ format.preview = true
 
 [tool.ruff.lint]
 extend-select = ["E", "W", "I", "B", "UP"]
-ignore = ["F821"]
 
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "strict"
+reportPrivateImportLevel = "warning"
 
 
 [tool.pytest.ini_options]

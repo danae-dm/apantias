@@ -62,14 +62,6 @@ class RangeSpec(BaseModel):
             )
         return max(0, (self.stop - self.start + self.step - 1) // self.step)
 
-    def __iter__(self) -> "RangeSpec":  # type: ignore[return-value]
-        """Iterate to produce indices via Python's range()."""
-        self._iterator = iter(range(self.start, self.stop, self.step))
-        return self
-
-    def __next__(self) -> int:
-        return next(self._iterator)
-
 
 class RuntimeSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")

@@ -1,6 +1,8 @@
 """Tests for apantias.get_resources."""
 
-from apantias.get_resources import _parse_slurm_mem, get_resources
+import pytest
+
+from apantias.get_resources import _parse_slurm_mem, get_resources  # pyright: ignore
 
 
 def test_parse_slurm_mem() -> None:
@@ -12,7 +14,7 @@ def test_parse_slurm_mem() -> None:
     assert _parse_slurm_mem("abc") is None
 
 
-def test_get_resources_slurm(monkeypatch) -> None:
+def test_get_resources_slurm(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SLURM_CPUS_PER_TASK", "4")
     monkeypatch.setenv("SLURM_MEM_PER_NODE", "2048")
     cpus, mem = get_resources()
@@ -20,7 +22,7 @@ def test_get_resources_slurm(monkeypatch) -> None:
     assert mem == 2048
 
 
-def test_get_resources_mem_per_cpu(monkeypatch) -> None:
+def test_get_resources_mem_per_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SLURM_CPUS_PER_TASK", "2")
     monkeypatch.setenv("SLURM_MEM_PER_CPU", "1024")
     for key in ("SLURM_MEM_PER_NODE",):

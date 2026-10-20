@@ -43,7 +43,7 @@ def init(local_dir: str | Path, cores: int | None = None, ram_mb: int | None = N
     if cores is None:
         cores = get_resources()[0]
     else:
-        cores = max(1, cores - 1)
+        cores = max(1, cores)
     local_directory = str(local_dir)
 
     # Per-worker memory limit from the configured total allocation. Distributed's

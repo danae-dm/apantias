@@ -62,7 +62,7 @@ def archive(config: AppSettings, outputs: Sequence[tuple[str, Path]]) -> None:
     archive_path.parent.mkdir(parents=True, exist_ok=True)
 
     _logger.info("Writing analysis archive to %s", archive_path)
-    with h5py.File(archive_path, "a") as f:
+    with h5py.File(archive_path, "w") as f:
         for name, path in outputs:
             if name in f:
                 del f[name]

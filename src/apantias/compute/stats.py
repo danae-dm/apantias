@@ -17,7 +17,9 @@ def compute_offset_corr(data_f: da.Array, offset: da.Array) -> da.Array:
     # offset has shape (n_rows, n_cols) and broadcasts into the 4D frame array
     # as (1, n_rows, 1, n_cols). It is either the external offset map or the
     # internally computed per-pixel median (the "own" offset) — never both.
-    return data_f - offset[None, :, None, :]  # type: ignore[reportUnknownVariableType]
+    if offset.ndim == 2:
+        return data_f - offset[None, :, None, :]
+    return data_f - offset[None, :, :, :]
 
 
 def compute_common_modes(data: da.Array) -> da.Array:

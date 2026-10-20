@@ -29,5 +29,5 @@ def apply_pixelwise(data: da.Array, func: Callable[[npt.NDArray[Any]], Any]) -> 
     def _apply_and_squeeze(chunk: npt.NDArray[Any]) -> Any:
         return np.asarray(func(chunk.squeeze()))
 
-    result = da.map_blocks(_apply_and_squeeze, data, dtype=float, drop_axis=[1, 2])  # type: ignore[reportUnknownMemberType]
+    result = da.map_blocks(_apply_and_squeeze, data, dtype=float, drop_axis=[0, 2])  # type: ignore[reportUnknownMemberType]
     return result
