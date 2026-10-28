@@ -1,25 +1,25 @@
-*.bundle.*
-lib/
-node_modules/
-*.egg-info/
-.ipynb_checkpoints
-*.tsbuildinfo
-.venv
-.ipynb_checkpoints/
+# --- Project-specific --------------------------------------------------------
 
-# Created by https://www.gitignore.io/api/python
-# Edit at https://www.gitignore.io/?templates=python
+# Default/auto-generated settings
+default.yaml
+default*.json
 
-### Python ###
-# Byte-compiled / optimized / DLL files
+# Large/generated data directories
+*_data/
+
+# IDE workspace
+apantias.code-workspace
+.vscode/
+
+# Generated test assets (remove if you commit fixtures)
+tests/fixtures/
+
+# --- Python ------------------------------------------------------------------
+
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -33,37 +33,61 @@ parts/
 sdist/
 var/
 wheels/
-pip-wheel-metadata/
 share/python-wheels/
+*.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
-
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
-
-# Installer logs
+pip-wheel-metadata/
 pip-log.txt
 pip-delete-this-directory.txt
 
-# VSCode
-.vscode
+# Virtual environments
+.venv/
+venv/
+env/
 
-# Exclude folders ending in _data
-*_data/
-
-#Exclude testing files (fixtures etc.), except the regression check
-default*.json
-apantias.code-workspace
-
-#default settings file
-default.yaml
-
-#ruff
+# Type checking / linting / test caches
+.mypy_cache/
 .ruff_cache/
 .pytest_cache/
-.claude/
-tests/fixtures/
+.hypothesis/
+.tox/
+.nox/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+*.cover
+
+# Logs / databases
+*.log
+*.sqlite3
+*.db
+
+# Profiling
+*.prof
+*.lprof
+
+# --- Jupyter -----------------------------------------------------------------
+.ipynb_checkpoints/
+
+# --- Node / TypeScript -------------------------------------------------------
+node_modules/
+*.bundle.*
+*.tsbuildinfo
+
+# --- IDEs --------------------------------------------------------------------
+.idea/
+*.iml
+
+# --- OS ----------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+
+# --- Editor backups ----------------------------------------------------------
+*.swp
+*.swo
+*~
+*.bak
