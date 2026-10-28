@@ -14,7 +14,6 @@ class AnalysisPaths:
     raw_framewise: Path
     raw_pixelwise: Path
     median: Path
-    offset: Path
     offset_corr: Path
     common_modes: Path
     signals: Path
@@ -33,7 +32,6 @@ class AnalysisPaths:
             raw_framewise=zarr_data / "frame_chunked",
             raw_pixelwise=zarr_data / "pixel_chunked",
             median=zarr_temp / "median",
-            offset=zarr_temp / "offset",
             offset_corr=zarr_temp / "offset_corr",
             common_modes=zarr_temp / "common_modes",
             signals=zarr_temp / "signals",

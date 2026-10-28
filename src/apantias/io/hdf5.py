@@ -15,10 +15,19 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
+from apantias.inspect.h5 import print_h5_contents
+
+__all__ = [
+    "load_h5_dataset",
+    "print_h5_contents",
+    "split_h5_dataset_path",
+    "write_analysis_outputs_to_h5",
+]
+
 if TYPE_CHECKING:
     # Imported lazily to avoid a circular import: apantias.standard imports
-    # this module, and AnalysisPaths lives there.
-    from apantias.standard import AnalysisPaths
+    # this module, and AnalysisPaths lives in the I/O subpackage.
+    from apantias.io.paths import AnalysisPaths
 
 
 def _read_h5_batch(
@@ -82,34 +91,6 @@ def load_h5_dataset(file_path: Path, dataset_name: str | None = None) -> da.Arra
             raise ValueError(f"Dataset '{dataset_name}' not found in {file_path}") from exc
         data: npt.NDArray[Any] = np.asarray(ds[...])  # type: ignore[index]
     return cast(da.Array, da.from_array(data, chunks=-1))  # type: ignore[reportArgumentType]
-
-
-def print_h5_contents(h5_path: Path | str) -> None:
-    """Print all groups and datasets in an HDF5 file with sizes in MB."""
-    h5_path = Path(h5_path)
-    file_size_mb = h5_path.stat().st_size / 1024**2
-    print(f"{h5_path} (file size: {file_size_mb:.2f} MB)")
-
-    with h5py.File(h5_path, "r") as f:
-
-        def walk(group: h5py.Group, depth: int) -> None:
-            # Recursive walk instead of visititems: visititems skips empty
-            # groups, and the previous root-listing + visititems combination
-            # printed root-level entries twice.
-            for key in group:  # type: ignore[reportUnknownVariableType]
-                obj = group[key]
-                indent = "  " * (depth + 1)
-                if isinstance(obj, h5py.Dataset):
-                    size_mb: float = obj.nbytes / 1024**2  # type: ignore[reportUnknownMemberType]
-                    print(
-                        f"{indent}{key} [dataset] shape={obj.shape} "  # type: ignore[reportUnknownMemberType]
-                        f"dtype={obj.dtype} size={size_mb:.2f} MB"  # type: ignore[reportUnknownMemberType]
-                    )
-                else:
-                    print(f"{indent}{key}/ [group]")
-                    walk(obj, depth + 1)  # type: ignore[reportUnknownArgumentType]
-
-        walk(f, 0)
 
 
 def _find_h5_dataset(f: h5py.File) -> str:

@@ -33,7 +33,7 @@ def _from_array(data: npt.NDArray[np.float64], chunks: tuple[int, ...]) -> da.Ar
     """Wrap da.from_array with a typed chunks parameter.
 
     dask's runtime signature accepts tuple chunk specifications, but Pyright
-    infers the parameter as ``str`` because the default is ``"auto"``.
+    infers the parameter as ``str`` because the default is ``auto".
     """
     return da.from_array(data, chunks=chunks)  # type: ignore[reportArgumentType]
 
@@ -50,15 +50,6 @@ def test_compute_median(tmp_path: Path) -> None:
 
 def test_compute_offset_corr(tmp_path: Path) -> None:
     data: npt.NDArray[np.float64] = np.ones((4, 2, 3, 2), dtype=np.float64)
-<<<<<<< HEAD
-    offset: npt.NDArray[np.float64] = np.ones((2, 2), dtype=np.float64) * 0.5
-    d = _from_array(data, chunks=(4, 2, 3, 2))
-    o = _from_array(offset, chunks=(2, 2))
-    out = tmp_path / "offset_corr.zarr"
-    compute_offset_corr(d, o).to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
-    result = _read_zarr(out)
-    expected = data - offset[None, :, None, :]
-=======
     offset: npt.NDArray[np.float64] = np.zeros((2, 2), dtype=np.float64)
     median: npt.NDArray[np.float64] = np.ones((2, 2), dtype=np.float64) * 0.5
     d = _from_array(data, chunks=(4, 2, 3, 2))
@@ -68,7 +59,6 @@ def test_compute_offset_corr(tmp_path: Path) -> None:
     compute_offset_corr(d, o, m).to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
     result = _read_zarr(out)
     expected = data - offset[None, :, None, :] - median[None, :, None, :]
->>>>>>> 4ca6d26f462bbb59959f7acb12d920be438c4b8f
     np.testing.assert_allclose(result, expected)
 
 
