@@ -13,7 +13,6 @@ path layout in ``io.paths``, branch-point materialization in
 """
 
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -24,6 +23,7 @@ from apantias.cluster import init
 from apantias.compute import stats
 from apantias.compute.reductions import apply_pixelwise
 from apantias.io.hdf5 import write_analysis_outputs_to_h5
+from apantias.io.outputs import BRANCH, LARGE, SMALL, Pipeline
 from apantias.io.paths import AnalysisPaths
 from apantias.io.zarr import h5_to_zarr
 from apantias.preflight_check import PreflightValidator
@@ -31,23 +31,6 @@ from apantias.settings import AppSettings, load_config
 from apantias.transform.rechunk import rechunk_to_pixels
 
 _logger = logging.getLogger(__name__)
-
-
-@dataclass
-class AnalysisArrays:
-    """Lazy (or materialized) arrays at each pipeline stage."""
-
-    raw_framewise: da.Array
-    raw_pixelwise: da.Array
-    median: da.Array
-    offset: da.Array
-    offset_corr: da.Array
-    common_modes: da.Array
-    signals: da.Array
-    slopes: da.Array
-    msd: da.Array
-    signals_mean: da.Array
-    pixelwise: da.Array
 
 
 class StandardAnalysis:
@@ -94,17 +77,41 @@ class StandardAnalysis:
         zarr.open_group(self.paths.temp_root, mode="a")
         zarr.open_group(self.paths.data_root, mode="a")
 
+        # ------------------------------------------------------------------
+        # Stage 1: convert the raw HDF5 input into frame-chunked Zarr and
+        # rechunk it into pixel-chunked Zarr for the per-pixel stages.
+        # ------------------------------------------------------------------
         _logger.info("Start writing bin to zarr store.")
         h5_to_zarr(self.h5_path, self.paths.raw_framewise, self.config.frame, self.config.analysis)
         rechunk_to_pixels(self.paths.raw_framewise, self.paths.raw_pixelwise)
         _logger.info("Done.")
 
+        # ------------------------------------------------------------------
+        # Stage 2: declare the entire analysis pipeline.  No Dask work runs
+        # here; only the task graph is built.
+        # ------------------------------------------------------------------
         data_f, data_p = self._load_inputs()
-        arrays = self._build_pipeline(data_f, data_p)
-        self._save_outputs(arrays)
+        pipeline = self._build_pipeline(data_f, data_p)
+        _logger.info("\n%s", pipeline.summary())
 
+        # ------------------------------------------------------------------
+        # Stage 3: materialise branch points.  This is the first place where
+        # real computation is triggered.
+        # ------------------------------------------------------------------
+        _logger.info("Persisting branch points.")
+        pipeline.materialize_branches(self._persist_or_store)
+
+        # ------------------------------------------------------------------
+        # Stage 4: write the remaining final outputs (archived arrays that
+        # are not needed by later stages).
+        # ------------------------------------------------------------------
+        self._save_final_outputs(pipeline)
+
+        # ------------------------------------------------------------------
+        # Stage 5: copy every archived Zarr output into the final HDF5 archive.
+        # ------------------------------------------------------------------
         _logger.info("Writing HDF5 archive.")
-        write_analysis_outputs_to_h5(self.paths, self.config.analysis.h5_archive)
+        write_analysis_outputs_to_h5(pipeline, self.config.analysis.h5_archive)
 
     def _load_inputs(self) -> tuple[da.Array, da.Array]:
         # da.from_zarr sees the inner Zarr chunks (single-column) because the
@@ -123,46 +130,87 @@ class StandardAnalysis:
             return da.zeros((self.config.frame.n_cols, self.config.frame.n_rows), chunks=-1)
         return cast(da.Array, da.from_zarr(self.ext_offset))
 
-    def _build_pipeline(self, data_f: da.Array, data_p: da.Array) -> AnalysisArrays:
+    def _build_pipeline(self, data_f: da.Array, data_p: da.Array) -> Pipeline:
+        """Declare every output of the standard analysis pipeline.
+
+        Each ``declare`` call registers the dask array together with metadata
+        that controls where it is stored, whether it is a branch point, and
+        how it is archived.  No computation happens here; only the dask task
+        graph is assembled.
+        """
+        p = Pipeline(self.config.analysis)
+
         _logger.info("Start calculating median.")
-        median = stats.compute_median(data_p)
+        # Per-pixel median across frames and repetitions; small final output.
+        p.declare(
+            "median",
+            stats.compute_median(data_p),
+            "Pixel-wise median across frames and repetitions",
+            **SMALL,
+        )
 
         _logger.info("Start applying offset.")
+        # External offset (zeros if none provided); broadcasts into the 4D frame array.
         offset = self._load_offset()
-        offset_corr = stats.compute_offset_corr(data_f, offset, median)
-        # Branch point: used by common_modes and subtract.
-        offset_corr = self._persist_or_store(offset_corr, self.paths.offset_corr)
+        # Correct every frame by the external offset and the per-pixel median.
+        # This is a branch point: both common-mode correction and the archive
+        # need the materialised result.
+        p.declare(
+            "offset_corr",
+            stats.compute_offset_corr(data_f, offset, p["median"]),
+            "Raw frames corrected by external offset and pixel median",
+            tags=[LARGE, BRANCH],
+        )
 
         _logger.info("Start common mode correction.")
-        common_modes = stats.compute_common_modes(offset_corr)
-        # Materialized too: it is a final output and must exist in Zarr for
-        # the archive pass, not only as an intermediate for subtract.
-        common_modes = self._persist_or_store(common_modes, self.paths.common_modes)
-        signals = stats.subtract(offset_corr, common_modes)
-        # Branch point: used by slopes, msd and signals_mean.
-        signals = self._persist_or_store(signals, self.paths.signals)
+        # Compute the common-mode signal (median along the row axis) per frame.
+        p.declare(
+            "common_modes",
+            stats.compute_common_modes(p["offset_corr"]),
+            "Common-mode signal per frame, row and repetition",
+            tags=[LARGE, BRANCH],
+        )
+        # Subtract the common-mode signal from the offset-corrected frames.
+        p.declare(
+            "signals",
+            stats.subtract(p["offset_corr"], p["common_modes"]),
+            "Offset- and common-mode-corrected detector signal",
+            tags=[LARGE, BRANCH],
+        )
 
         _logger.info("Start calculating slopes, msd and mean signals.")
-        slopes = stats.compute_slopes(signals)
-        msd = stats.compute_msd(signals)
-        signals_mean = stats.compute_signals_mean(signals)
+        # Linear slope of the corrected signal versus repetition index.
+        p.declare(
+            "slopes",
+            stats.compute_slopes(p["signals"]),
+            "Linear slope of signal versus repetition index",
+            **SMALL,
+        )
+        # Mean squared deviation of the corrected signal.
+        p.declare(
+            "msd",
+            stats.compute_msd(p["signals"]),
+            "Mean squared deviation of the corrected signal",
+            **SMALL,
+        )
+        # Mean corrected signal per frame and pixel.
+        p.declare(
+            "signals_mean",
+            stats.compute_signals_mean(p["signals"]),
+            "Mean corrected signal per frame and pixel",
+            **SMALL,
+        )
 
         _logger.info("Start pixelwise calculation.")
-        pixelwise = apply_pixelwise(data_p, lambda t: t.max() - t.min())
-
-        return AnalysisArrays(
-            raw_framewise=data_f,
-            raw_pixelwise=data_p,
-            median=median,
-            offset=offset,
-            offset_corr=offset_corr,
-            common_modes=common_modes,
-            signals=signals,
-            slopes=slopes,
-            msd=msd,
-            signals_mean=signals_mean,
-            pixelwise=pixelwise,
+        # Per-pixel max-min range computed on the raw pixel-chunked data.
+        p.declare(
+            "pixelwise",
+            apply_pixelwise(data_p, lambda t: t.max() - t.min()),
+            "Per-pixel max-min range of raw signal",
+            **SMALL,
         )
+
+        return p
 
     def _persist_or_store(self, arr: da.Array, path: Path) -> da.Array:
         """Materialize a branch-point array so it is not recomputed.
@@ -190,22 +238,13 @@ class StandardAnalysis:
             return 0
         return int(ram_mb * 1024 * 1024 * 0.25)
 
-    def _save_outputs(self, arrays: AnalysisArrays) -> None:
-        _logger.info("Writing final outputs.")
-        outputs = [
-            arrays.median,
-            arrays.slopes,
-            arrays.msd,
-            arrays.signals_mean,
-            arrays.pixelwise,
-        ]
-        paths = [
-            self.paths.median,
-            self.paths.slopes,
-            self.paths.msd,
-            self.paths.signals_mean,
-            self.paths.pixelwise,
-        ]
+    def _save_final_outputs(self, pipeline: Pipeline) -> None:
+        """Write all final (non-branch) archived outputs to their Zarr stores."""
+        stages = pipeline.final_outputs()
+        outputs = [s.array for s in stages]
+        paths = [s.path for s in stages]
+
+        _logger.info("Writing final outputs: %s", ", ".join(s.name for s in stages))
         # da.store needs writable array targets; Path objects do not support
         # item assignment, so open one Zarr array per output first.
         targets = [

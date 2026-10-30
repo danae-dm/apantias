@@ -31,7 +31,7 @@ def bin_to_h5(
     dataset_name: str,
     frame: FrameSettings,
     offset: int = 8,
-    key_ints: int = 1,
+    key_ints: int = 3,
 ) -> Path:
     """Write the frames of a binary file to a compressed HDF5 dataset."""
     bin_path = Path(bin_path)

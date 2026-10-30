@@ -76,7 +76,7 @@ class RuntimeSettings(BaseModel):
     cpus: int = Field(default=0, description="Number of CPU cores, 0 is auto-detect")
     ram_mb: int = Field(default=0, description="RAM in MB, 0 is auto-detect")
     dask_temp: Path = Field(
-        default=Path("/scratch-cbe/users/florian.heinrich/dask_temp"),
+        default=Path("/scratch/users/florian.heinrich/dask_temp"),
         description="Path to dasks temp storage, use fast storage options here",
     )
 
