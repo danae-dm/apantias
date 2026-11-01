@@ -5,12 +5,22 @@
 """Definition of the standard data analysis pipeline.
 
 This module declares the analysis stages in a ``Pipeline``.  Each stage is
-registered together with metadata that controls where it is stored and whether
-it is a branch point.  How the stage is archived is decided centrally by the
-HDF5 writer based on the configured chunk threshold.  Infrastructure lives in
-dedicated modules and is only wired together here: path layout in ``io.paths``,
-the pipeline registry in ``io.outputs``, branch-point materialization in
-``_persist_or_store``, and archiving in ``io.hdf5``.
+registered together with metadata that controls where it is stored, whether
+downstream stages consume it (branch point), and whether it ends up in the
+final HDF5 archive.
+
+Declaration and materialization are interleaved: every stage that later stages
+consume is materialized (in-memory persist or Zarr) immediately after its
+declaration, *before* the consuming stage's dask graph is built.  This is
+required because dask graphs capture arrays by value at declaration time —
+materializing after the fact cannot rewire an already-built graph.  Leaf
+outputs stay lazy and are written together in one batched ``da.store``.
+
+How a stage is archived is decided centrally by the HDF5 writer based on the
+configured chunk threshold.  Infrastructure lives in dedicated modules and is
+only wired together here: path layout in ``io.paths``, the pipeline registry in
+``io.outputs``, stage materialization in ``_persist_or_store``, and archiving
+in ``io.hdf5``.
 """
 
 import logging
@@ -88,34 +98,29 @@ class StandardAnalysis:
         _logger.info("Done.")
 
         # ------------------------------------------------------------------
-        # Stage 2: declare the entire analysis pipeline.  No Dask work runs
-        # here; only the task graph is built.
+        # Stage 2: declare the pipeline stage by stage.  Every stage that is
+        # consumed by a later stage is materialized right after its
+        # declaration (see _build_pipeline), so this is also the first place
+        # where real computation is triggered.
         # ------------------------------------------------------------------
         data_f, data_p = self._load_inputs()
         pipeline = self._build_pipeline(data_f, data_p)
         _logger.info("\n%s", pipeline.summary())
 
         # ------------------------------------------------------------------
-        # Stage 3: materialise branch points.  This is the first place where
-        # real computation is triggered.
-        # ------------------------------------------------------------------
-        _logger.info("Persisting branch points.")
-        pipeline.materialize_branches(self._persist_or_store)
-
-        # ------------------------------------------------------------------
-        # Stage 4: write the remaining final outputs (archived arrays that
-        # are not needed by later stages).
+        # Stage 3: write the remaining leaf outputs (archived arrays that no
+        # later stage consumes) in one batched da.store.
         # ------------------------------------------------------------------
         self._save_final_outputs(pipeline)
 
         # ------------------------------------------------------------------
-        # Stage 5: copy every archived Zarr output into the final HDF5 archive.
+        # Stage 4: copy every archived Zarr output into the final HDF5 archive.
         # ------------------------------------------------------------------
         _logger.info("Writing HDF5 archive.")
         write_analysis_outputs_to_h5(
             pipeline,
             self.config.analysis.h5_archive,
-            chunk_threshold_bytes=self.config.frame.target_chunk_bytes,
+            config=self.config,
         )
 
     def _load_inputs(self) -> tuple[da.Array, da.Array]:
@@ -138,46 +143,75 @@ class StandardAnalysis:
     def _build_pipeline(self, data_f: da.Array, data_p: da.Array) -> Pipeline:
         """Declare every output of the standard analysis pipeline.
 
-        Each ``declare`` call registers the dask array together with metadata
-        that controls where it is stored and whether it is a branch point.  No
-        computation happens here; only the dask task graph is assembled.
+        Stages are declared in dependency order.  A stage that later stages
+        consume (a branch point) is materialized immediately after its
+        declaration, *before* the consuming graph is built.  This ordering is
+        essential: dask graphs capture arrays by value at ``declare`` time, so
+        ``p["<name>"]`` hands the consuming stage whatever object the registry
+        holds at that moment.  Materializing between declarations guarantees
+        downstream graphs read the persisted array (cluster memory or Zarr)
+        instead of embedding the full lazy upstream — without this, shared
+        subgraphs are resubmitted to the scheduler several times (dask issue
+        #9888 warnings) and correctness would rely on the cluster's key cache.
+
+        Leaf outputs (nothing downstream consumes them) stay lazy and are
+        written together in one batched ``da.store`` by ``_save_final_outputs``.
         """
         p = Pipeline(
             self.config.analysis,
             memory_budget_bytes=self._memory_budget_bytes(),
         )
 
+        def materialize(name: str) -> None:
+            """Persist stage *name* in place (memory if it fits, Zarr otherwise).
+
+            Replaces the stage's lazy array with the materialized handle so
+            subsequent ``p[name]`` lookups — and therefore all graphs built
+            afterwards — reference the persisted version.
+            """
+            stage = p.stage(name)
+            stage.array = self._persist_or_store(stage.array, stage.path, p)
+
         _logger.info("Start calculating median.")
         p.declare(
             "median",
             stats.compute_median(data_p),
             "Pixel-wise median across frames and repetitions",
+            tags=[BRANCH],  # consumed by offset_corr
         )
+        materialize("median")
 
         _logger.info("Start applying offset.")
         offset = self._load_offset()
         p.declare(
             "offset_corr",
+            # p["median"] is the materialized median here, so this graph reads
+            # the persisted store instead of recomputing the median from raw data.
             stats.compute_offset_corr(data_f, offset, p["median"]),
             "Raw frames corrected by external offset and pixel median",
-            tags=[BRANCH],
+            tags=[BRANCH],  # consumed by common_modes and signals
         )
+        materialize("offset_corr")
 
         _logger.info("Start common mode correction.")
         p.declare(
             "common_modes",
             stats.compute_common_modes(p["offset_corr"]),
             "Common-mode signal per frame, row and repetition",
-            tags=[BRANCH],
+            tags=[BRANCH],  # consumed by signals
         )
+        materialize("common_modes")
         p.declare(
             "signals",
             stats.subtract(p["offset_corr"], p["common_modes"]),
             "Offset- and common-mode-corrected detector signal",
-            tags=[BRANCH],
+            tags=[BRANCH],  # consumed by slopes, msd and signals_mean
         )
+        materialize("signals")
 
         _logger.info("Start calculating slopes, msd and mean signals.")
+        # Leaf outputs: declared on top of the materialized signals, but left
+        # lazy — they are stored in one batched da.store later.
         p.declare(
             "slopes",
             stats.compute_slopes(p["signals"]),
@@ -274,4 +308,9 @@ class StandardAnalysis:
             for out, path in zip(outputs, paths, strict=True)
         ]
         da.store(outputs, targets, lock=False)
+        # Back-fill the registry with disk-backed handles: after this point
+        # every stage of the pipeline refers to materialized data, so touching
+        # a stage later cannot silently recompute the whole upstream graph.
+        for stage in stages:
+            stage.array = cast(da.Array, da.from_zarr(stage.path))
         _logger.info("Done.")

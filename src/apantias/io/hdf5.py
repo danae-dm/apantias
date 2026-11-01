@@ -13,10 +13,13 @@ import dask.array as da
 import h5py  # pyright: ignore[reportMissingTypeStubs]
 import numpy as np
 import numpy.typing as npt
+import yaml
 import zarr
+from pydantic import BaseModel
 
 from apantias.inspect.h5 import print_h5_contents
 from apantias.io.outputs import Pipeline
+from apantias.settings import AppSettings
 
 __all__ = [
     "load_h5_dataset",
@@ -124,26 +127,45 @@ def _find_h5_dataset(f: h5py.File) -> str:
     return datasets[0]
 
 
+def _model_dump_recursive(obj: object) -> object:
+    """Recursively convert Pydantic models to plain Python structures for YAML.
+
+    ``BaseModel.model_dump()`` already unwraps nested models; the recursion is
+    kept defensive so nested containers of models also end up YAML-safe.
+    """
+    if isinstance(obj, BaseModel):
+        return _model_dump_recursive(obj.model_dump())
+    if isinstance(obj, dict):
+        return {k: _model_dump_recursive(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_model_dump_recursive(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_model_dump_recursive(v) for v in obj)
+    return obj
+
+
 def write_analysis_outputs_to_h5(
     pipeline: Pipeline,
     h5_path: Path,
     *,
-    chunk_threshold_bytes: int,
+    config: AppSettings,
 ) -> None:
     """Write the archived Zarr outputs into a single HDF5 archive file.
 
     The archive step is driven by the ``Pipeline`` registry for *which* arrays
-    are written, but the chunk/compression layout is decided here from the
-    configured ``chunk_threshold_bytes``:
+    are written; the chunk/compression layout is decided here from
+    ``config.frame.target_chunk_bytes``:
 
     * Arrays that fit in one chunk below the threshold are written as a single
       chunk with gzip.
     * Larger arrays are chunked along the frame axis (at most
-      ``chunk_threshold_bytes`` per chunk) and written with lzf.
+      ``target_chunk_bytes`` per chunk) and written with lzf.
 
-    The stage description is stored as an HDF5 attribute so the archive
-    documents itself.
+    Each stage description is stored as an HDF5 attribute, and the full run
+    configuration is embedded as a ``settings`` dataset (YAML text), so the
+    archive documents itself without access to the original config file.
     """
+    chunk_threshold_bytes = config.frame.target_chunk_bytes
     with h5py.File(h5_path, "w") as f:
         for stage in pipeline.archived():
             arr = zarr.open_array(str(stage.path), mode="r")
@@ -162,3 +184,9 @@ def write_analysis_outputs_to_h5(
             for batch_start in range(0, arr.shape[0], chunks[0]):
                 batch_end = min(batch_start + chunks[0], arr.shape[0])
                 ds[batch_start:batch_end] = np.asarray(arr[batch_start:batch_end])
+
+        # Self-documenting archive: embed the full run settings as YAML text.
+        # settings.py registers a YAML representer for Path objects, so the
+        # dumped config serialises cleanly.
+        settings_yaml = yaml.dump(_model_dump_recursive(config))
+        f.create_dataset("settings", data=settings_yaml)

@@ -10,12 +10,28 @@ import h5py  # pyright: ignore[reportMissingTypeStubs]
 import numpy as np
 import numpy.typing as npt
 import pytest
+import yaml
 import zarr
 
 from apantias.settings import AnalysisSettings, AppSettings, RuntimeSettings
-from apantias.standard import AnalysisPaths, StandardAnalysis
+from apantias.standard import StandardAnalysis
 
 N_FRAMES, N_COLS, N_REPS, N_ROWS = 12, 4, 6, 4
+
+# Names and shapes of every product of the standard pipeline.  The on-disk
+# layout is documented as <zarr_temp>/<stage name>; this test intentionally
+# resolves the paths from the raw settings instead of from AnalysisPaths or
+# Pipeline, so it independently verifies the documented contract.
+EXPECTED_SHAPES: dict[str, tuple[int, ...]] = {
+    "median": (N_COLS, N_ROWS),
+    "offset_corr": (N_FRAMES, N_COLS, N_REPS, N_ROWS),
+    "common_modes": (N_FRAMES, N_COLS, N_REPS),
+    "signals": (N_FRAMES, N_COLS, N_REPS, N_ROWS),
+    "slopes": (N_FRAMES, N_COLS, N_ROWS),
+    "msd": (N_COLS, N_ROWS),
+    "signals_mean": (N_FRAMES, N_COLS, N_ROWS),
+    "pixelwise": (N_COLS, N_ROWS),
+}
 
 
 @pytest.fixture
@@ -52,52 +68,58 @@ def config(tmp_path: Path, sample_h5_file: Path) -> AppSettings:
     )
 
 
-def test_standard_analysis_end_to_end(config: AppSettings, tmp_path: Path) -> None:
+def _zarr_store(config: AppSettings, name: str) -> Path:
+    """Documented on-disk layout of an analysis product."""
+    return Path(config.analysis.zarr_temp) / name
+
+
+def test_standard_analysis_end_to_end(config: AppSettings) -> None:
     """Run StandardAnalysis end-to-end and verify every output store."""
     analysis = StandardAnalysis(config)
     analysis.run()
 
-    paths = AnalysisPaths.from_settings(config.analysis)
-
-    # Output shapes implied by the pipeline:
-    #   per-pixel results are (n_cols, n_rows); frame-level results keep the
-    #   frame axis; rep-axis reductions drop it.
-    expected_shapes: dict[str, tuple[int, ...]] = {
-        "median": (N_COLS, N_ROWS),
-        "offset_corr": (N_FRAMES, N_COLS, N_REPS, N_ROWS),
-        "common_modes": (N_FRAMES, N_COLS, N_REPS),
-        "signals": (N_FRAMES, N_COLS, N_REPS, N_ROWS),
-        "slopes": (N_FRAMES, N_COLS, N_ROWS),
-        "msd": (N_COLS, N_ROWS),
-        "signals_mean": (N_FRAMES, N_COLS, N_ROWS),
-        "pixelwise": (N_COLS, N_ROWS),
-    }
-
-    for name, expected_shape in expected_shapes.items():
-        store = getattr(paths, name)
+    for name, expected_shape in EXPECTED_SHAPES.items():
+        store = _zarr_store(config, name)
         assert store.exists(), f"Zarr output {name} missing at {store}"
         arr = zarr.open_array(str(store), mode="r")
         assert tuple(arr.shape) == expected_shape, f"{name}: expected {expected_shape}, got {tuple(arr.shape)}"
         assert np.isfinite(np.asarray(arr)).all(), f"{name} contains non-finite values"
 
-    # The final HDF5 archive must contain every output with matching shapes.
-    archive = Path(config.analysis.h5_archive)
-    assert archive.exists(), "HDF5 archive was not created"
-    with h5py.File(archive, "r") as f:
-        for name, expected_shape in expected_shapes.items():
+
+def test_h5_archive_contents(config: AppSettings) -> None:
+    """The archive must contain every output, the settings, and metadata."""
+    StandardAnalysis(config).run()
+
+    archive_path = Path(config.analysis.h5_archive)
+    assert archive_path.exists(), "HDF5 archive was not created"
+
+    with h5py.File(archive_path, "r") as f:
+        for name, expected_shape in EXPECTED_SHAPES.items():
             assert name in f, f"HDF5 dataset {name} missing from archive"
             ds = f[name]
             assert tuple(ds.shape) == expected_shape, f"archive {name}: expected {expected_shape}, got {ds.shape}"
+            # Every product documents itself via its stage description.
+            assert "description" in ds.attrs, f"archive {name} lacks a description attribute"
+
+        # The full run configuration is embedded as YAML so the archive is
+        # self-documenting without the original config file.
+        assert "settings" in f, "settings dataset missing from archive"
+        # h5py stores the YAML text as a variable-length string; depending on
+        # the h5py version it is read back as str or bytes.
+        raw = f["settings"][()]  # type: ignore[index]
+        settings_text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+        embedded = yaml.safe_load(settings_text)
+        assert embedded["analysis"]["h5_file"] == str(config.analysis.h5_file)
+        assert embedded["runtime"]["dask_temp"] == str(config.runtime.dask_temp)
 
 
 def test_h5_archive_values_match_zarr(config: AppSettings) -> None:
     """The archive datasets must be identical to the Zarr outputs."""
     StandardAnalysis(config).run()
 
-    paths = AnalysisPaths.from_settings(config.analysis)
     with h5py.File(config.analysis.h5_archive, "r") as f:
-        for name in ("median", "offset_corr", "common_modes", "signals", "slopes", "msd", "signals_mean", "pixelwise"):
-            zarr_data = np.asarray(zarr.open_array(str(getattr(paths, name)), mode="r"))
+        for name in EXPECTED_SHAPES:
+            zarr_data = np.asarray(zarr.open_array(str(_zarr_store(config, name)), mode="r"))
             # h5py Dataset slicing is partially unknown to the stubs.
             h5_data: npt.NDArray[np.float64] = np.asarray(f[name][:])  # type: ignore[index]
             np.testing.assert_allclose(h5_data, zarr_data)

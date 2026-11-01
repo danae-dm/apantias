@@ -4,7 +4,31 @@ Historical development notes for `apantias`. New entries go on top.
 
 ## Unreleased / TODO
 
-<<<<<<< HEAD
+## 2026-11-01
+
+- interleaved pipeline declaration and materialization in `_build_pipeline`:
+  every stage that downstream stages consume (including `median`, now tagged
+  `BRANCH`) is materialized immediately after its declaration, so consuming
+  graphs embed the persisted array instead of the lazy upstream. This removes
+  the dask "Detected different run_spec" warnings and stops correctness from
+  relying on the cluster's key cache; `_save_final_outputs` back-fills the
+  registry with disk-backed handles, and `Pipeline.materialize_branches` was
+  removed
+- consolidated the two HDF5 archive writers into `io/hdf5.write_analysis_outputs_to_h5`;
+  the archive now also embeds the full run settings as a YAML `settings` dataset
+  (removed `io/archive.py`, the `apantias.archive` shim and `tests/test_archive.py`)
+- `AnalysisPaths` now only describes the raw input stores and the two Zarr
+  roots; output paths are owned solely by the `Pipeline` registry
+  (`<zarr_temp>/<stage name>`)
+- fixed settings YAML serialization in `settings.py`: `add_representer` matches
+  exact types only, so `PosixPath` fell through to a python-specific tag that
+  `yaml.safe_load` refuses; now uses `add_multi_representer`
+- resolved committed merge-conflict markers in this file (merge of 4ca6d26)
+- added `tests/test_outputs.py` covering the `Pipeline` registry (declaration,
+  tags/overrides, path resolution, selectors, memory budget) and reworked
+  `tests/test_standard_analysis_integration.py` to verify outputs, archive
+  contents and the embedded settings
+
 ## 2026-10-16
 
 - standardized the array convention to `(n_frames, n_rows, n_reps, n_cols)` (the README
@@ -28,8 +52,6 @@ Historical development notes for `apantias`. New entries go on top.
   outputs back from their stored zarr locations
 - added regression tests for batch `da.store` into zarr output arrays
 
-=======
->>>>>>> 4ca6d26f462bbb59959f7acb12d920be438c4b8f
 ## 2026-10-15
 
 - refactored `standard.py` into a typed, lazy Dask pipeline:
@@ -45,8 +67,6 @@ Historical development notes for `apantias`. New entries go on top.
   external offset was passed as if it were the median
 - fixed default zero-offset shape to `(n_cols, n_rows)`
 - updated `tests/test_compute_stats.py` for the new pure-function API
-<<<<<<< HEAD
-=======
 - fixed `apply_pixelwise`: it now truly reduces per pixel, returning shape
   `(n_cols, n_rows)` (the previous implementation passed per-row slabs of shape
   `(n_frames, n_cols, n_reps)` to the user function and crashed with
@@ -62,7 +82,6 @@ Historical development notes for `apantias`. New entries go on top.
 - added an end-to-end integration test (`tests/test_standard_analysis_integration.py`)
   running `StandardAnalysis` on tiny synthetic data and checking every Zarr
   output and the HDF5 archive for existence, shape and value agreement
->>>>>>> 4ca6d26f462bbb59959f7acb12d920be438c4b8f
 
 
 - move functions from utils to a compute module

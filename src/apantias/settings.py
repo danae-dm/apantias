@@ -30,8 +30,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import get_resources
 
 DEFAULT_CONFIG_FILE = Path("default.yaml")
-# teach pyYAML how to dump Path Objects
-yaml.add_representer(Path, lambda dumper, data: dumper.represent_str(str(data)))
+# Teach pyYAML how to dump Path objects.  add_representer matches *exact*
+# types only, and on Linux paths are PosixPath (a Path subclass), so a
+# multi-representer is required — otherwise paths are serialised with a
+# python-specific tag that yaml.safe_load refuses to read back.
+yaml.add_multi_representer(Path, lambda dumper, data: dumper.represent_str(str(data)))
 
 
 class RangeSpec(BaseModel):

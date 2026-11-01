@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -138,8 +137,12 @@ class Pipeline:
     def __getitem__(self, name: str) -> da.Array:
         """Access the current dask array of a declared stage.
 
-        After ``materialize_branches`` this returns the materialised array, so
-        downstream declarations automatically see the persisted version.
+        Dask graphs capture arrays *by value* at declaration time: a
+        downstream stage embeds whatever array object the registry holds at
+        the moment of its ``declare`` call.  A stage therefore only sees the
+        materialised version of an upstream stage if that stage was
+        materialised *before* the downstream declaration (see
+        ``StandardAnalysis._build_pipeline``).
         """
         return self._stages[name].array
 
@@ -173,22 +176,6 @@ class Pipeline:
     def archived(self) -> list[Stage]:
         """All stages that go into the final HDF5 archive."""
         return [s for s in self._stages.values() if s.is_archived]
-
-    def materialize_branches(
-        self,
-        materialize: Callable[[da.Array, Path, Pipeline], da.Array],
-    ) -> None:
-        """Persist every declared branch point in place.
-
-        Because stages are looked up by name, downstream stages that access a
-        branch point via ``__getitem__`` automatically see the materialised
-        array.
-
-        The provided ``materialize`` callback receives the pipeline instance so
-        it can consult and update the in-memory budget.
-        """
-        for stage in self.branch_points():
-            stage.array = materialize(stage.array, stage.path, self)
 
     def summary(self) -> str:
         """Return a human-readable summary of declared stages."""

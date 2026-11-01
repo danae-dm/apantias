@@ -61,8 +61,8 @@ def print_archive_summary(h5_path: Path | str) -> None:
     """Print a compact table of all top-level datasets in an archive file.
 
     This is tailored to the standard analysis archive produced by
-    ``apantias.io.archive.archive`` / ``apantias.io.hdf5.write_analysis_outputs_to_h5``,
-    but works for any HDF5 file with flat top-level datasets.
+    ``apantias.io.hdf5.write_analysis_outputs_to_h5``, but works for any HDF5
+    file with flat top-level datasets.
     """
     h5_path = Path(h5_path)
     file_size = _format_bytes(h5_path.stat().st_size)
