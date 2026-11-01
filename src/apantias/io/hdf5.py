@@ -26,6 +26,26 @@ __all__ = [
 ]
 
 
+def _archive_chunk_shape(shape: tuple[int, ...], dtype: np.dtype[Any], threshold_bytes: int) -> tuple[int, ...]:
+    """Return an HDF5 chunk shape for *shape*/*dtype* that respects *threshold_bytes*.
+
+    If the total array fits below the threshold, the full array shape is used
+    (single chunk).  Otherwise the array is chunked along the first (frame) axis
+    so that each chunk is at most *threshold_bytes*.
+    """
+    if not shape:
+        return shape
+
+    bytes_per_frame = int(dtype.itemsize) * int(np.prod(shape[1:]))
+    total_bytes = bytes_per_frame * shape[0]
+    if total_bytes <= threshold_bytes:
+        return shape
+
+    frame_chunk = max(1, threshold_bytes // bytes_per_frame)
+    frame_chunk = min(frame_chunk, shape[0])
+    return (frame_chunk, *shape[1:])
+
+
 def _read_h5_batch(
     h5_path: Path,
     dataset_name: str,
@@ -104,46 +124,41 @@ def _find_h5_dataset(f: h5py.File) -> str:
     return datasets[0]
 
 
-def write_analysis_outputs_to_h5(pipeline: Pipeline, h5_path: Path) -> None:
+def write_analysis_outputs_to_h5(
+    pipeline: Pipeline,
+    h5_path: Path,
+    *,
+    chunk_threshold_bytes: int,
+) -> None:
     """Write the archived Zarr outputs into a single HDF5 archive file.
 
-    The archive step is driven entirely by the ``Pipeline`` registry.  Each
-    stage knows whether it should be archived, which chunk/compression strategy
-    to use, and what its description is.  The description is stored as an HDF5
-    attribute so the archive documents itself.
+    The archive step is driven by the ``Pipeline`` registry for *which* arrays
+    are written, but the chunk/compression layout is decided here from the
+    configured ``chunk_threshold_bytes``:
+
+    * Arrays that fit in one chunk below the threshold are written as a single
+      chunk with gzip.
+    * Larger arrays are chunked along the frame axis (at most
+      ``chunk_threshold_bytes`` per chunk) and written with lzf.
+
+    The stage description is stored as an HDF5 attribute so the archive
+    documents itself.
     """
-    # Split archived stages by their archive strategy.
-    small_stages = [s for s in pipeline.archived() if s.archive_strategy == "small"]
-    large_stages = [s for s in pipeline.archived() if s.archive_strategy == "large"]
-
     with h5py.File(h5_path, "w") as f:
-        # Small outputs: read fully into memory and write contiguously with gzip.
-        for stage in small_stages:
-            data = np.asarray(zarr.open_array(str(stage.path), mode="r"))
-            ds = f.create_dataset(stage.name, data=data, compression="gzip")
-            ds.attrs["description"] = stage.description
-
-        # Large outputs: stream by source Zarr chunks and write with lzf.
-        for stage in large_stages:
+        for stage in pipeline.archived():
             arr = zarr.open_array(str(stage.path), mode="r")
-
-            # Align HDF5 chunks with the source Zarr chunks along the frame
-            # axis so each Zarr chunk maps to one HDF5 write operation.  A
-            # fixed ``archive_chunk_frames`` on the stage overrides the source
-            # chunk size; otherwise inherit it from Zarr.  Cap by n_frames so
-            # small arrays do not get oversized chunks.
-            frame_chunk_size = stage.archive_chunk_frames or arr.chunks[0]
-            frame_chunk_size = min(frame_chunk_size, arr.shape[0])
+            chunks = _archive_chunk_shape(arr.shape, arr.dtype, chunk_threshold_bytes)
+            compression = "gzip" if chunks == arr.shape else "lzf"
 
             ds = f.create_dataset(
                 stage.name,
                 shape=arr.shape,
                 dtype=arr.dtype,
-                chunks=(frame_chunk_size, *arr.shape[1:]),
-                compression="lzf",
+                chunks=chunks,
+                compression=compression,
             )
             ds.attrs["description"] = stage.description
 
-            for batch_start in range(0, arr.shape[0], frame_chunk_size):
-                batch_end = min(batch_start + frame_chunk_size, arr.shape[0])
+            for batch_start in range(0, arr.shape[0], chunks[0]):
+                batch_end = min(batch_start + chunks[0], arr.shape[0])
                 ds[batch_start:batch_end] = np.asarray(arr[batch_start:batch_end])

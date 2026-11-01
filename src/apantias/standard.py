@@ -2,14 +2,15 @@
 # stubs, so strict-mode unknown-type checks are relaxed here.
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportAttributeAccessIssue=false
 
-"""
-Definition of the standard data analysis pipeline.
+"""Definition of the standard data analysis pipeline.
 
-This module is the single place where the pipeline is defined: its stages,
-their order, and which arrays count as final outputs (``AnalysisArrays``).
-Infrastructure lives in dedicated modules and is only wired together here:
-path layout in ``io.paths``, branch-point materialization in
-``compute.materialize``, archiving in ``io.hdf5``.
+This module declares the analysis stages in a ``Pipeline``.  Each stage is
+registered together with metadata that controls where it is stored and whether
+it is a branch point.  How the stage is archived is decided centrally by the
+HDF5 writer based on the configured chunk threshold.  Infrastructure lives in
+dedicated modules and is only wired together here: path layout in ``io.paths``,
+the pipeline registry in ``io.outputs``, branch-point materialization in
+``_persist_or_store``, and archiving in ``io.hdf5``.
 """
 
 import logging
@@ -23,7 +24,7 @@ from apantias.cluster import init
 from apantias.compute import stats
 from apantias.compute.reductions import apply_pixelwise
 from apantias.io.hdf5 import write_analysis_outputs_to_h5
-from apantias.io.outputs import BRANCH, LARGE, SMALL, Pipeline
+from apantias.io.outputs import BRANCH, Pipeline
 from apantias.io.paths import AnalysisPaths
 from apantias.io.zarr import h5_to_zarr
 from apantias.preflight_check import PreflightValidator
@@ -111,7 +112,11 @@ class StandardAnalysis:
         # Stage 5: copy every archived Zarr output into the final HDF5 archive.
         # ------------------------------------------------------------------
         _logger.info("Writing HDF5 archive.")
-        write_analysis_outputs_to_h5(pipeline, self.config.analysis.h5_archive)
+        write_analysis_outputs_to_h5(
+            pipeline,
+            self.config.analysis.h5_archive,
+            chunk_threshold_bytes=self.config.frame.target_chunk_bytes,
+        )
 
     def _load_inputs(self) -> tuple[da.Array, da.Array]:
         # da.from_zarr sees the inner Zarr chunks (single-column) because the
@@ -134,80 +139,63 @@ class StandardAnalysis:
         """Declare every output of the standard analysis pipeline.
 
         Each ``declare`` call registers the dask array together with metadata
-        that controls where it is stored, whether it is a branch point, and
-        how it is archived.  No computation happens here; only the dask task
-        graph is assembled.
+        that controls where it is stored and whether it is a branch point.  No
+        computation happens here; only the dask task graph is assembled.
         """
         p = Pipeline(self.config.analysis)
 
         _logger.info("Start calculating median.")
-        # Per-pixel median across frames and repetitions; small final output.
         p.declare(
             "median",
             stats.compute_median(data_p),
             "Pixel-wise median across frames and repetitions",
-            **SMALL,
         )
 
         _logger.info("Start applying offset.")
-        # External offset (zeros if none provided); broadcasts into the 4D frame array.
         offset = self._load_offset()
-        # Correct every frame by the external offset and the per-pixel median.
-        # This is a branch point: both common-mode correction and the archive
-        # need the materialised result.
         p.declare(
             "offset_corr",
             stats.compute_offset_corr(data_f, offset, p["median"]),
             "Raw frames corrected by external offset and pixel median",
-            tags=[LARGE, BRANCH],
+            tags=[BRANCH],
         )
 
         _logger.info("Start common mode correction.")
-        # Compute the common-mode signal (median along the row axis) per frame.
         p.declare(
             "common_modes",
             stats.compute_common_modes(p["offset_corr"]),
             "Common-mode signal per frame, row and repetition",
-            tags=[LARGE, BRANCH],
+            tags=[BRANCH],
         )
-        # Subtract the common-mode signal from the offset-corrected frames.
         p.declare(
             "signals",
             stats.subtract(p["offset_corr"], p["common_modes"]),
             "Offset- and common-mode-corrected detector signal",
-            tags=[LARGE, BRANCH],
+            tags=[BRANCH],
         )
 
         _logger.info("Start calculating slopes, msd and mean signals.")
-        # Linear slope of the corrected signal versus repetition index.
         p.declare(
             "slopes",
             stats.compute_slopes(p["signals"]),
             "Linear slope of signal versus repetition index",
-            **SMALL,
         )
-        # Mean squared deviation of the corrected signal.
         p.declare(
             "msd",
             stats.compute_msd(p["signals"]),
             "Mean squared deviation of the corrected signal",
-            **SMALL,
         )
-        # Mean corrected signal per frame and pixel.
         p.declare(
             "signals_mean",
             stats.compute_signals_mean(p["signals"]),
             "Mean corrected signal per frame and pixel",
-            **SMALL,
         )
 
         _logger.info("Start pixelwise calculation.")
-        # Per-pixel max-min range computed on the raw pixel-chunked data.
         p.declare(
             "pixelwise",
             apply_pixelwise(data_p, lambda t: t.max() - t.min()),
             "Per-pixel max-min range of raw signal",
-            **SMALL,
         )
 
         return p

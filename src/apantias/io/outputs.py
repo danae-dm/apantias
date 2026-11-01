@@ -1,4 +1,4 @@
-"""Central declaration of pipeline outputs and their storage/archive behaviour."""
+"""Central declaration of pipeline outputs and their on-disk layout."""
 
 from __future__ import annotations
 
@@ -11,17 +11,12 @@ import dask.array as da
 
 from apantias.settings import AnalysisSettings
 
-#: Shorthand tag for small final outputs that are read fully and archived with gzip.
-#: Use as ``tags=[SMALL]`` or unpack with ``**SMALL`` in ``Pipeline.declare``.
-SMALL: dict[str, Any] = {"archive_strategy": "small"}
-
-#: Shorthand tag for large outputs that are streamed by source Zarr chunks and archived with lzf.
-LARGE: dict[str, Any] = {"archive_strategy": "large"}
-
-#: Shorthand tag for branch points: arrays that are materialised so downstream stages can use them.
+#: Shorthand tag for branch points: arrays that are materialised so downstream
+#: stages can use them.
 BRANCH: dict[str, Any] = {"is_branch_point": True}
 
-#: Shorthand tag for outputs that live in the persistent ``zarr_data`` store (e.g. raw inputs).
+#: Shorthand tag for outputs that live in the persistent ``zarr_data`` store
+#: (e.g. raw inputs).
 DATA: dict[str, Any] = {"location": "data"}
 
 
@@ -30,9 +25,9 @@ class Stage:
     """One named product of the analysis pipeline.
 
     A ``Stage`` wraps the lazy dask array together with metadata that controls
-    where it is stored, whether downstream stages depend on it, and how it is
-    written into the final HDF5 archive.  The description is used for logging and
-    stored as an HDF5 attribute so the archive is self-documenting.
+    where it is stored and whether downstream stages depend on it.  The
+    description is used for logging and stored as an HDF5 attribute so the
+    archive is self-documenting.
     """
 
     name: str
@@ -41,8 +36,6 @@ class Stage:
     path: Path
     is_branch_point: bool = False
     is_archived: bool = True
-    archive_strategy: Literal["small", "large"] = "small"
-    archive_chunk_frames: int | None = None
 
 
 @dataclass
@@ -54,8 +47,7 @@ class Pipeline:
     - which arrays are produced,
     - where each array is materialised on disk,
     - which arrays are branch points that downstream stages need,
-    - which arrays end up in the final HDF5 archive,
-    - how the archive is chunked and compressed.
+    - which arrays end up in the final HDF5 archive.
     """
 
     analysis: AnalysisSettings
@@ -76,18 +68,17 @@ class Pipeline:
         array: da.Array,
         description: str,
         *,
-        location: Literal["data", "temp"] = "temp",
-        is_branch_point: bool = False,
-        is_archived: bool = True,
-        archive_strategy: Literal["small", "large"] = "small",
-        archive_chunk_frames: int | None = None,
+        location: Literal["data", "temp"] | None = None,
+        is_branch_point: bool | None = None,
+        is_archived: bool | None = None,
         tags: list[dict[str, Any]] | None = None,
     ) -> da.Array:
         """Register a new pipeline product and return its dask array unchanged.
 
         ``tags`` is a convenience helper: each dict is merged into the stage
-        metadata, so callers can write ``tags=[LARGE, BRANCH]`` instead of
-        repeating keyword arguments.
+        metadata, so callers can write ``tags=[BRANCH]`` or ``tags=[DATA]``
+        instead of repeating keyword arguments.  Explicit keyword arguments
+        override tags.
 
         Parameters
         ----------
@@ -99,24 +90,27 @@ class Pipeline:
         description:
             Human-readable explanation of what the array represents.
         tags:
-            Optional list of shorthand tag dicts (``SMALL``, ``LARGE``,
-            ``BRANCH``, ``DATA``) to apply.  Explicit keyword arguments always
-            override tags.
+            Optional list of shorthand tag dicts (``BRANCH``, ``DATA``) to
+            apply.
         """
         if name in self._stages:
             raise ValueError(f"Stage '{name}' has already been declared")
 
-        # Merge tag dicts first; explicit keyword arguments take precedence.
-        merged: dict[str, Any] = {}
+        # Start from defaults, apply tags, then let explicit keyword arguments
+        # override everything.
+        merged: dict[str, Any] = {
+            "location": "temp",
+            "is_branch_point": False,
+            "is_archived": True,
+        }
         for tag in tags or []:
             merged.update(tag)
-        merged.update({
-            "location": location,
-            "is_branch_point": is_branch_point,
-            "is_archived": is_archived,
-            "archive_strategy": archive_strategy,
-            "archive_chunk_frames": archive_chunk_frames,
-        })
+        if location is not None:
+            merged["location"] = location
+        if is_branch_point is not None:
+            merged["is_branch_point"] = is_branch_point
+        if is_archived is not None:
+            merged["is_archived"] = is_archived
 
         stage = Stage(
             name=name,
@@ -125,8 +119,6 @@ class Pipeline:
             path=self._resolve_path(name, merged["location"]),
             is_branch_point=merged["is_branch_point"],
             is_archived=merged["is_archived"],
-            archive_strategy=merged["archive_strategy"],
-            archive_chunk_frames=merged["archive_chunk_frames"],
         )
         self._stages[name] = stage
         return array
@@ -188,7 +180,7 @@ class Pipeline:
         lines = ["Analysis pipeline:", "-" * 50]
         for s in self._stages.values():
             branch = " [branch]" if s.is_branch_point else ""
-            archive = f" -> archive ({s.archive_strategy})" if s.is_archived else ""
+            archive = " -> archive" if s.is_archived else ""
             lines.append(f"  {s.name:<15} {branch}{archive}")
             lines.append(f"    {s.description}")
         return "\n".join(lines)
