@@ -4,6 +4,7 @@ from pathlib import Path
 
 import dask.array as da
 import numpy as np
+import numpy.typing as npt
 import pytest
 import zarr
 
@@ -21,7 +22,8 @@ def pipeline(tmp_path: Path) -> Pipeline:
 
 
 def _tiny_array() -> da.Array:
-    return da.from_array(np.zeros((2, 2)), chunks=(2, 2))
+    data: npt.NDArray[np.float64] = np.zeros((2, 2), dtype=np.float64)
+    return da.from_array(data, chunks=(2, 2))  # type: ignore[reportReturnType, reportArgumentType]
 
 
 def test_declare_registers_stage_and_returns_array(pipeline: Pipeline) -> None:
@@ -83,9 +85,11 @@ def test_stage_array_can_be_replaced_in_place(pipeline: Pipeline, tmp_path: Path
 
     # Create the store the materialized handle reads from, as _persist_or_store would.
     store = pipeline.path("msd")
-    arr = np.zeros((2, 2))
-    zarr.open_array(str(store), mode="w", shape=arr.shape, chunks=(2, 2), dtype=arr.dtype)[:] = arr
-    materialized = da.from_zarr(store)
+    arr: npt.NDArray[np.float64] = np.zeros((2, 2), dtype=np.float64)
+    zarr.open_array(  # type: ignore[reportUnknownMemberType]
+        str(store), mode="w", shape=arr.shape, chunks=(2, 2), dtype=arr.dtype
+    )[:] = arr
+    materialized = da.from_zarr(store)  # type: ignore[reportUnknownVariableType]
     pipeline.stage("msd").array = materialized
 
     assert pipeline["msd"] is materialized
