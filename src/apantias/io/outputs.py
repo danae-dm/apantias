@@ -51,7 +51,9 @@ class Pipeline:
     """
 
     analysis: AnalysisSettings
+    memory_budget_bytes: int | None = None
     _stages: dict[str, Stage] = field(default_factory=dict[str, Stage], init=False)
+    _memory_used_bytes: int = field(default=0, init=False)
 
     def _resolve_path(self, name: str, location: Literal["data", "temp"]) -> Path:
         """Return the on-disk path for an output based on its storage location.
@@ -61,6 +63,16 @@ class Pipeline:
         """
         root = Path(self.analysis.zarr_data) if location == "data" else Path(self.analysis.zarr_temp)
         return root / name
+
+    def can_persist_in_memory(self, nbytes: int) -> bool:
+        """Return True if *nbytes* still fits into the in-memory budget."""
+        if self.memory_budget_bytes is None:
+            return True
+        return self._memory_used_bytes + nbytes <= self.memory_budget_bytes
+
+    def record_memory_use(self, nbytes: int) -> None:
+        """Book *nbytes* as persisted in worker memory."""
+        self._memory_used_bytes += nbytes
 
     def declare(
         self,
@@ -127,7 +139,7 @@ class Pipeline:
         """Access the current dask array of a declared stage.
 
         After ``materialize_branches`` this returns the materialised array, so
-        downstream declarations automatically use the persisted version.
+        downstream declarations automatically see the persisted version.
         """
         return self._stages[name].array
 
@@ -164,16 +176,19 @@ class Pipeline:
 
     def materialize_branches(
         self,
-        materialize: Callable[[da.Array, Path], da.Array],
+        materialize: Callable[[da.Array, Path, Pipeline], da.Array],
     ) -> None:
         """Persist every declared branch point in place.
 
         Because stages are looked up by name, downstream stages that access a
         branch point via ``__getitem__`` automatically see the materialised
         array.
+
+        The provided ``materialize`` callback receives the pipeline instance so
+        it can consult and update the in-memory budget.
         """
         for stage in self.branch_points():
-            stage.array = materialize(stage.array, stage.path)
+            stage.array = materialize(stage.array, stage.path, self)
 
     def summary(self) -> str:
         """Return a human-readable summary of declared stages."""
