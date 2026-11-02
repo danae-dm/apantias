@@ -14,7 +14,7 @@ import zarr
 from dask import delayed  # pyright: ignore
 from dask.base import compute
 
-from apantias.io.zarr import _blosc_codecs  # pyright: ignore[reportPrivateUsage]
+from apantias.storage.zarr import _blosc_codecs  # pyright: ignore[reportPrivateUsage]
 
 _logger = logging.getLogger(__name__)
 

@@ -13,8 +13,8 @@ import pytest
 import yaml
 import zarr
 
+from apantias.pipelines import StandardAnalysis
 from apantias.settings import AnalysisSettings, AppSettings, RuntimeSettings
-from apantias.standard import StandardAnalysis
 
 N_FRAMES, N_COLS, N_REPS, N_ROWS = 12, 4, 6, 4
 

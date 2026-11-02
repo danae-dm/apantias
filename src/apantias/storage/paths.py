@@ -11,7 +11,7 @@ class AnalysisPaths:
     """Locations of the raw input stores and the two Zarr roots.
 
     This class deliberately does *not* list the analysis outputs (median,
-    signals, ...): the ``Pipeline`` registry in ``io.outputs`` is the single
+    signals, ...): the ``Pipeline`` registry in ``storage.outputs`` is the single
     source of truth for where products are stored, resolving each stage to
     ``<zarr_temp>/<stage name>`` (or ``<zarr_data>/<stage name>`` for raw
     data locations).  Keeping only the inputs here avoids two drifting

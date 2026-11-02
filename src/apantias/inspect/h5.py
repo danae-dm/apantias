@@ -5,12 +5,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
 import h5py  # pyright: ignore[reportMissingTypeStubs]
 import numpy as np
-import numpy.typing as npt
 
 
 def _format_bytes(nbytes: int) -> str:
@@ -61,7 +60,7 @@ def print_archive_summary(h5_path: Path | str) -> None:
     """Print a compact table of all top-level datasets in an archive file.
 
     This is tailored to the standard analysis archive produced by
-    ``apantias.io.hdf5.write_analysis_outputs_to_h5``, but works for any HDF5
+    ``apantias.storage.hdf5.write_analysis_outputs_to_h5``, but works for any HDF5
     file with flat top-level datasets.
     """
     h5_path = Path(h5_path)
@@ -111,11 +110,11 @@ def print_dataset_stats(
     *,
     sample_max_elements: int = 1_000_000,
 ) -> None:
-    """Print summary statistics for a dataset.
+    """Print basic statistics for a single dataset.
 
-    For datasets larger than *sample_max_elements*, a random sample is drawn
-    along the first axis so the statistics remain cheap to compute while still
-    being representative.
+    For datasets larger than *sample_max_elements*, a regularly-spaced subset
+    along axis 0 is read to keep the operation fast on chunked data. The
+    output is then marked as "sampled".
     """
     h5_path = Path(h5_path)
     with h5py.File(h5_path, "r") as f:
@@ -123,29 +122,101 @@ def print_dataset_stats(
         if not isinstance(ds, h5py.Dataset):
             raise ValueError(f"'{dataset_name}' is not a dataset in {h5_path}")
 
-        data: npt.NDArray[Any]
         total_elements = int(np.prod(ds.shape))
-        if total_elements <= sample_max_elements:
+        if total_elements <= sample_max_elements or ds.ndim == 0:
             data = np.asarray(ds[()])
+            sampled = False
         else:
-            # For large arrays sample along the first axis; if even that is too
-            # large, fall back to a flat random sample of the requested size.
-            n_first = ds.shape[0]
-            sample_first = max(1, sample_max_elements // int(np.prod(ds.shape[1:])))
-            sample_first = min(sample_first, n_first)
-            indices = np.linspace(0, n_first - 1, num=sample_first, dtype=int)
-            data = np.asarray(ds[indices])
-            if data.size > sample_max_elements:
-                flat = data.ravel()
-                rng = np.random.default_rng(0)
-                flat_indices = rng.choice(len(flat), size=sample_max_elements, replace=False)
-                data = flat[flat_indices]
-            print(f"  (sampled {data.size} of {total_elements} elements)")
+            # Chunked data is along axis 0; stride that axis to stay efficient.
+            stride = max(1, int(total_elements // sample_max_elements))
+            idx = (slice(None, None, stride),) + (slice(None),) * (ds.ndim - 1)
+            data = np.asarray(ds[idx])
+            sampled = True
 
-        finite = data[np.isfinite(data)]
-        print(f"Stats for '{dataset_name}' in {h5_path}:")
-        print(f"  min:    {finite.min() if finite.size else 'n/a'}")
-        print(f"  max:    {finite.max() if finite.size else 'n/a'}")
-        print(f"  mean:   {finite.mean() if finite.size else 'n/a'}")
-        print(f"  std:    {finite.std() if finite.size else 'n/a'}")
-        print(f"  finite: {finite.size}/{data.size}")
+        finite = np.isfinite(data)
+        finite_data = data[finite]
+        prefix = "sampled " if sampled else ""
+        print(f"Stats for {dataset_name} in {h5_path}:")
+        print(f"  shape:       {ds.shape}")
+        print(f"  dtype:       {ds.dtype}")
+        print(f"  {prefix}min:        {finite_data.min() if finite_data.size else 'n/a'}")
+        print(f"  {prefix}max:        {finite_data.max() if finite_data.size else 'n/a'}")
+        print(f"  {prefix}mean:       {finite_data.mean() if finite_data.size else 'n/a'}")
+        print(f"  {prefix}std:        {finite_data.std() if finite_data.size else 'n/a'}")
+        print(f"  finite:      {finite.sum()} / {data.size}")
+
+
+def read_dataset_slice(
+    h5_path: Path | str,
+    dataset_name: str,
+    slice_spec: slice | Sequence[slice] | np.ndarray | None = None,
+) -> np.ndarray:
+    """Return a slice of a dataset as a NumPy array.
+
+    Parameters
+    ----------
+    h5_path:
+        Path to the HDF5 file.
+    dataset_name:
+        Name of the dataset (supports ``"group/dataset"`` syntax).
+    slice_spec:
+        What to read. Accepts:
+
+        - ``None`` – read the entire dataset.
+        - A single ``slice`` – e.g. ``slice(0, 100)`` to get the first 100
+          entries along axis 0.
+        - A tuple of ``slice`` objects – e.g. ``(slice(0, 100), slice(None),
+          slice(None))`` or simply ``slice(0, 100)`` which is expanded to
+          ``slice(None)`` for remaining axes.
+        - A 1-D integer ``np.ndarray`` – interpretted as row indices along
+          axis 0 (advanced indexing).
+
+    Returns
+    -------
+    ``np.ndarray``
+        The requested slice of the data.
+
+    Raises
+    ------
+    KeyError
+        If *dataset_name* does not exist.
+    ValueError
+        If *slice_spec* is incompatible with the dataset shape.
+    """
+    h5_path = Path(h5_path)
+
+    with h5py.File(h5_path, "r") as f:
+        ds = f[dataset_name]
+        if not isinstance(ds, h5py.Dataset):
+            raise ValueError(f"'{dataset_name}' is not a dataset in {h5_path}")
+
+        if slice_spec is None:
+            index = ()
+        elif isinstance(slice_spec, slice):
+            # Expand a single slice to "full" for remaining axes
+            # e.g. slice(10, 20) -> (10:20, ..., ...)
+            index = (slice_spec,) + (slice(None),) * (len(ds.shape) - 1)
+        elif isinstance(slice_spec, tuple):
+            # Validate that the tuple matches the rank
+            # (h5py would raise, but give a clearer message)
+            if len(slice_spec) != len(ds.shape):
+                raise ValueError(
+                    f"slice tuple length {len(slice_spec)} does not match "
+                    f"dataset rank {len(ds.shape)} for '{dataset_name}'"
+                )
+            index = slice_spec
+        elif (
+            # duck-typing for numpy array
+            hasattr(slice_spec, "ndim")
+            and slice_spec.ndim == 1  # type: ignore[union-attr]
+            and np.issubdtype(slice_spec.dtype, np.integer)  # type: ignore[union-attr]
+        ):
+            # Integer index array -> advanced indexing on axis 0
+            index = (slice_spec,) + (slice(None),) * (len(ds.shape) - 1)
+        else:
+            raise TypeError(
+                f"Unsupported slice_spec type {type(slice_spec).__name__}; "
+                f"expected slice, tuple[slice, ...], or 1-D int ndarray"
+            )
+
+        return np.asarray(ds[index])

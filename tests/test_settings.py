@@ -28,7 +28,7 @@ def test_appsettings_defaults() -> None:
 
 def test_load_config_creates_default(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     # Avoid hanging on resource auto-detection in restricted environments.
-    monkeypatch.setattr("apantias.get_resources.get_resources", lambda: (4, 8192))
+    monkeypatch.setattr("apantias.runtime.resources.get_resources", lambda: (4, 8192))
     config_path = tmp_path / "default.yaml"
     assert not config_path.exists()
     cfg = load_config(config_path, quiet=True)

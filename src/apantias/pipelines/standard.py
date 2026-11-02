@@ -18,9 +18,9 @@ outputs stay lazy and are written together in one batched ``da.store``.
 
 How a stage is archived is decided centrally by the HDF5 writer based on the
 configured chunk threshold.  Infrastructure lives in dedicated modules and is
-only wired together here: path layout in ``io.paths``, the pipeline registry in
-``io.outputs``, stage materialization in ``_persist_or_store``, and archiving
-in ``io.hdf5``.
+only wired together here: path layout in ``storage.paths``, the pipeline registry in
+``storage.outputs``, stage materialization in ``_persist_or_store``, and archiving
+in ``storage.hdf5``.
 """
 
 import logging
@@ -30,16 +30,16 @@ from typing import cast
 import dask.array as da
 import zarr
 
-from apantias.cluster import init
-from apantias.compute import stats
-from apantias.compute.reductions import apply_pixelwise
-from apantias.io.hdf5 import write_analysis_outputs_to_h5
-from apantias.io.outputs import BRANCH, Pipeline
-from apantias.io.paths import AnalysisPaths
-from apantias.io.zarr import h5_to_zarr
-from apantias.preflight_check import PreflightValidator
+from apantias.preflight import PreflightValidator
+from apantias.processing import stats
+from apantias.processing.rechunk import rechunk_to_pixels
+from apantias.processing.reductions import apply_pixelwise
+from apantias.runtime import init
 from apantias.settings import AppSettings, load_config
-from apantias.transform.rechunk import rechunk_to_pixels
+from apantias.storage.hdf5 import write_analysis_outputs_to_h5
+from apantias.storage.outputs import BRANCH, Pipeline
+from apantias.storage.paths import AnalysisPaths
+from apantias.storage.zarr import h5_to_zarr
 
 _logger = logging.getLogger(__name__)
 

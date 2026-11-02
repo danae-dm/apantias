@@ -50,25 +50,25 @@ pip install apantias
 ```python
 from pathlib import Path
 
-from apantias import settings, standard
+from apantias import settings, pipelines
 
 # Load settings from a YAML file (writes a default.yaml first if none exists)
 config = settings.load_config(Path("default.yaml"))
 
 # Hand the settings to the analysis: preflight checks run first, then a dask
 # cluster is started; the client/cluster are closed again after run()
-analysis = standard.StandardAnalysis(config)
+analysis = pipelines.StandardAnalysis(config)
 analysis.run()
 ```
 
-`StandardAnalysis` also accepts a path to a YAML config file
-(`standard.StandardAnalysis("default.yaml")`) or no argument to use
+`pipelines.StandardAnalysis` also accepts a path to a YAML config file
+(`pipelines.StandardAnalysis("default.yaml")`) or no argument to use
 `default.yaml` from the current directory.
 
 All tunable parameters (chunk sizes, dask temp paths, fit thresholds, ...)
 live in the frozen `AppSettings` structure — see the module docstring in
 `src/apantias/settings.py`. Raw binary data can be converted with
-`apantias.io.bin_to_h5` and `apantias.io.h5_to_zarr`.
+`apantias.storage.bin_to_h5` and `apantias.storage.h5_to_zarr`.
 
 ## Development
 

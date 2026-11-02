@@ -40,8 +40,8 @@ from typing import Any, cast
 import h5py  # pyright: ignore[reportMissingTypeStubs]
 import zarr
 
-from apantias.io.hdf5 import split_h5_dataset_path
 from apantias.settings import AppSettings
+from apantias.storage.hdf5 import split_h5_dataset_path
 
 _logger = logging.getLogger(__name__)
 

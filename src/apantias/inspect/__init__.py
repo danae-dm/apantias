@@ -5,6 +5,7 @@ from .h5 import (
     print_dataset_info,
     print_dataset_stats,
     print_h5_contents,
+    read_dataset_slice,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "print_dataset_info",
     "print_dataset_stats",
     "print_h5_contents",
+    "read_dataset_slice",
 ]

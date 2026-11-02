@@ -1,4 +1,4 @@
-# Helpers in this module are imported by apantias.io.zarr; the underscore marks
+# Helpers in this module are imported by apantias.storage.zarr; the underscore marks
 # them as package-internal rather than module-private.
 # pyright: reportUnusedFunction=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
 
@@ -18,8 +18,8 @@ import zarr
 from pydantic import BaseModel
 
 from apantias.inspect.h5 import print_h5_contents
-from apantias.io.outputs import Pipeline
 from apantias.settings import AppSettings
+from apantias.storage.outputs import Pipeline
 
 __all__ = [
     "load_h5_dataset",

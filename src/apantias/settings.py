@@ -27,7 +27,7 @@ from typing import Any, ClassVar, cast, get_origin
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import get_resources
+from apantias.runtime import resources
 
 DEFAULT_CONFIG_FILE = Path("default.yaml")
 # Teach pyYAML how to dump Path objects.  add_representer matches *exact*
@@ -238,7 +238,7 @@ def _validate_complete(data: dict[str, Any], path: Path) -> None:
 def _resolve_auto(config: AppSettings) -> AppSettings:
     """Fill in cpus/ram_mb when set to 0 (auto-detect)."""
     runtime = config.runtime
-    cpus, ram_mb = get_resources.get_resources()
+    cpus, ram_mb = resources.get_resources()
 
     updates: dict[str, Any] = {}
     if runtime.cpus == 0:

@@ -1,4 +1,4 @@
-"""Tests for apantias.io helpers and zarr utilities."""
+"""Tests for apantias.storage helpers and zarr utilities."""
 
 # Tests import package-internal helpers and exercise Zarr's runtime API, which
 # has incomplete stubs in strict mode.
@@ -12,15 +12,15 @@ import numpy as np
 import pytest
 import zarr
 
-from apantias.io._helpers import (
+from apantias.settings import RangeSpec
+from apantias.storage._helpers import (
     _frame_chunk_size,
     _parse_bin_frames,
     _read_frame_batch,
     _resolve_range_indices,
 )
-from apantias.io.hdf5 import load_h5_dataset, split_h5_dataset_path
-from apantias.io.zarr import _blosc_codecs, _parse_zarr_path, get_chunk_info
-from apantias.settings import RangeSpec
+from apantias.storage.hdf5 import load_h5_dataset, split_h5_dataset_path
+from apantias.storage.zarr import _blosc_codecs, _parse_zarr_path, get_chunk_info
 
 
 def test_resolve_range_indices() -> None:

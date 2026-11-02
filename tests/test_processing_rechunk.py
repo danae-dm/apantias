@@ -1,4 +1,4 @@
-"""Tests for apantias.transform.rechunk."""
+"""Tests for apantias.processing.rechunk."""
 
 # Tests exercise Zarr's runtime API; its stubs are incomplete in strict mode.
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import zarr
 
-from apantias.transform.rechunk import rechunk_to_pixels
+from apantias.processing.rechunk import rechunk_to_pixels
 
 
 def test_rechunk_to_pixels(tmp_path: Path) -> None:

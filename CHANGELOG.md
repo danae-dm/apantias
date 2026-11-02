@@ -59,23 +59,23 @@ Historical development notes for `apantias`. New entries go on top.
   - split `StandardAnalysis` into `_load_inputs`, `_build_pipeline`, and `_save_outputs`
   - introduced `_persist_or_store` for branch-point materialization (memory or Zarr)
   - final outputs are now written together via `da.store`
-- made `compute.stats` functions pure (return `da.Array` instead of writing to paths)
-- made `compute.reductions.apply_pixelwise` pure and integrated it as a real stage on `data_p`
+- made `processing.stats` functions pure (return `da.Array` instead of writing to paths)
+- made `processing.reductions.apply_pixelwise` pure and integrated it as a real stage on `data_p`
 - fixed rechunk value: axis 1 is now rechunked to `n_cols` instead of `n_rows`
 - fixed offset correction logic: `compute_offset_corr` now subtracts both the external
   offset and the computed median; previously the median was computed but unused and the
   external offset was passed as if it were the median
 - fixed default zero-offset shape to `(n_cols, n_rows)`
-- updated `tests/test_compute_stats.py` for the new pure-function API
+- updated `tests/test_processing_stats.py` for the new pure-function API
 - fixed `apply_pixelwise`: it now truly reduces per pixel, returning shape
   `(n_cols, n_rows)` (the previous implementation passed per-row slabs of shape
   `(n_frames, n_cols, n_reps)` to the user function and crashed with
   scalar-returning functions at compute time)
-- added axis constants (`FRAME`, `COL`, `REP`, `ROW`) in `compute/axis.py` and
-  replaced the hardcoded axis numbers in `compute.stats`
-- tightened exception handling in `preflight_check.py`:
+- added axis constants (`FRAME`, `COL`, `REP`, `ROW`) in `processing/axis.py` and
+  replaced the hardcoded axis numbers in `processing.stats`
+- tightened exception handling in `preflight/check.py`:
   `except Exception` became `except (OSError, KeyError, ValueError)`
-- added `write_analysis_outputs_to_h5` in `io/hdf5.py`: writes all final Zarr
+- added `write_analysis_outputs_to_h5` in `storage/hdf5.py`: writes all final Zarr
   outputs into a single HDF5 archive (`AnalysisSettings.h5_archive`) as the
   last step of `_run_analysis`; large 4D arrays use frame-sized chunks with
   lzf (streamed frame by frame), small results are contiguous with gzip

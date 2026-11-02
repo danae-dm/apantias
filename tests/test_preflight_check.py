@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import zarr
 
-from apantias.preflight_check import PreflightError, PreflightValidator
+from apantias.preflight import PreflightError, PreflightValidator
 from apantias.settings import AnalysisSettings, AppSettings, RangeSpec
 
 # Raw dataset shape (n_frames, n_rows, n_reps, n_cols) used in all tests.

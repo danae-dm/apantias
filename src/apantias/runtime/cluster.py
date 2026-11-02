@@ -5,7 +5,7 @@ from pathlib import Path
 import dask.config
 from dask.distributed import Client, LocalCluster
 
-from apantias.get_resources import get_resources
+from apantias.runtime.resources import get_resources
 
 _logger = logging.getLogger(__name__)
 

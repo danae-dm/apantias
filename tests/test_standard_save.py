@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import numpy as np
 
-from apantias.standard import StandardAnalysis
+from apantias.pipelines import StandardAnalysis
 
 
 def test_load_offset_without_ext_offset() -> None:

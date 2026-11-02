@@ -1,8 +1,8 @@
-"""Tests for apantias.get_resources."""
+"""Tests for apantias.runtime.resources."""
 
 import pytest
 
-from apantias.get_resources import _parse_slurm_mem, get_resources  # pyright: ignore
+from apantias.runtime.resources import _parse_slurm_mem, get_resources  # pyright: ignore
 
 
 def test_parse_slurm_mem() -> None:

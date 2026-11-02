@@ -1,4 +1,4 @@
-"""Tests for the Pipeline stage registry in apantias.io.outputs."""
+"""Tests for the Pipeline stage registry in apantias.storage.outputs."""
 
 from pathlib import Path
 
@@ -8,8 +8,8 @@ import numpy.typing as npt
 import pytest
 import zarr
 
-from apantias.io.outputs import BRANCH, DATA, Pipeline
 from apantias.settings import AnalysisSettings
+from apantias.storage.outputs import BRANCH, DATA, Pipeline
 
 
 @pytest.fixture

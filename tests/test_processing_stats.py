@@ -1,4 +1,4 @@
-"""Tests for apantias.compute.stats."""
+"""Tests for apantias.processing.stats."""
 
 # Zarr's stubs report open_array as partially unknown in strict mode; this is a
 # test file, so we relax that check rather than cluttering each assertion.
@@ -11,8 +11,8 @@ import numpy as np
 import numpy.typing as npt
 import zarr
 
-from apantias.compute.reductions import apply_pixelwise
-from apantias.compute.stats import (
+from apantias.processing.reductions import apply_pixelwise
+from apantias.processing.stats import (
     compute_common_modes,
     compute_median,
     compute_msd,
