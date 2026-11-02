@@ -240,15 +240,11 @@ class StandardAnalysis:
     def _persist_or_store(self, arr: da.Array, path: Path, pipeline: Pipeline) -> da.Array:
         """Materialize a branch-point array so it is not recomputed.
 
-        Uses an in-memory persist when the array fits both the per-array RAM
-        limit and the pipeline-wide in-memory budget.  Otherwise the array is
-        written to Zarr and read back from disk.
+        The array is persisted in worker memory only while the configured
+        in-memory budget (``analysis.persist_memory_percent`` of total RAM) is
+        not exceeded.  Otherwise it is written to Zarr and read back from disk.
         """
-        threshold = self._in_memory_threshold()
-        fits_per_array = 0 < arr.nbytes < threshold
-        fits_budget = pipeline.can_persist_in_memory(arr.nbytes)
-
-        if fits_per_array and fits_budget:
+        if pipeline.can_persist_in_memory(arr.nbytes):
             _logger.info("Persist %s in memory (%.2f MB).", path.name, arr.nbytes / 1e6)
             persisted = cast(da.Array, self._client.persist(arr))
             # Also write the store: downstream stages read from memory, but the
@@ -257,35 +253,25 @@ class StandardAnalysis:
             pipeline.record_memory_use(arr.nbytes)
             return persisted
 
-        if fits_per_array and not fits_budget:
-            _logger.info(
-                "Store %s to zarr (%.2f MB) — in-memory budget exhausted.",
-                path.name,
-                arr.nbytes / 1e6,
-            )
-        else:
-            _logger.info("Store %s to zarr (%.2f MB).", path.name, arr.nbytes / 1e6)
-
+        _logger.info(
+            "Store %s to zarr (%.2f MB) — memory budget exhausted.",
+            path.name,
+            arr.nbytes / 1e6,
+        )
         arr.to_zarr(path, overwrite=True)
         return cast(da.Array, da.from_zarr(path))
 
-    def _memory_budget_bytes(self) -> int | None:
+    def _memory_budget_bytes(self) -> int:
         """Return the total in-memory budget for persisted branch points.
 
-        The budget is 30 % of the configured total RAM.  ``None`` would mean
-        "no budget", but this analysis always caps memory use.
+        The budget is ``analysis.persist_memory_percent`` percent of the
+        configured total RAM.
         """
         ram_mb = self.config.runtime.ram_mb
         if ram_mb <= 0:
-            return None
-        return int(ram_mb * 1024 * 1024 * 0.30)
-
-    def _in_memory_threshold(self) -> int:
-        # Use a quarter of the configured RAM as the per-array persist budget.
-        ram_mb = self.config.runtime.ram_mb
-        if ram_mb <= 0:
             return 0
-        return int(ram_mb * 1024 * 1024 * 0.25)
+        percent = self.config.analysis.persist_memory_percent
+        return int(ram_mb * 1024 * 1024 * (percent / 100.0))
 
     def _save_final_outputs(self, pipeline: Pipeline) -> None:
         """Write all final (non-branch) archived outputs to their Zarr stores."""

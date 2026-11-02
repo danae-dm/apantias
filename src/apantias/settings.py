@@ -152,6 +152,12 @@ class AnalysisSettings(BaseModel):
     )
     slope_threshold: int = Field(default=3, description="Threshold for the Slope Filter.")
     second_offset: bool = Field(default=True, description="Shifts the signals according to the pixel hist fit.")
+    persist_memory_percent: int = Field(
+        default=30,
+        ge=0,
+        le=100,
+        description="Maximum percentage of total RAM to use for persisted branch-point arrays.",
+    )
 
 
 class AppSettings(BaseModel):
