@@ -24,6 +24,7 @@ in ``storage.hdf5``.
 """
 
 import logging
+import shutil
 from pathlib import Path
 from typing import cast
 
@@ -81,8 +82,25 @@ class StandardAnalysis:
         try:
             self._run_analysis()
         finally:
+            self._cleanup()
             client.close()
             cluster.close()
+
+    def _cleanup(self) -> None:
+        """Remove temporary Zarr stores after archiving.
+
+        Called in the finally block of ``run()`` so it always executes,
+        even when the analysis fails after the archive step has completed.
+        Errors during cleanup are logged but never raised — they cannot
+        undo the analysis results already written to the HDF5 archive.
+        """
+        for label, path in (("temp", self.paths.temp_root), ("data", self.paths.data_root)):
+            if path.is_dir():
+                try:
+                    shutil.rmtree(path)
+                    _logger.info("Removed %s store: %s", label, path)
+                except OSError as exc:
+                    _logger.warning("Failed to remove %s store %s: %s", label, path, exc)
 
     def _run_analysis(self) -> None:
         zarr.open_group(self.paths.temp_root, mode="a")

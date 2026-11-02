@@ -23,7 +23,7 @@ except importlib.metadata.PackageNotFoundError:
     __version__ = "0.0.0+unknown"
 __author__ = "Florian Heinrich"
 __credits__ = "HEPHY Vienna"
-# controls what is imported by "from apantiuas import *"
+# controls what is imported by "from apantias import *"
 __all__ = ["inspect", "pipelines", "preflight", "processing", "runtime", "settings"]
 
 
