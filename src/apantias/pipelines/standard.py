@@ -65,7 +65,10 @@ class StandardAnalysis:
 
         # Dask cluster starts only after inputs are proven valid
         self._client, self._cluster = init(
-            self.config.runtime.dask_temp, self.config.runtime.cpus, self.config.runtime.ram_mb
+            self.config.runtime.dask_temp,
+            self.config.runtime.cpus,
+            self.config.runtime.ram_mb,
+            dashboard=self.config.runtime.dask_dashboard,
         )
 
         self.paths = AnalysisPaths.from_settings(self.config.analysis)

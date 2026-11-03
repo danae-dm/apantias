@@ -82,6 +82,10 @@ class RuntimeSettings(BaseModel):
         default=Path("/scratch/users/florian.heinrich/dask_temp"),
         description="Path to dasks temp storage, use fast storage options here",
     )
+    dask_dashboard: bool = Field(
+        default=False,
+        description="If True, start the Dask dashboard and print an SSH tunnel command. Adds startup overhead.",
+    )
 
 
 class FrameSettings(BaseModel):
@@ -211,7 +215,8 @@ def _validate_complete(data: dict[str, Any], path: Path) -> None:
 
     Fields marked with `exclude=True` in their Pydantic definition are internal
     runtime parameters (e.g. inferred from HDF5) and are not expected in YAML.
-    All other fields must be explicitly present in the YAML file.
+    Fields that have a default value may be omitted; Pydantic fills them in.
+    Only fields without a default are required to be present in the YAML file.
     """
     missing: list[str] = []
 
@@ -220,7 +225,8 @@ def _validate_complete(data: dict[str, Any], path: Path) -> None:
             continue
 
         if field_name not in data:
-            missing.append(field_name)
+            if field_info.is_required():
+                missing.append(field_name)
             continue
 
         section_data = cast(dict[str, Any], data[field_name])
@@ -230,8 +236,8 @@ def _validate_complete(data: dict[str, Any], path: Path) -> None:
                 # Skip internal fields marked with exclude=True
                 if sub_info.exclude:
                     continue
-                # All other fields MUST be present in the YAML
-                if sub_name not in section_data:
+                # Required fields without a default MUST be present in the YAML
+                if sub_info.is_required() and sub_name not in section_data:
                     missing.append(f"{field_name}.{sub_name}")
 
     if missing:

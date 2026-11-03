@@ -38,7 +38,9 @@ def get_node_name() -> str:
     return node_name
 
 
-def init(local_dir: str | Path, cores: int | None = None, ram_mb: int | None = None) -> tuple[Client, LocalCluster]:
+def init(
+    local_dir: str | Path, cores: int | None = None, ram_mb: int | None = None, *, dashboard: bool = True
+) -> tuple[Client, LocalCluster]:
     # initialize the config
     if cores is None:
         cores = get_resources()[0]
@@ -65,14 +67,15 @@ def init(local_dir: str | Path, cores: int | None = None, ram_mb: int | None = N
         env=env_vars,
         processes=True,
         memory_limit=memory_limit,
-        dashboard_address=":43359",  # binds 0.0.0.0:8787 so the proxy can reach it
+        dashboard_address=":43359" if dashboard else None,  # pyright: ignore[reportArgumentType]  # None disables dashboard
         local_directory=local_directory,
     )
-    node = get_node_name()
     _logger.info(f"Initialized Dask on {cores} cores.")
     if memory_limit is not None:
         _logger.info(f"Worker memory limit: {memory_limit} per worker.")
-    _logger.info("For Dashboard access open a ssh tunnel with this command:")
-    _logger.info(f"ssh -N -L 8787:{node}:43359 user@cbe.vbc.ac.at")
-    _logger.info("Access the Dashboard in your browser at http://localhost:8787")
+    if dashboard:
+        node = get_node_name()
+        _logger.info("For Dashboard access open a ssh tunnel with this command:")
+        _logger.info(f"ssh -N -L 8787:{node}:43359 user@cbe.vbc.ac.at")
+        _logger.info("Access the Dashboard in your browser at http://localhost:8787")
     return Client(cluster), cluster
