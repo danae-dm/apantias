@@ -45,6 +45,35 @@ from apantias.storage.zarr import h5_to_zarr
 _logger = logging.getLogger(__name__)
 
 
+def _driver_rss_mb() -> float | None:
+    """Return the driver process RSS in MB, or None if psutil is unavailable."""
+    try:
+        import psutil
+
+        return psutil.Process().memory_info().rss / (1024 * 1024)
+    except Exception:
+        return None
+
+
+def _log_driver_memory(prefix: str) -> None:
+    """Log driver RSS if we can read it."""
+    rss = _driver_rss_mb()
+    if rss is not None:
+        _logger.info("%s driver RSS: %.1f MB", prefix, rss)
+
+
+def _log_array(name: str, arr: da.Array) -> None:
+    """Log concise shape/chunk/nbytes info for a Dask array."""
+    _logger.info(
+        "Array %s: shape=%s chunks=%s dtype=%s nbytes=%.2f MB",
+        name,
+        arr.shape,
+        arr.chunksize,
+        arr.dtype,
+        arr.nbytes / 1e6,
+    )
+
+
 class StandardAnalysis:
     """
     Performs standard statistical analysis on zarr arrays.
@@ -81,6 +110,7 @@ class StandardAnalysis:
             self.ext_offset = Path(raw_ext)
         else:
             self.ext_offset = None
+        self._log_worker_memory("After cluster init")
 
     def run(self) -> None:
         client, cluster = self._client, self._cluster
@@ -112,6 +142,7 @@ class StandardAnalysis:
                 _logger.warning("Failed to remove temp store %s: %s", path, exc)
 
     def _run_analysis(self) -> None:
+        _log_driver_memory("Start of run")
         zarr.open_group(self.paths.temp_root, mode="a")
 
         # ------------------------------------------------------------------
@@ -119,8 +150,13 @@ class StandardAnalysis:
         # rechunk it into pixel-chunked Zarr for the per-pixel stages.
         # ------------------------------------------------------------------
         _logger.info("Start writing bin to zarr store.")
+        self._log_worker_memory("Before h5_to_zarr")
         h5_to_zarr(self.h5_path, self.paths.raw_framewise, self.config.frame, self.config.analysis)
+        _log_driver_memory("After h5_to_zarr")
+        self._log_worker_memory("After h5_to_zarr")
         rechunk_to_pixels(self.paths.raw_framewise, self.paths.raw_pixelwise)
+        _log_driver_memory("After rechunk_to_pixels")
+        self._log_worker_memory("After rechunk_to_pixels")
         _logger.info("Done.")
 
         # ------------------------------------------------------------------
@@ -130,7 +166,10 @@ class StandardAnalysis:
         # where real computation is triggered.
         # ------------------------------------------------------------------
         data_f, data_p = self._load_inputs()
+        _log_array("data_f", data_f)
+        _log_array("data_p", data_p)
         pipeline = self._build_pipeline(data_f, data_p)
+        _log_driver_memory("After pipeline build")
         _logger.info("\n%s", pipeline.summary())
 
         # ------------------------------------------------------------------
@@ -138,6 +177,7 @@ class StandardAnalysis:
         # later stage consumes) in one batched da.store.
         # ------------------------------------------------------------------
         self._save_final_outputs(pipeline)
+        _log_driver_memory("After saving final outputs")
 
         # ------------------------------------------------------------------
         # Stage 4: copy every archived Zarr output into the final HDF5 archive.
@@ -148,6 +188,29 @@ class StandardAnalysis:
             self.config.analysis.h5_archive,
             config=self.config,
         )
+        _log_driver_memory("After HDF5 archive")
+
+    def _log_worker_memory(self, prefix: str) -> None:
+        """Query every worker's RSS and log min/max/mean.
+
+        This is intentionally a diagnostic helper: it makes a synchronous
+        round-trip to the scheduler, so it should not be called in a tight loop.
+        """
+        try:
+            import psutil
+
+            values = list(self._client.run(lambda: psutil.Process().memory_info().rss / (1024 * 1024)).values())
+            if values:
+                _logger.info(
+                    "%s worker RSS: min=%.1f MB, max=%.1f MB, mean=%.1f MB, workers=%d",
+                    prefix,
+                    min(values),
+                    max(values),
+                    sum(values) / len(values),
+                    len(values),
+                )
+        except Exception as exc:
+            _logger.debug("Could not query worker memory: %s", exc)
 
     def _load_inputs(self) -> tuple[da.Array, da.Array]:
         # da.from_zarr sees the inner Zarr chunks (single-column) because the
@@ -196,6 +259,7 @@ class StandardAnalysis:
             afterwards — reference the persisted version.
             """
             stage = p.stage(name)
+            _log_array(stage.name, stage.array)
             stage.array = self._persist_or_store(stage.array, stage.path, p)
 
         _logger.info("Start calculating median.")
@@ -274,6 +338,16 @@ class StandardAnalysis:
         in-memory budget (``analysis.persist_memory_percent`` of total RAM) is
         not exceeded.  Otherwise it is written to Zarr and read back from disk.
         """
+        budget_mb = (pipeline.memory_budget_bytes or 0) / 1e6
+        used_mb = pipeline.memory_used_bytes / 1e6
+        _logger.info(
+            "Memory budget: %.1f / %.1f MB used before %s (%.2f MB).",
+            used_mb,
+            budget_mb,
+            path.name,
+            arr.nbytes / 1e6,
+        )
+        self._log_worker_memory(f"Before persist {path.name}")
         if pipeline.can_persist_in_memory(arr.nbytes):
             _logger.info("Persist %s in memory (%.2f MB).", path.name, arr.nbytes / 1e6)
             persisted = cast(da.Array, self._client.persist(arr))
@@ -282,14 +356,23 @@ class StandardAnalysis:
             # serves as the fallback when the memory budget is exhausted.
             persisted.to_zarr(path, overwrite=True)
             pipeline.record_memory_use(arr.nbytes)
+            self._log_worker_memory(f"After persist {path.name}")
+            _logger.info(
+                "Memory budget after %s: %.1f / %.1f MB used.",
+                path.name,
+                pipeline.memory_used_bytes / 1e6,
+                budget_mb,
+            )
             return persisted
 
+        self._log_worker_memory(f"Before zarr store {path.name}")
         _logger.info(
             "Store %s to zarr (%.2f MB) — memory budget exhausted.",
             path.name,
             arr.nbytes / 1e6,
         )
         arr.to_zarr(path, overwrite=True)
+        self._log_worker_memory(f"After zarr store {path.name}")
         return cast(da.Array, da.from_zarr(path))
 
     def _memory_budget_bytes(self) -> int:
@@ -302,7 +385,9 @@ class StandardAnalysis:
         if ram_mb <= 0:
             return 0
         percent = self.config.analysis.persist_memory_percent
-        return int(ram_mb * 1024 * 1024 * (percent / 100.0))
+        budget = int(ram_mb * 1024 * 1024 * (percent / 100.0))
+        _logger.info("Pipeline in-memory budget: %.1f MB (%.0f%% of %d MB).", budget / 1e6, percent, ram_mb)
+        return budget
 
     def _save_final_outputs(self, pipeline: Pipeline) -> None:
         """Write all leaf outputs to their Zarr stores."""
@@ -310,7 +395,15 @@ class StandardAnalysis:
         outputs = [s.array for s in stages]
         paths = [s.path for s in stages]
 
-        _logger.info("Writing final outputs: %s", ", ".join(s.name for s in stages))
+        total_leaf_nbytes = sum(out.nbytes for out in outputs)
+        _logger.info(
+            "Writing %d final outputs: %s (total %.2f MB).",
+            len(stages),
+            ", ".join(s.name for s in stages),
+            total_leaf_nbytes / 1e6,
+        )
+        for s in stages:
+            _log_array(s.name, s.array)
         # da.store needs writable array targets; Path objects do not support
         # item assignment, so open one Zarr array per output first.
         targets = [
@@ -330,4 +423,5 @@ class StandardAnalysis:
         # a stage later cannot silently recompute the whole upstream graph.
         for stage in stages:
             stage.array = cast(da.Array, da.from_zarr(stage.path))
+        self._log_worker_memory("After final outputs store")
         _logger.info("Done.")

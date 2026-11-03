@@ -64,6 +64,11 @@ class Pipeline:
             return True
         return self._memory_used_bytes + nbytes <= self.memory_budget_bytes
 
+    @property
+    def memory_used_bytes(self) -> int:
+        """Bytes currently booked for in-memory persisted branch points."""
+        return self._memory_used_bytes
+
     def record_memory_use(self, nbytes: int) -> None:
         """Book *nbytes* as persisted in worker memory."""
         self._memory_used_bytes += nbytes

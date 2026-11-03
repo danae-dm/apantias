@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +21,8 @@ from pydantic import BaseModel
 from apantias.inspect.h5 import print_h5_contents
 from apantias.settings import AppSettings
 from apantias.storage.outputs import Pipeline
+
+_logger = logging.getLogger(__name__)
 
 __all__ = [
     "load_h5_dataset",

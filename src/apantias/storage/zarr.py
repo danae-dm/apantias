@@ -190,6 +190,16 @@ def h5_to_zarr(
     array_shape = (n_output_frames, frame.rows, eval_nreps, frame.cols)
     chunk_shape = (chunk_size, frame.rows, eval_nreps, frame.cols)
     inner_chunk_shape = (chunk_size, 1, eval_nreps, frame.cols)
+    bytes_per_frame = frame.rows * eval_nreps * frame.cols * 2
+
+    _logger.info(
+        "h5_to_zarr: input shape %s, output shape %s, chunk shape %s, bytes per frame %d, total output %.2f MB.",
+        shape,
+        array_shape,
+        chunk_shape,
+        bytes_per_frame,
+        np.prod(array_shape, dtype=np.int64) * 2 / 1e6,
+    )
 
     full_array_path = (
         f"{store_path}/{group_path}/{output_dataset_name}" if group_path else f"{store_path}/{output_dataset_name}"
@@ -235,8 +245,19 @@ def h5_to_zarr(
             dtype=np.uint16,
         )
         blocks.append(block)
+        block_num = len(blocks)
+        if block_num % 25 == 0 or block_num == n_batches:
+            _logger.info("Created %d/%d dask blocks (graph construction only).", block_num, n_batches)
 
+    _logger.info("Finished creating blocks; about to concatenate.")
     data: da.Array = da.concatenate(blocks, axis=0)  # type: ignore[reportUnknownMemberType]
+    _logger.info(
+        "Ready to da.store: %d blocks, shape=%s, chunks=%s, nbytes=%.2f MB.",
+        len(blocks),
+        data.shape,
+        data.chunksize,
+        data.nbytes / 1e6,
+    )
     da.store(data, target, lock=False)  # type: ignore[reportUnknownMemberType]
 
     _logger.info("Successfully wrote %d frames to %s", n_output_frames, zarr_path)

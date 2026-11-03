@@ -69,6 +69,16 @@ def rechunk_to_pixels(
 
     n_frames, n_rows, n_reps, n_cols = source.shape
 
+    bytes_per_row_band = n_frames * row_batch * n_reps * n_cols * source.dtype.itemsize
+    _logger.info(
+        "rechunk_to_pixels: source shape %s, target chunk %s, row_batch=%d, band bytes per task=%d, tasks=%d.",
+        source.shape,
+        (n_frames, 1, n_reps, 1),
+        row_batch,
+        bytes_per_row_band,
+        (n_rows + row_batch - 1) // row_batch,
+    )
+
     # Parse target path to extract store and array path
     target_str = str(target_path)
     if ".zarr" in target_str:
