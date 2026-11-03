@@ -131,13 +131,16 @@ class FrameSettings(BaseModel):
 class AnalysisSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
     h5_file: Path = Field(default=Path("data.h5"), description="Path to h5 file with raw data")
-    zarr_data: Path = Field(
-        default=Path("data.zarr"),
-        description="Path to zarr data storage, for raw data.",
-    )
     zarr_temp: Path = Field(
         default=Path("temp.zarr"),
-        description="Path to zarr temp storage, use fast storage options here",
+        description="Path to the single temporary Zarr store used for raw data and all analysis products.",
+    )
+    keep_zarr_temp: bool = Field(
+        default=False,
+        description=(
+            "If True, do not delete the temporary Zarr store after archiving. "
+            "Useful for debugging. The store will be overwritten if the analysis is run multiple times."
+        ),
     )
     h5_archive: Path = Field(default=Path("archive.h5"), description="Path to h5 archive")
     ext_offset: Path | None = Field(

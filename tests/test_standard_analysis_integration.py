@@ -5,13 +5,12 @@
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
 
 from pathlib import Path
+from typing import Any
 
 import h5py  # pyright: ignore[reportMissingTypeStubs]
 import numpy as np
-import numpy.typing as npt
 import pytest
 import yaml
-import zarr
 
 from apantias.pipelines import StandardAnalysis
 from apantias.settings import AnalysisSettings, AppSettings, RuntimeSettings
@@ -61,29 +60,20 @@ def config(tmp_path: Path, sample_h5_file: Path) -> AppSettings:
         runtime=RuntimeSettings(cpus=2, ram_mb=1024, dask_temp=tmp_path / "dask_temp"),
         analysis=AnalysisSettings(
             h5_file=sample_h5_file,
-            zarr_data=tmp_path / "data.zarr",
             zarr_temp=tmp_path / "temp.zarr",
             h5_archive=tmp_path / "archive.h5",
         ),
     )
 
 
-def _zarr_store(config: AppSettings, name: str) -> Path:
-    """Documented on-disk layout of an analysis product."""
-    return Path(config.analysis.zarr_temp) / name
+# The Zarr store is removed by ``StandardAnalysis._cleanup`` after archiving,
+# so the integration tests validate the persistent HDF5 archive rather than
+# the transient Zarr outputs.
 
 
-def test_standard_analysis_end_to_end(config: AppSettings) -> None:
-    """Run StandardAnalysis end-to-end and verify every output store."""
-    analysis = StandardAnalysis(config)
-    analysis.run()
-
-    for name, expected_shape in EXPECTED_SHAPES.items():
-        store = _zarr_store(config, name)
-        assert store.exists(), f"Zarr output {name} missing at {store}"
-        arr = zarr.open_array(str(store), mode="r")
-        assert tuple(arr.shape) == expected_shape, f"{name}: expected {expected_shape}, got {tuple(arr.shape)}"
-        assert np.isfinite(np.asarray(arr)).all(), f"{name} contains non-finite values"
+def _with_keep_zarr_temp(config: AppSettings, keep: bool) -> AppSettings:
+    """Return a copy of *config* with ``analysis.keep_zarr_temp`` set to *keep*."""
+    return config.model_copy(update={"analysis": config.analysis.model_copy(update={"keep_zarr_temp": keep})})
 
 
 def test_h5_archive_contents(config: AppSettings) -> None:
@@ -96,30 +86,37 @@ def test_h5_archive_contents(config: AppSettings) -> None:
     with h5py.File(archive_path, "r") as f:
         for name, expected_shape in EXPECTED_SHAPES.items():
             assert name in f, f"HDF5 dataset {name} missing from archive"
-            ds = f[name]
+            ds: Any = f[name]
             assert tuple(ds.shape) == expected_shape, f"archive {name}: expected {expected_shape}, got {ds.shape}"
             # Every product documents itself via its stage description.
             assert "description" in ds.attrs, f"archive {name} lacks a description attribute"
+            # All archived values must be finite.
+            assert np.isfinite(np.asarray(ds[:])).all(), f"archive {name} contains non-finite values"
 
         # The full run configuration is embedded as YAML so the archive is
         # self-documenting without the original config file.
         assert "settings" in f, "settings dataset missing from archive"
         # h5py stores the YAML text as a variable-length string; depending on
         # the h5py version it is read back as str or bytes.
-        raw = f["settings"][()]  # type: ignore[index]
+        settings: Any = f["settings"]
+        raw = settings[()]
         settings_text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
         embedded = yaml.safe_load(settings_text)
         assert embedded["analysis"]["h5_file"] == str(config.analysis.h5_file)
         assert embedded["runtime"]["dask_temp"] == str(config.runtime.dask_temp)
 
 
-def test_h5_archive_values_match_zarr(config: AppSettings) -> None:
-    """The archive datasets must be identical to the Zarr outputs."""
+def test_keep_zarr_temp_preserves_store(config: AppSettings) -> None:
+    """When keep_zarr_temp is True, the temporary Zarr store survives cleanup."""
+    config = _with_keep_zarr_temp(config, True)
     StandardAnalysis(config).run()
 
-    with h5py.File(config.analysis.h5_archive, "r") as f:
-        for name in EXPECTED_SHAPES:
-            zarr_data = np.asarray(zarr.open_array(str(_zarr_store(config, name)), mode="r"))
-            # h5py Dataset slicing is partially unknown to the stubs.
-            h5_data: npt.NDArray[np.float64] = np.asarray(f[name][:])  # type: ignore[index]
-            np.testing.assert_allclose(h5_data, zarr_data)
+    temp_root = Path(config.analysis.zarr_temp)
+    assert temp_root.is_dir(), "Temporary Zarr store was removed despite keep_zarr_temp=True"
+    assert (temp_root / "median").exists(), "Expected Zarr output missing from preserved store"
+
+
+def test_default_cleanup_removes_store(config: AppSettings) -> None:
+    """By default the temporary Zarr store is removed after archiving."""
+    StandardAnalysis(config).run()
+    assert not Path(config.analysis.zarr_temp).is_dir(), "Temporary Zarr store was not cleaned up"

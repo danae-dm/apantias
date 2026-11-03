@@ -38,7 +38,7 @@ from apantias.processing.reductions import apply_pixelwise
 from apantias.runtime import init
 from apantias.settings import AppSettings, load_config
 from apantias.storage.hdf5 import write_analysis_outputs_to_h5
-from apantias.storage.outputs import BRANCH, Pipeline
+from apantias.storage.outputs import ARCHIVE, BRANCH, Pipeline
 from apantias.storage.paths import AnalysisPaths
 from apantias.storage.zarr import h5_to_zarr
 
@@ -87,24 +87,27 @@ class StandardAnalysis:
             cluster.close()
 
     def _cleanup(self) -> None:
-        """Remove temporary Zarr stores after archiving.
+        """Remove the temporary Zarr store after archiving, unless configured to keep it.
 
         Called in the finally block of ``run()`` so it always executes,
         even when the analysis fails after the archive step has completed.
         Errors during cleanup are logged but never raised — they cannot
         undo the analysis results already written to the HDF5 archive.
         """
-        for label, path in (("temp", self.paths.temp_root), ("data", self.paths.data_root)):
-            if path.is_dir():
-                try:
-                    shutil.rmtree(path)
-                    _logger.info("Removed %s store: %s", label, path)
-                except OSError as exc:
-                    _logger.warning("Failed to remove %s store %s: %s", label, path, exc)
+        if self.config.analysis.keep_zarr_temp:
+            _logger.info("Keeping temp store: %s", self.paths.temp_root)
+            return
+
+        path = self.paths.temp_root
+        if path.is_dir():
+            try:
+                shutil.rmtree(path)
+                _logger.info("Removed temp store: %s", path)
+            except OSError as exc:
+                _logger.warning("Failed to remove temp store %s: %s", path, exc)
 
     def _run_analysis(self) -> None:
         zarr.open_group(self.paths.temp_root, mode="a")
-        zarr.open_group(self.paths.data_root, mode="a")
 
         # ------------------------------------------------------------------
         # Stage 1: convert the raw HDF5 input into frame-chunked Zarr and
@@ -195,7 +198,7 @@ class StandardAnalysis:
             "median",
             stats.compute_median(data_p),
             "Pixel-wise median across frames and repetitions",
-            tags=[BRANCH],  # consumed by offset_corr
+            tags=[BRANCH, ARCHIVE],  # consumed by offset_corr
         )
         materialize("median")
 
@@ -207,7 +210,7 @@ class StandardAnalysis:
             # the persisted store instead of recomputing the median from raw data.
             stats.compute_offset_corr(data_f, offset, p["median"]),
             "Raw frames corrected by external offset and pixel median",
-            tags=[BRANCH],  # consumed by common_modes and signals
+            tags=[BRANCH, ARCHIVE],  # consumed by common_modes and signals
         )
         materialize("offset_corr")
 
@@ -216,14 +219,14 @@ class StandardAnalysis:
             "common_modes",
             stats.compute_common_modes(p["offset_corr"]),
             "Common-mode signal per frame, row and repetition",
-            tags=[BRANCH],  # consumed by signals
+            tags=[BRANCH, ARCHIVE],  # consumed by signals
         )
         materialize("common_modes")
         p.declare(
             "signals",
             stats.subtract(p["offset_corr"], p["common_modes"]),
             "Offset- and common-mode-corrected detector signal",
-            tags=[BRANCH],  # consumed by slopes, msd and signals_mean
+            tags=[BRANCH, ARCHIVE],  # consumed by slopes, msd and signals_mean
         )
         materialize("signals")
 
@@ -234,16 +237,19 @@ class StandardAnalysis:
             "slopes",
             stats.compute_slopes(p["signals"]),
             "Linear slope of signal versus repetition index",
+            tags=[ARCHIVE],
         )
         p.declare(
             "msd",
             stats.compute_msd(p["signals"]),
             "Mean squared deviation of the corrected signal",
+            tags=[ARCHIVE],
         )
         p.declare(
             "signals_mean",
             stats.compute_signals_mean(p["signals"]),
             "Mean corrected signal per frame and pixel",
+            tags=[ARCHIVE],
         )
 
         _logger.info("Start pixelwise calculation.")
@@ -251,6 +257,7 @@ class StandardAnalysis:
             "pixelwise",
             apply_pixelwise(data_p, lambda t: t.max() - t.min()),
             "Per-pixel max-min range of raw signal",
+            tags=[ARCHIVE],
         )
 
         return p
@@ -265,8 +272,9 @@ class StandardAnalysis:
         if pipeline.can_persist_in_memory(arr.nbytes):
             _logger.info("Persist %s in memory (%.2f MB).", path.name, arr.nbytes / 1e6)
             persisted = cast(da.Array, self._client.persist(arr))
-            # Also write the store: downstream stages read from memory, but the
-            # HDF5 archive pass needs every stage materialized in Zarr.
+            # Persist in memory for downstream use and also write a Zarr copy:
+            # the HDF5 archive pass reads archived stages from Zarr, and Zarr
+            # serves as the fallback when the memory budget is exhausted.
             persisted.to_zarr(path, overwrite=True)
             pipeline.record_memory_use(arr.nbytes)
             return persisted
@@ -292,8 +300,8 @@ class StandardAnalysis:
         return int(ram_mb * 1024 * 1024 * (percent / 100.0))
 
     def _save_final_outputs(self, pipeline: Pipeline) -> None:
-        """Write all final (non-branch) archived outputs to their Zarr stores."""
-        stages = pipeline.final_outputs()
+        """Write all leaf outputs to their Zarr stores."""
+        stages = pipeline.leaf_outputs()
         outputs = [s.array for s in stages]
         paths = [s.path for s in stages]
 

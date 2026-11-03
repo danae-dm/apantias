@@ -9,15 +9,12 @@ import pytest
 import zarr
 
 from apantias.settings import AnalysisSettings
-from apantias.storage.outputs import BRANCH, DATA, Pipeline
+from apantias.storage.outputs import ARCHIVE, BRANCH, Pipeline
 
 
 @pytest.fixture
 def pipeline(tmp_path: Path) -> Pipeline:
-    analysis = AnalysisSettings(
-        zarr_data=tmp_path / "data.zarr",
-        zarr_temp=tmp_path / "temp.zarr",
-    )
+    analysis = AnalysisSettings(zarr_temp=tmp_path / "temp.zarr")
     return Pipeline(analysis)
 
 
@@ -49,12 +46,6 @@ def test_path_resolution_defaults_to_temp(pipeline: Pipeline) -> None:
     assert pipeline.stage("msd").path == expected
 
 
-def test_data_tag_moves_stage_to_zarr_data(pipeline: Pipeline) -> None:
-    pipeline.declare("raw", _tiny_array(), "Raw product", tags=[DATA])
-    expected = Path(pipeline.analysis.zarr_data) / "raw"
-    assert pipeline.path("raw") == expected
-
-
 def test_explicit_kwargs_override_tags(pipeline: Pipeline) -> None:
     # BRANCH sets is_branch_point; the explicit kwarg must win.
     pipeline.declare("s", _tiny_array(), "desc", tags=[BRANCH], is_branch_point=False)
@@ -65,16 +56,18 @@ def test_explicit_kwargs_override_tags(pipeline: Pipeline) -> None:
 
 
 def test_selectors_split_branches_and_final_outputs(pipeline: Pipeline) -> None:
-    pipeline.declare("median", _tiny_array(), "desc", tags=[BRANCH])
-    pipeline.declare("signals", _tiny_array(), "desc", tags=[BRANCH])
-    pipeline.declare("slopes", _tiny_array(), "desc")
-    pipeline.declare("internal", _tiny_array(), "desc", is_archived=False)
+    pipeline.declare("median", _tiny_array(), "desc", tags=[BRANCH, ARCHIVE])
+    pipeline.declare("signals", _tiny_array(), "desc", tags=[BRANCH, ARCHIVE])
+    pipeline.declare("slopes", _tiny_array(), "desc", tags=[ARCHIVE])
+    pipeline.declare("internal", _tiny_array(), "desc")
 
     # Branch points keep declaration order.
     assert [s.name for s in pipeline.branch_points()] == ["median", "signals"]
-    # Final outputs are archived stages that are not branch points.
+    # Leaf outputs are all non-branch stages, archived or not.
+    assert [s.name for s in pipeline.leaf_outputs()] == ["slopes", "internal"]
+    # Final outputs are archived leaf outputs.
     assert [s.name for s in pipeline.final_outputs()] == ["slopes"]
-    # Archived includes branches; the internal stage is excluded.
+    # Archived includes branches and archived leaves.
     assert [s.name for s in pipeline.archived()] == ["median", "signals", "slopes"]
 
 
@@ -96,7 +89,7 @@ def test_stage_array_can_be_replaced_in_place(pipeline: Pipeline, tmp_path: Path
 
 
 def test_memory_budget_accounting(tmp_path: Path) -> None:
-    analysis = AnalysisSettings(zarr_data=tmp_path / "d.zarr", zarr_temp=tmp_path / "t.zarr")
+    analysis = AnalysisSettings(zarr_temp=tmp_path / "t.zarr")
     pipeline = Pipeline(analysis, memory_budget_bytes=100)
 
     assert pipeline.can_persist_in_memory(100) is True
@@ -112,10 +105,30 @@ def test_memory_budget_disabled_means_unlimited(pipeline: Pipeline) -> None:
 
 
 def test_summary_lists_stages_and_flags(pipeline: Pipeline) -> None:
-    pipeline.declare("median", _tiny_array(), "Pixel median", tags=[BRANCH])
-    pipeline.declare("msd", _tiny_array(), "Mean squared deviation")
+    pipeline.declare("median", _tiny_array(), "Pixel median", tags=[BRANCH, ARCHIVE])
+    pipeline.declare("msd", _tiny_array(), "Mean squared deviation", tags=[ARCHIVE])
+    pipeline.declare("scratch", _tiny_array(), "Temporary result")
 
     text = pipeline.summary()
-    assert "median" in text and "[branch]" in text
+    assert "median" in text and "[branch]" in text and "-> archive" in text
     assert "msd" in text and "-> archive" in text
+    assert "scratch" in text and "[no archive]" in text
     assert "Pixel median" in text
+
+
+def test_archive_tag_marks_stage_archived(pipeline: Pipeline) -> None:
+    pipeline.declare("a", _tiny_array(), "desc", tags=[ARCHIVE])
+    assert pipeline.stage("a").is_archived is True
+
+
+def test_default_stage_is_not_archived(pipeline: Pipeline) -> None:
+    pipeline.declare("a", _tiny_array(), "desc")
+    assert pipeline.stage("a").is_archived is False
+
+
+def test_leaf_outputs_selector_includes_non_archived(pipeline: Pipeline) -> None:
+    pipeline.declare("b", _tiny_array(), "desc", tags=[BRANCH, ARCHIVE])
+    pipeline.declare("l1", _tiny_array(), "desc", tags=[ARCHIVE])
+    pipeline.declare("l2", _tiny_array(), "desc")
+
+    assert [s.name for s in pipeline.leaf_outputs()] == ["l1", "l2"]

@@ -4,6 +4,10 @@ Historical development notes for `apantias`. New entries go on top.
 
 ## Unreleased / TODO
 
+- archive membership is now opt-in: `Pipeline.declare` defaults to `is_archived=False`, and stages must be tagged with `ARCHIVE` to be copied into `archive.h5`. Added `Pipeline.leaf_outputs()` to select all non-branch stages for Zarr writing, separating "write to Zarr" from "copy to HDF5".
+- consolidated all Zarr storage under `zarr_temp`: raw data (`frame_chunked`, `pixel_chunked`) and all analysis products now live in the temporary store and are cleaned up after archiving. Removed the separate `zarr_data` setting, the `DATA` tag, and the `location` parameter from `Pipeline.declare`.
+- added `AnalysisSettings.keep_zarr_temp` (default False). When True, `StandardAnalysis._cleanup` skips deletion of the temporary Zarr store for debugging; note that rerunning will overwrite the store.
+
 ## 2026-11-01
 
 - interleaved pipeline declaration and materialization in `_build_pipeline`:
@@ -17,8 +21,8 @@ Historical development notes for `apantias`. New entries go on top.
 - consolidated the two HDF5 archive writers into `io/hdf5.write_analysis_outputs_to_h5`;
   the archive now also embeds the full run settings as a YAML `settings` dataset
   (removed `io/archive.py`, the `apantias.archive` shim and `tests/test_archive.py`)
-- `AnalysisPaths` now only describes the raw input stores and the two Zarr
-  roots; output paths are owned solely by the `Pipeline` registry
+- `AnalysisPaths` now only describes the raw input stores and the single temporary
+  Zarr root; output paths are owned solely by the `Pipeline` registry
   (`<zarr_temp>/<stage name>`)
 - fixed settings YAML serialization in `settings.py`: `add_representer` matches
   exact types only, so `PosixPath` fell through to a python-specific tag that

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import dask.array as da
 
@@ -14,9 +14,9 @@ from apantias.settings import AnalysisSettings
 #: stages can use them.
 BRANCH: dict[str, Any] = {"is_branch_point": True}
 
-#: Shorthand tag for outputs that live in the persistent ``zarr_data`` store
-#: (e.g. raw inputs).
-DATA: dict[str, Any] = {"location": "data"}
+#: Shorthand tag for outputs that should be copied into the final HDF5 archive.
+#: Since ``is_archived`` defaults to False, callers must opt in with this tag.
+ARCHIVE: dict[str, Any] = {"is_archived": True}
 
 
 @dataclass
@@ -34,7 +34,7 @@ class Stage:
     array: da.Array
     path: Path
     is_branch_point: bool = False
-    is_archived: bool = True
+    is_archived: bool = False
 
 
 @dataclass
@@ -54,14 +54,9 @@ class Pipeline:
     _stages: dict[str, Stage] = field(default_factory=dict[str, Stage], init=False)
     _memory_used_bytes: int = field(default=0, init=False)
 
-    def _resolve_path(self, name: str, location: Literal["data", "temp"]) -> Path:
-        """Return the on-disk path for an output based on its storage location.
-
-        Raw inputs live in ``zarr_data``; intermediate and final products live in
-        ``zarr_temp``.  The actual roots come from ``AnalysisSettings``.
-        """
-        root = Path(self.analysis.zarr_data) if location == "data" else Path(self.analysis.zarr_temp)
-        return root / name
+    def _resolve_path(self, name: str) -> Path:
+        """Return the on-disk path for an output under ``zarr_temp``."""
+        return Path(self.analysis.zarr_temp) / name
 
     def can_persist_in_memory(self, nbytes: int) -> bool:
         """Return True if *nbytes* still fits into the in-memory budget."""
@@ -79,7 +74,6 @@ class Pipeline:
         array: da.Array,
         description: str,
         *,
-        location: Literal["data", "temp"] | None = None,
         is_branch_point: bool | None = None,
         is_archived: bool | None = None,
         tags: list[dict[str, Any]] | None = None,
@@ -87,9 +81,10 @@ class Pipeline:
         """Register a new pipeline product and return its dask array unchanged.
 
         ``tags`` is a convenience helper: each dict is merged into the stage
-        metadata, so callers can write ``tags=[BRANCH]`` or ``tags=[DATA]``
-        instead of repeating keyword arguments.  Explicit keyword arguments
-        override tags.
+        metadata, so callers can write ``tags=[BRANCH]`` instead of repeating
+        keyword arguments.  Explicit keyword arguments override tags.  By
+        default stages are not archived; use ``tags=[ARCHIVE]`` to include a
+        stage in the final HDF5 archive.
 
         Parameters
         ----------
@@ -101,8 +96,14 @@ class Pipeline:
         description:
             Human-readable explanation of what the array represents.
         tags:
-            Optional list of shorthand tag dicts (``BRANCH``, ``DATA``) to
+            Optional list of shorthand tag dicts (``BRANCH``, ``ARCHIVE``) to
             apply.
+        is_branch_point:
+            If True, the stage is consumed by later stages and must be
+            materialised before they are declared.
+        is_archived:
+            If True, the stage is copied into the final HDF5 archive.  Defaults
+            to False; use ``tags=[ARCHIVE]`` to opt in.
         """
         if name in self._stages:
             raise ValueError(f"Stage '{name}' has already been declared")
@@ -110,14 +111,11 @@ class Pipeline:
         # Start from defaults, apply tags, then let explicit keyword arguments
         # override everything.
         merged: dict[str, Any] = {
-            "location": "temp",
             "is_branch_point": False,
-            "is_archived": True,
+            "is_archived": False,
         }
         for tag in tags or []:
             merged.update(tag)
-        if location is not None:
-            merged["location"] = location
         if is_branch_point is not None:
             merged["is_branch_point"] = is_branch_point
         if is_archived is not None:
@@ -127,7 +125,7 @@ class Pipeline:
             name=name,
             description=description,
             array=array,
-            path=self._resolve_path(name, merged["location"]),
+            path=self._resolve_path(name),
             is_branch_point=merged["is_branch_point"],
             is_archived=merged["is_archived"],
         )
@@ -169,8 +167,12 @@ class Pipeline:
         """Stages that must be materialised so downstream stages can use them."""
         return [s for s in self._stages.values() if s.is_branch_point]
 
+    def leaf_outputs(self) -> list[Stage]:
+        """Stages that are not branch points (written to Zarr at the very end)."""
+        return [s for s in self._stages.values() if not s.is_branch_point]
+
     def final_outputs(self) -> list[Stage]:
-        """Archived stages that are not branch points (saved at the very end)."""
+        """Archived leaf outputs (copied into the HDF5 archive)."""
         return [s for s in self._stages.values() if s.is_archived and not s.is_branch_point]
 
     def archived(self) -> list[Stage]:
@@ -182,7 +184,7 @@ class Pipeline:
         lines = ["Analysis pipeline:", "-" * 50]
         for s in self._stages.values():
             branch = " [branch]" if s.is_branch_point else ""
-            archive = " -> archive" if s.is_archived else ""
+            archive = " -> archive" if s.is_archived else " [no archive]"
             lines.append(f"  {s.name:<15} {branch}{archive}")
             lines.append(f"    {s.description}")
         return "\n".join(lines)
