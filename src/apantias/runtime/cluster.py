@@ -1,9 +1,11 @@
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
 import dask.config
 from dask.distributed import Client, LocalCluster
+from distributed.worker import Worker
 
 from apantias.runtime.resources import get_resources
 
@@ -39,7 +41,12 @@ def get_node_name() -> str:
 
 
 def init(
-    local_dir: str | Path, cores: int | None = None, ram_mb: int | None = None, *, dashboard: bool = True
+    local_dir: str | Path,
+    cores: int | None = None,
+    ram_mb: int | None = None,
+    *,
+    dashboard: bool = True,
+    use_nanny: bool = True,
 ) -> tuple[Client, LocalCluster]:
     # initialize the config
     if cores is None:
@@ -47,6 +54,10 @@ def init(
     else:
         cores = max(1, cores)
     local_directory = str(local_dir)
+
+    # Make sure numpy and related libraries run single-threaded in the parent
+    # process and in all worker subprocesses.
+    os.environ.update(env_vars)
 
     # Per-worker memory limit from the configured total allocation. Distributed's
     # auto-detect sees the whole node, not the SLURM allocation, so an explicit
@@ -61,15 +72,26 @@ def init(
     prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
     _ = dask.config.set({"distributed.dashboard.link": prefix + "proxy/{port}/status"})
 
-    cluster = LocalCluster(
-        n_workers=cores,
-        threads_per_worker=1,
-        env=env_vars,
-        processes=True,
-        memory_limit=memory_limit,
-        dashboard_address=":43359" if dashboard else None,  # pyright: ignore[reportArgumentType]  # None disables dashboard
-        local_directory=local_directory,
-    )
+    # When the dashboard is disabled, distributed still starts an HTTP server on
+    # the default port (8787). Override the scheduler bind address to :0 so it
+    # picks a random free port instead of warning about 8787 being in use.
+    scheduler_kwargs = {"dashboard_address": ":0"} if not dashboard else None
+
+    cluster_kwargs: dict[str, Any] = {
+        "n_workers": cores,
+        "threads_per_worker": 1,
+        "processes": True,
+        "memory_limit": memory_limit,
+        "dashboard_address": ":43359" if dashboard else None,  # pyright: ignore[reportArgumentType]  # None disables dashboard
+        "scheduler_kwargs": scheduler_kwargs,
+        "local_directory": local_directory,
+    }
+    if use_nanny:
+        cluster_kwargs["env"] = env_vars
+    else:
+        cluster_kwargs["worker_class"] = Worker
+
+    cluster = LocalCluster(**cluster_kwargs)
     _logger.info(f"Initialized Dask on {cores} cores.")
     if memory_limit is not None:
         _logger.info(f"Worker memory limit: {memory_limit} per worker.")

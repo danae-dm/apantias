@@ -86,6 +86,13 @@ class RuntimeSettings(BaseModel):
         default=False,
         description="If True, start the Dask dashboard and print an SSH tunnel command. Adds startup overhead.",
     )
+    dask_nanny: bool = Field(
+        default=True,
+        description=(
+            "If True, use a Dask Nanny process per worker, which can restart failed workers. "
+            "If False, start workers directly; faster startup but no automatic worker restart."
+        ),
+    )
 
 
 class FrameSettings(BaseModel):

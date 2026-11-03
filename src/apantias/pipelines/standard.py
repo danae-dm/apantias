@@ -69,6 +69,7 @@ class StandardAnalysis:
             self.config.runtime.cpus,
             self.config.runtime.ram_mb,
             dashboard=self.config.runtime.dask_dashboard,
+            use_nanny=self.config.runtime.dask_nanny,
         )
 
         self.paths = AnalysisPaths.from_settings(self.config.analysis)
