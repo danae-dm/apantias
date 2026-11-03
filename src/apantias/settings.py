@@ -93,6 +93,14 @@ class RuntimeSettings(BaseModel):
             "If False, start workers directly; faster startup but no automatic worker restart."
         ),
     )
+    min_worker_memory_mb: int = Field(
+        default=4096,
+        ge=256,
+        description=(
+            "Minimum RAM in MB per Dask worker. If total RAM is too small to give each "
+            "requested worker this amount, the number of workers is reduced automatically."
+        ),
+    )
 
 
 class FrameSettings(BaseModel):

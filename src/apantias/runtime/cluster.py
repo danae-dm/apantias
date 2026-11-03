@@ -40,11 +40,32 @@ def get_node_name() -> str:
     return node_name
 
 
+def _resolve_worker_memory(
+    cores: int,
+    ram_mb: int,
+    min_worker_memory_mb: int,
+) -> tuple[int, int]:
+    """Return ``(n_workers, per_worker_mb)`` honoring a per-worker memory floor.
+
+    The calculation reserves 10% of ``ram_mb`` for scheduler/driver overhead,
+    then divides the rest by ``cores``. If that share is below
+    ``min_worker_memory_mb`` and total RAM is large enough to honor the floor,
+    the worker count is reduced so each worker gets at least the minimum.
+    """
+    available_mb = ram_mb * 0.9
+    per_worker_mb = max(256, int(available_mb / max(1, cores)))
+    if min_worker_memory_mb > 256 and per_worker_mb < min_worker_memory_mb and available_mb >= min_worker_memory_mb:
+        cores = max(1, int(available_mb / min_worker_memory_mb))
+        per_worker_mb = max(min_worker_memory_mb, int(available_mb / max(1, cores)))
+    return cores, int(per_worker_mb)
+
+
 def init(
     local_dir: str | Path,
     cores: int | None = None,
     ram_mb: int | None = None,
     *,
+    min_worker_memory_mb: int = 4096,
     dashboard: bool = True,
     use_nanny: bool = True,
 ) -> tuple[Client, LocalCluster]:
@@ -63,9 +84,18 @@ def init(
     # auto-detect sees the whole node, not the SLURM allocation, so an explicit
     # limit keeps the pause/kill thresholds inside what the job actually gets.
     # 10% headroom covers the driver process and scheduler/protocol overhead.
+    # If the naive per-worker share is below the requested minimum (and total RAM
+    # is large enough to honor it), reduce the worker count instead of running
+    # many memory-starved workers.
     memory_limit = None
     if ram_mb is not None and ram_mb > 0:
-        per_worker_mb = max(256, int(ram_mb * 0.9 / max(1, cores)))
+        cores, per_worker_mb = _resolve_worker_memory(cores, ram_mb, min_worker_memory_mb)
+        if per_worker_mb >= min_worker_memory_mb:
+            _logger.info(
+                "Dask worker memory: %d MB per worker on %d workers.",
+                per_worker_mb,
+                cores,
+            )
         memory_limit = f"{per_worker_mb}MB"
 
     # Route the Dask dashboard through JupyterHub's server proxy

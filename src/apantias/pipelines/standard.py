@@ -68,6 +68,7 @@ class StandardAnalysis:
             self.config.runtime.dask_temp,
             self.config.runtime.cpus,
             self.config.runtime.ram_mb,
+            min_worker_memory_mb=self.config.runtime.min_worker_memory_mb,
             dashboard=self.config.runtime.dask_dashboard,
             use_nanny=self.config.runtime.dask_nanny,
         )
