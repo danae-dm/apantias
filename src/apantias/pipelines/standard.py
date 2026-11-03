@@ -279,7 +279,7 @@ class StandardAnalysis:
             # the persisted store instead of recomputing the median from raw data.
             stats.compute_offset_corr(data_f, offset, p["median"]),
             "Raw frames corrected by external offset and pixel median",
-            tags=[BRANCH, ARCHIVE],  # consumed by common_modes and signals
+            tags=[BRANCH],  # consumed by common_modes and signals
         )
         materialize("offset_corr")
 
@@ -288,7 +288,7 @@ class StandardAnalysis:
             "common_modes",
             stats.compute_common_modes(p["offset_corr"]),
             "Common-mode signal per frame, row and repetition",
-            tags=[BRANCH, ARCHIVE],  # consumed by signals
+            tags=[BRANCH],  # consumed by signals
         )
         materialize("common_modes")
         p.declare(
