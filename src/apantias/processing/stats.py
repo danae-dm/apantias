@@ -11,32 +11,50 @@ from .axis import FRAME, REP, ROW
 
 
 def compute_median(data_p: da.Array) -> da.Array:
-    """Compute pixel-wise median across frames and repetitions.
+    """Compute pixel-wise median across frames.
 
     Args:
         data_p: Pixel-chunked data with shape (n_frames, n_rows, n_reps, n_cols).
 
     Returns:
-        Median per pixel with shape (n_rows, n_cols).
+        Median per pixel and repetition with shape (n_rows, n_reps, n_cols).
     """
-    median_array: da.Array = da.median(data_p, axis=(FRAME, REP))  # type: ignore[reportUnknownMemberType]
+    median_array: da.Array = da.median(data_p, axis=(FRAME))  # type: ignore[reportUnknownMemberType]
     return median_array.rechunk(-1)  # type: ignore[reportUnknownMemberType]
 
 
-def compute_offset_corr(data_f: da.Array, offset: da.Array, median: da.Array) -> da.Array:
-    """Apply offset and median correction to frame data.
+def compute_offset_corr(data_f: da.Array, offset: da.Array) -> da.Array:
+    """Subtract an offset array from frame data.
 
     Args:
         data_f: Frame-chunked data with shape (n_frames, n_rows, n_reps, n_cols).
-        offset: Offset map with shape (n_rows, n_cols).
-        median: Per-pixel median with shape (n_rows, n_cols).
+        offset: Offset array with shape (n_rows, n_cols) or (n_rows, n_reps, n_cols).
 
     Returns:
-        Corrected data with same shape as input.
+        Corrected data with the same shape as ``data_f``.
 
-    The offset and median arrays broadcast across the frame and rep axes.
+    The offset is broadcast over the frame axis, and over the repetition axis
+    when a 2D (row, col) offset is supplied.
     """
-    return data_f - offset[None, :, None, :] - median[None, :, None, :]  # type: ignore[reportUnknownVariableType]
+    _, n_rows, n_reps, n_cols = data_f.shape
+    if offset.ndim == 2:
+        if offset.shape != (n_rows, n_cols):
+            raise ValueError(
+                f"2D offset shape {offset.shape} does not match the data layout "
+                f"(n_rows, n_cols) = ({n_rows}, {n_cols})."
+            )
+        return data_f - offset[None, :, None, :]  # type: ignore[reportUnknownVariableType]
+    if offset.ndim == 3:
+        if offset.shape != (n_rows, n_reps, n_cols):
+            raise ValueError(
+                f"3D offset shape {offset.shape} does not match the data layout "
+                f"(n_rows, n_reps, n_cols) = ({n_rows}, {n_reps}, {n_cols})."
+            )
+        return data_f - offset[None, ...]  # type: ignore[reportUnknownVariableType]
+    raise ValueError(
+        f"Offset must be 2D (n_rows, n_cols) or 3D (n_rows, n_reps, n_cols), "
+        f"got {offset.ndim}D array with shape {offset.shape}."
+    )
 
 
 def compute_common_modes(data: da.Array) -> da.Array:

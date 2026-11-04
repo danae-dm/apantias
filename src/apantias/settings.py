@@ -27,8 +27,6 @@ from typing import Any, ClassVar, cast, get_origin
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-from apantias.runtime import resources
-
 DEFAULT_CONFIG_FILE = Path("default.yaml")
 # Teach pyYAML how to dump Path objects.  add_representer matches *exact*
 # types only, and on Linux paths are PosixPath (a Path subclass), so a
@@ -76,8 +74,6 @@ class RangeSpec(BaseModel):
 
 class RuntimeSettings(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
-    cpus: int = Field(default=0, description="Number of CPU cores, 0 is auto-detect")
-    ram_mb: int = Field(default=0, description="RAM in MB, 0 is auto-detect")
     dask_temp: Path = Field(
         default=Path("/tmp/dask_temp"),
         description="Path to dasks temp storage, use fast storage options here",
@@ -97,8 +93,9 @@ class RuntimeSettings(BaseModel):
         default=4096,
         ge=256,
         description=(
-            "Minimum RAM in MB per Dask worker. If total RAM is too small to give each "
-            "requested worker this amount, the number of workers is reduced automatically."
+            "Minimum RAM in MB per Dask worker. All available cores are used by default; "
+            "the worker count is only reduced when total RAM is too small to guarantee "
+            "this amount for every worker."
         ),
     )
 
@@ -267,22 +264,6 @@ def _validate_complete(data: dict[str, Any], path: Path) -> None:
         raise ValueError(f"{path}: missing required field(s): {', '.join(missing)}")
 
 
-def _resolve_auto(config: AppSettings) -> AppSettings:
-    """Fill in cpus/ram_mb when set to 0 (auto-detect)."""
-    runtime = config.runtime
-    cpus, ram_mb = resources.get_resources()
-
-    updates: dict[str, Any] = {}
-    if runtime.cpus == 0:
-        updates["cpus"] = cpus
-    if runtime.ram_mb == 0:
-        updates["ram_mb"] = ram_mb
-
-    if not updates:
-        return config
-    return config.model_copy(update={"runtime": runtime.model_copy(update=updates)})
-
-
 def load_config(path: Path | None = None, *, quiet: bool = False) -> AppSettings:
     """
     - If path is None or file missing: write defaults to default.yaml
@@ -296,7 +277,6 @@ def load_config(path: Path | None = None, *, quiet: bool = False) -> AppSettings
         path.parent.mkdir(parents=True, exist_ok=True)
         cfg = AppSettings()
         _dump_config(cfg, path)
-        cfg = _resolve_auto(cfg)
         if not quiet:
             print_config(cfg)
         return cfg
@@ -305,7 +285,7 @@ def load_config(path: Path | None = None, *, quiet: bool = False) -> AppSettings
     if not isinstance(data, dict):
         raise ValueError(f"Config file {path} is empty or not a mapping")
     _validate_complete(cast(dict[str, Any], data), path)
-    cfg = _resolve_auto(AppSettings.model_validate(data))
+    cfg = AppSettings.model_validate(data)
     if not quiet:
         print_config(cfg)
     return cfg

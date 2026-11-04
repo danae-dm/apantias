@@ -113,3 +113,18 @@ def test_ext_offset_zarr_nested_array_ok(tmp_path: Path) -> None:
     validator.validate(quiet=True)
 
     assert validator.ctx.ext_offset_shape == (RAW_SHAPE[1], RAW_SHAPE[2], RAW_SHAPE[3])
+
+
+def test_preflight_fails_when_resources_insufficient(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Too few effective workers (<4) for the configured memory floor is a preflight error."""
+    monkeypatch.setattr("apantias.runtime.resources.get_resources", lambda: (2, 4096))
+    config, _ = _make_config(tmp_path, None)
+    with pytest.raises(PreflightError, match="At least 4 workers are required"):
+        PreflightValidator(config).validate(quiet=True)
+
+
+def test_preflight_passes_with_sufficient_resources(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Enough cores and RAM to start at least 4 workers should pass preflight."""
+    monkeypatch.setattr("apantias.runtime.resources.get_resources", lambda: (4, 32768))
+    config, _ = _make_config(tmp_path, None)
+    PreflightValidator(config).validate(quiet=True)

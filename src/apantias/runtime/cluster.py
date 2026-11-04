@@ -7,7 +7,7 @@ import dask.config
 from dask.distributed import Client, LocalCluster
 from distributed.worker import Worker
 
-from apantias.runtime.resources import get_resources
+from apantias.runtime import resources
 
 _logger = logging.getLogger(__name__)
 
@@ -66,18 +66,15 @@ _resolve_worker_memory = resolve_worker_memory
 
 def init(
     local_dir: str | Path,
-    cores: int | None = None,
-    ram_mb: int | None = None,
     *,
     min_worker_memory_mb: int = 4096,
     dashboard: bool = True,
     use_nanny: bool = True,
 ) -> tuple[Client, LocalCluster]:
-    # initialize the config
-    if cores is None:
-        cores = get_resources()[0]
-    else:
-        cores = max(1, cores)
+    # Always use the resources actually available to this process.  Manual
+    # core/RAM overrides are not supported because the pipeline is designed
+    # to scale to the allocation while respecting the per-worker memory floor.
+    detected_cores, total_ram_mb = resources.get_resources()
     local_directory = str(local_dir)
 
     # Make sure numpy and related libraries run single-threaded in the parent
@@ -91,16 +88,19 @@ def init(
     # If the naive per-worker share is below the requested minimum (and total RAM
     # is large enough to honor it), reduce the worker count instead of running
     # many memory-starved workers.
-    memory_limit = None
-    if ram_mb is not None and ram_mb > 0:
-        cores, per_worker_mb = _resolve_worker_memory(cores, ram_mb, min_worker_memory_mb)
-        if per_worker_mb >= min_worker_memory_mb:
-            _logger.info(
-                "Dask worker memory: %d MB per worker on %d workers.",
-                per_worker_mb,
-                cores,
-            )
-        memory_limit = f"{per_worker_mb}MB"
+    n_workers, per_worker_mb = _resolve_worker_memory(detected_cores, total_ram_mb, min_worker_memory_mb)
+    if n_workers < 4:
+        raise RuntimeError(
+            f"Insufficient resources for Dask cluster: only {n_workers} worker(s) can be "
+            f"started while guaranteeing {min_worker_memory_mb} MB RAM per worker "
+            f"(available: {detected_cores} cores, {total_ram_mb} MB RAM). At least 4 workers are required."
+        )
+    _logger.info(
+        "Dask worker memory: %d MB per worker on %d workers.",
+        per_worker_mb,
+        n_workers,
+    )
+    memory_limit = f"{per_worker_mb}MB"
 
     # Route the Dask dashboard through JupyterHub's server proxy
     prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
@@ -112,7 +112,7 @@ def init(
     scheduler_kwargs = {"dashboard_address": ":0"} if not dashboard else None
 
     cluster_kwargs: dict[str, Any] = {
-        "n_workers": cores,
+        "n_workers": n_workers,
         "threads_per_worker": 1,
         "processes": True,
         "memory_limit": memory_limit,
@@ -126,9 +126,8 @@ def init(
         cluster_kwargs["worker_class"] = Worker
 
     cluster = LocalCluster(**cluster_kwargs)
-    _logger.info(f"Initialized Dask on {cores} cores.")
-    if memory_limit is not None:
-        _logger.info(f"Worker memory limit: {memory_limit} per worker.")
+    _logger.info(f"Initialized Dask on {n_workers} workers.")
+    _logger.info(f"Worker memory limit: {memory_limit} per worker.")
     if dashboard:
         node = get_node_name()
         _logger.info("For Dashboard access open a ssh tunnel with this command:")

@@ -20,6 +20,7 @@ No intermediate persistence in worker memory.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +30,6 @@ import dask.array as da
 import numpy as np
 
 from apantias.processing import stats
-from apantias.processing.reductions import apply_pixelwise
 from apantias.storage.outputs import ARCHIVE
 
 if TYPE_CHECKING:
@@ -98,14 +98,14 @@ class StandardPipeline:
         if self._provided_client is None:
             self._internal_client, self._internal_cluster = _init_cluster(
                 self.config.runtime.dask_temp,
-                cores=self.config.runtime.cpus,
-                ram_mb=self.config.runtime.ram_mb,
+                min_worker_memory_mb=self.config.runtime.min_worker_memory_mb,
             )
             client: Client = self._internal_client  # type: ignore[assignment]
         else:
             client = self._provided_client
 
         try:
+            t0 = time.perf_counter()
             # Stage 0: Convert raw HDF5 to Zarr (frame-chunked and pixel-chunked)
             _logger.info("Converting HDF5 to Zarr...")
             h5_to_zarr(
@@ -116,12 +116,16 @@ class StandardPipeline:
                 store_batch_size=1,  # Sequential for simplicity
             )
             _rechunk(self.paths.raw_framewise, self.paths.raw_pixelwise)
+            _logger.info("Stage 0 (HDF5->Zarr + rechunk) finished in %.2fs", time.perf_counter() - t0)
 
             # Stage 1: Build and execute pipeline stages
+            t0 = time.perf_counter()
             stages = self._declare_stages()
             self._execute_pipeline(stages, client)  # type: ignore[arg-type]
+            _logger.info("Stage 1 (pipeline) finished in %.2fs", time.perf_counter() - t0)
 
             # Stage 2: Archive tagged outputs to HDF5
+            t0 = time.perf_counter()
             archived = [s.name for s in stages if s.is_archived]
             _logger.info("Archiving stages: %s", archived)
             write_analysis_outputs_to_h5(
@@ -129,6 +133,7 @@ class StandardPipeline:
                 Path(self.config.analysis.h5_archive),
                 config=self.config,
             )
+            _logger.info("Stage 2 (archive) finished in %.2fs", time.perf_counter() - t0)
 
             return archived
         finally:
@@ -163,7 +168,7 @@ class StandardPipeline:
                 name="median",
                 inputs=[],  # raw_pixelwise is written in Stage 0, not a pipeline stage
                 compute_fn=lambda: stats.compute_median(da.from_zarr(self.paths.raw_pixelwise)),  # type: ignore[reportUnknownVariableType]
-                description="Pixel-wise median across frames and repetitions",
+                description="Pixel-wise median across frames",
                 is_archived=True,
             ),
             # Offset correction (frame-chunked)
@@ -172,10 +177,9 @@ class StandardPipeline:
                 inputs=["median"],
                 compute_fn=lambda inputs: stats.compute_offset_corr(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
                     da.from_zarr(self.paths.raw_framewise),  # type: ignore[reportUnknownVariableType]
-                    self._load_offset(),
-                    inputs["median"],  # type: ignore[reportUnknownArgumentType]
+                    self._resolve_offset(inputs),  # type: ignore[reportUnknownArgumentType]
                 ),
-                description="Raw frames corrected by external offset and pixel median",
+                description="Raw frames corrected by external offset or pixel median",
                 is_archived=False,  # intermediate
             ),
             # Common mode correction (frame-chunked)
@@ -209,34 +213,6 @@ class StandardPipeline:
                 description="Linear slope of signal versus repetition index",
                 is_archived=True,
             ),
-            PipelineStage(
-                name="msd",
-                inputs=["signals"],
-                compute_fn=lambda inputs: stats.compute_msd(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
-                    inputs["signals"],  # type: ignore[reportUnknownArgumentType]
-                ),
-                description="Mean squared deviation of the corrected signal",
-                is_archived=True,
-            ),
-            PipelineStage(
-                name="signals_mean",
-                inputs=["signals"],
-                compute_fn=lambda inputs: stats.compute_signals_mean(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
-                    inputs["signals"],  # type: ignore[reportUnknownArgumentType]
-                ),
-                description="Mean corrected signal per frame and pixel",
-                is_archived=True,
-            ),
-            PipelineStage(
-                name="pixelwise",
-                inputs=[],  # raw_pixelwise is written in Stage 0
-                compute_fn=lambda: apply_pixelwise(
-                    da.from_zarr(self.paths.raw_pixelwise),  # type: ignore[reportUnknownVariableType]
-                    lambda t: t.max() - t.min(),
-                ),
-                description="Per-pixel max-min range of raw signal",
-                is_archived=True,
-            ),
         ]
 
     def _execute_pipeline(self, stages: list[PipelineStage], client: Client) -> None:
@@ -266,7 +242,11 @@ class StandardPipeline:
 
             # Write to Zarr (uses the provided Dask client)
             _logger.info("Writing %s to %s", stage.name, output_path)
+
+            t0 = time.perf_counter()
             self._write_to_zarr(result, output_path, client)
+            elapsed = time.perf_counter() - t0
+            _logger.info('Stage "%s" finished in %.2fs', stage.name, elapsed)
 
             # Cache for downstream stages
             results[stage.name] = da.from_zarr(output_path)  # type: ignore[reportUnknownVariableType]
@@ -325,6 +305,24 @@ class StandardPipeline:
         else:
             # Zarr path
             return da.from_zarr(ext)  # type: ignore[reportUnknownVariableType]
+
+    def _resolve_offset(self, inputs: dict[str, da.Array]) -> da.Array:
+        """Return external offset if configured, otherwise return the median.
+
+        Args:
+            inputs: Dictionary of upstream stage outputs, must contain 'median'.
+
+        Returns:
+            Offset array with shape (n_rows, n_cols) or (n_rows, n_reps, n_cols).
+            If ext_offset is configured, load it and return. Otherwise return the
+            computed median from inputs.
+        """
+        ext = self.config.analysis.ext_offset
+        if ext is not None and str(ext) != "None":
+            # Load external offset
+            return self._load_offset()
+        # No external offset: use the median
+        return inputs["median"]
 
     def _to_pipeline_registry(self, stages: list[PipelineStage]) -> Pipeline:
         """Convert stages to Pipeline registry for archiving."""

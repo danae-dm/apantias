@@ -44,22 +44,34 @@ def test_compute_median(tmp_path: Path) -> None:
     out = tmp_path / "median.zarr"
     compute_median(d).to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
     result = _read_zarr(out)
-    expected = np.median(data, axis=(0, 2))
+    expected = np.median(data, axis=0)
     np.testing.assert_allclose(result, expected)
 
 
 def test_compute_offset_corr(tmp_path: Path) -> None:
-    data: npt.NDArray[np.float64] = np.ones((4, 2, 3, 2), dtype=np.float64)
-    offset: npt.NDArray[np.float64] = np.zeros((2, 2), dtype=np.float64)
-    median: npt.NDArray[np.float64] = np.ones((2, 2), dtype=np.float64) * 0.5
+    """Test offset correction with 2D and 3D offsets (no median subtraction)."""
+    data: npt.NDArray[np.float64] = np.ones((4, 2, 3, 2), dtype=np.float64) * 10
     d = _from_array(data, chunks=(4, 2, 3, 2))
-    o = _from_array(offset, chunks=(2, 2))
-    m = _from_array(median, chunks=(2, 2))
-    out = tmp_path / "offset_corr.zarr"
-    compute_offset_corr(d, o, m).to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
+
+    # Test with 2D offset (should broadcast over reps)
+    offset_2d: npt.NDArray[np.float64] = np.full((2, 2), 3.0, dtype=np.float64)
+    o = _from_array(offset_2d, chunks=(2, 2))
+    out = tmp_path / "offset_corr_2d.zarr"
+    result_arr = compute_offset_corr(d, o)  # type: ignore[reportUnknownArgumentType]
+    result_arr.to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
     result = _read_zarr(out)
-    expected = data - offset[None, :, None, :] - median[None, :, None, :]
+    expected = data - offset_2d[None, :, None, :]
     np.testing.assert_allclose(result, expected)
+
+    # Test with 3D offset (different offset per rep)
+    offset_3d: npt.NDArray[np.float64] = np.full((2, 3, 2), 2.0, dtype=np.float64)
+    o3 = _from_array(offset_3d, chunks=(2, 3, 2))
+    out3 = tmp_path / "offset_corr_3d.zarr"
+    result_arr3 = compute_offset_corr(d, o3)  # type: ignore[reportUnknownArgumentType]
+    result_arr3.to_zarr(out3, overwrite=True)  # type: ignore[reportUnknownMemberType]
+    result3 = _read_zarr(out3)
+    expected3 = data - offset_3d[None, ...]
+    np.testing.assert_allclose(result3, expected3)
 
 
 def test_compute_common_modes(tmp_path: Path) -> None:

@@ -1,6 +1,10 @@
 """Tests for apantias.runtime.cluster."""
 
-from apantias.runtime.cluster import resolve_worker_memory
+from pathlib import Path
+
+import pytest
+
+from apantias.runtime.cluster import init, resolve_worker_memory
 
 
 def test_resolve_worker_memory_no_reduction() -> None:
@@ -47,3 +51,10 @@ def test_resolve_worker_memory_disabled_floor() -> None:
     )
     assert cores == 38
     assert per_worker == 3420
+
+
+def test_init_fails_with_insufficient_resources(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """cluster.init() refuses to start a cluster with fewer than 4 workers."""
+    monkeypatch.setattr("apantias.runtime.resources.get_resources", lambda: (2, 4096))
+    with pytest.raises(RuntimeError, match="At least 4 workers are required"):
+        init(tmp_path / "dask_temp", dashboard=False, use_nanny=False)

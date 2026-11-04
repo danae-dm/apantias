@@ -17,6 +17,13 @@ from apantias.settings import AnalysisSettings, AppSettings, FrameSettings, Runt
 
 N_FRAMES, N_COLS, N_REPS, N_ROWS = 12, 4, 6, 4
 
+
+@pytest.fixture(autouse=True)
+def _mock_resources(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make integration tests deterministic and independent of the host machine."""
+    monkeypatch.setattr("apantias.runtime.resources.get_resources", lambda: (4, 32768))
+
+
 # Names and shapes of outputs that are written to the HDF5 archive.
 EXPECTED_SHAPES: dict[str, tuple[int, ...]] = {
     "median": (N_COLS, N_ROWS),
@@ -52,7 +59,7 @@ def config(tmp_path: Path, sample_h5_file: Path) -> AppSettings:
     construction time rather than assigned afterwards.
     """
     return AppSettings(
-        runtime=RuntimeSettings(cpus=2, ram_mb=1024, dask_temp=tmp_path / "dask_temp"),
+        runtime=RuntimeSettings(dask_temp=tmp_path / "dask_temp"),
         frame=FrameSettings(
             n_frames=N_FRAMES,
             n_rows=N_ROWS,

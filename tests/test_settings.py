@@ -37,4 +37,4 @@ def test_load_config_creates_default(tmp_path: Path, monkeypatch: MonkeyPatch) -
     assert "runtime" in data
     assert "frame" in data
     assert "analysis" in data
-    assert cfg.runtime.cpus == 4
+    assert cfg.runtime.min_worker_memory_mb == 4096

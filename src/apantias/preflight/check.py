@@ -40,6 +40,8 @@ from typing import Any, cast
 import h5py  # pyright: ignore[reportMissingTypeStubs]
 import zarr
 
+from apantias.runtime import cluster as cluster_module
+from apantias.runtime import resources as resources_module
 from apantias.settings import AppSettings
 from apantias.storage.hdf5 import split_h5_dataset_path
 
@@ -91,6 +93,7 @@ class PreflightValidator:
             self.check_single_dataset_and_shape,
             self.check_ranges_consistency,
             self.check_external_offset,
+            self.check_resources,
             # Add future checks here
         ]
 
@@ -305,6 +308,19 @@ class PreflightValidator:
             f"({n_rows}, {n_cols}) or ({n_rows}, {n_reps}, {n_cols}) for dataset shape "
             f"(n_frames, {n_rows}, n_reps, {n_cols}) with nreps_range selecting {n_reps} reps."
         )
+
+    def check_resources(self) -> None:
+        """Verify enough CPU cores and RAM are available to run at least 4 Dask workers."""
+        detected_cores, total_ram_mb = resources_module.get_resources()
+        n_workers, _per_worker_mb = cluster_module.resolve_worker_memory(
+            detected_cores, total_ram_mb, self.ctx.config.runtime.min_worker_memory_mb
+        )
+        if n_workers < 4:
+            self.ctx.add_error(
+                f"Insufficient compute resources: only {n_workers} Dask worker(s) can be "
+                f"started while guaranteeing {self.ctx.config.runtime.min_worker_memory_mb} MB RAM per worker "
+                f"(available: {detected_cores} cores, {total_ram_mb} MB RAM). At least 4 workers are required."
+            )
 
     def _populate_frame_settings(self) -> AppSettings:
         """Create an AppSettings copy populated with all 4 dimensions and resolved slice ranges."""
