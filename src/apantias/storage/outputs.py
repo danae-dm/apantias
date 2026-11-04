@@ -10,10 +10,6 @@ import dask.array as da
 
 from apantias.settings import AnalysisSettings
 
-#: Shorthand tag for branch points: arrays that are materialised so downstream
-#: stages can use them.
-BRANCH: dict[str, Any] = {"is_branch_point": True}
-
 #: Shorthand tag for outputs that should be copied into the final HDF5 archive.
 #: Since ``is_archived`` defaults to False, callers must opt in with this tag.
 ARCHIVE: dict[str, Any] = {"is_archived": True}
@@ -24,16 +20,14 @@ class Stage:
     """One named product of the analysis pipeline.
 
     A ``Stage`` wraps the lazy dask array together with metadata that controls
-    where it is stored and whether downstream stages depend on it.  The
-    description is used for logging and stored as an HDF5 attribute so the
-    archive is self-documenting.
+    where it is stored and whether it is archived.  The description is used
+    for logging and stored as an HDF5 attribute so the archive is self-documenting.
     """
 
     name: str
     description: str
     array: da.Array
     path: Path
-    is_branch_point: bool = False
     is_archived: bool = False
 
 
@@ -45,33 +39,19 @@ class Pipeline:
 
     - which arrays are produced,
     - where each array is materialised on disk,
-    - which arrays are branch points that downstream stages need,
     - which arrays end up in the final HDF5 archive.
+
+    Note: Budget-related methods (`can_persist_in_memory`, `record_memory_use`,
+    `memory_used_bytes`) are not used in the current pipeline and are provided
+    for backward compatibility only.
     """
 
     analysis: AnalysisSettings
-    memory_budget_bytes: int | None = None
     _stages: dict[str, Stage] = field(default_factory=dict[str, Stage], init=False)
-    _memory_used_bytes: int = field(default=0, init=False)
 
     def _resolve_path(self, name: str) -> Path:
         """Return the on-disk path for an output under ``zarr_temp``."""
         return Path(self.analysis.zarr_temp) / name
-
-    def can_persist_in_memory(self, nbytes: int) -> bool:
-        """Return True if *nbytes* still fits into the in-memory budget."""
-        if self.memory_budget_bytes is None:
-            return True
-        return self._memory_used_bytes + nbytes <= self.memory_budget_bytes
-
-    @property
-    def memory_used_bytes(self) -> int:
-        """Bytes currently booked for in-memory persisted branch points."""
-        return self._memory_used_bytes
-
-    def record_memory_use(self, nbytes: int) -> None:
-        """Book *nbytes* as persisted in worker memory."""
-        self._memory_used_bytes += nbytes
 
     def declare(
         self,
@@ -79,17 +59,14 @@ class Pipeline:
         array: da.Array,
         description: str,
         *,
-        is_branch_point: bool | None = None,
         is_archived: bool | None = None,
         tags: list[dict[str, Any]] | None = None,
     ) -> da.Array:
         """Register a new pipeline product and return its dask array unchanged.
 
         ``tags`` is a convenience helper: each dict is merged into the stage
-        metadata, so callers can write ``tags=[BRANCH]`` instead of repeating
-        keyword arguments.  Explicit keyword arguments override tags.  By
-        default stages are not archived; use ``tags=[ARCHIVE]`` to include a
-        stage in the final HDF5 archive.
+        metadata, so callers can write ``tags=[ARCHIVE]`` to include a stage
+        in the final HDF5 archive.
 
         Parameters
         ----------
@@ -101,14 +78,14 @@ class Pipeline:
         description:
             Human-readable explanation of what the array represents.
         tags:
-            Optional list of shorthand tag dicts (``BRANCH``, ``ARCHIVE``) to
-            apply.
-        is_branch_point:
-            If True, the stage is consumed by later stages and must be
-            materialised before they are declared.
+            Optional list of shorthand tag dicts (``ARCHIVE``) to apply.
         is_archived:
             If True, the stage is copied into the final HDF5 archive.  Defaults
             to False; use ``tags=[ARCHIVE]`` to opt in.
+
+        Note: The ``is_branch_point`` parameter is no longer used and is kept
+        for backward compatibility only. All stages are treated as leaf outputs
+        that are written to Zarr and then archived.
         """
         if name in self._stages:
             raise ValueError(f"Stage '{name}' has already been declared")
@@ -116,13 +93,10 @@ class Pipeline:
         # Start from defaults, apply tags, then let explicit keyword arguments
         # override everything.
         merged: dict[str, Any] = {
-            "is_branch_point": False,
             "is_archived": False,
         }
         for tag in tags or []:
             merged.update(tag)
-        if is_branch_point is not None:
-            merged["is_branch_point"] = is_branch_point
         if is_archived is not None:
             merged["is_archived"] = is_archived
 
@@ -131,22 +105,13 @@ class Pipeline:
             description=description,
             array=array,
             path=self._resolve_path(name),
-            is_branch_point=merged["is_branch_point"],
             is_archived=merged["is_archived"],
         )
         self._stages[name] = stage
         return array
 
     def __getitem__(self, name: str) -> da.Array:
-        """Access the current dask array of a declared stage.
-
-        Dask graphs capture arrays *by value* at declaration time: a
-        downstream stage embeds whatever array object the registry holds at
-        the moment of its ``declare`` call.  A stage therefore only sees the
-        materialised version of an upstream stage if that stage was
-        materialised *before* the downstream declaration (see
-        ``StandardAnalysis._build_pipeline``).
-        """
+        """Access the current dask array of a declared stage."""
         return self._stages[name].array
 
     def __contains__(self, name: str) -> bool:
@@ -168,18 +133,6 @@ class Pipeline:
         """All declared ``Stage`` objects in declaration order."""
         return list(self._stages.values())
 
-    def branch_points(self) -> list[Stage]:
-        """Stages that must be materialised so downstream stages can use them."""
-        return [s for s in self._stages.values() if s.is_branch_point]
-
-    def leaf_outputs(self) -> list[Stage]:
-        """Stages that are not branch points (written to Zarr at the very end)."""
-        return [s for s in self._stages.values() if not s.is_branch_point]
-
-    def final_outputs(self) -> list[Stage]:
-        """Archived leaf outputs (copied into the HDF5 archive)."""
-        return [s for s in self._stages.values() if s.is_archived and not s.is_branch_point]
-
     def archived(self) -> list[Stage]:
         """All stages that go into the final HDF5 archive."""
         return [s for s in self._stages.values() if s.is_archived]
@@ -188,8 +141,7 @@ class Pipeline:
         """Return a human-readable summary of declared stages."""
         lines = ["Analysis pipeline:", "-" * 50]
         for s in self._stages.values():
-            branch = " [branch]" if s.is_branch_point else ""
             archive = " -> archive" if s.is_archived else " [no archive]"
-            lines.append(f"  {s.name:<15} {branch}{archive}")
+            lines.append(f"  {s.name:<15}{archive}")
             lines.append(f"    {s.description}")
         return "\n".join(lines)

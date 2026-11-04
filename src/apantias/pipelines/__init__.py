@@ -4,6 +4,6 @@ Each submodule implements a distinct analysis pipeline (e.g. the standard
 DANAE reduction). New analysis types should live here as sibling modules.
 """
 
-from .standard import StandardAnalysis
+from .standard import StandardPipeline
 
-__all__ = ["StandardAnalysis"]
+__all__ = ["StandardPipeline"]

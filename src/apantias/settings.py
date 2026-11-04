@@ -79,7 +79,7 @@ class RuntimeSettings(BaseModel):
     cpus: int = Field(default=0, description="Number of CPU cores, 0 is auto-detect")
     ram_mb: int = Field(default=0, description="RAM in MB, 0 is auto-detect")
     dask_temp: Path = Field(
-        default=Path("/scratch/users/florian.heinrich/dask_temp"),
+        default=Path("/tmp/dask_temp"),
         description="Path to dasks temp storage, use fast storage options here",
     )
     dask_dashboard: bool = Field(
@@ -172,13 +172,21 @@ class AnalysisSettings(BaseModel):
     frames_range: RangeSpec = Field(
         default=RangeSpec(start=0, stop=-1, step=1), description="Frames range [start, stop, step] default stop=-1"
     )
-    slope_threshold: int = Field(default=3, description="Threshold for the Slope Filter.")
-    second_offset: bool = Field(default=True, description="Shifts the signals according to the pixel hist fit.")
+    slope_threshold: int = Field(
+        default=3,
+        description="[EXPERIMENTAL] Threshold for the Slope Filter. Not currently used in the pipeline.",
+    )
+    second_offset: bool = Field(
+        default=True,
+        description="[EXPERIMENTAL] Shifts the signals according to the pixel hist fit. Not currently used.",
+    )
     persist_memory_percent: int = Field(
         default=30,
         ge=0,
         le=100,
-        description="Maximum percentage of total RAM to use for persisted branch-point arrays.",
+        description="[PLACEHOLDER] Maximum percentage of total RAM to use for persisted "
+        "branch-point arrays. Not used in current pipeline which writes all "
+        "intermediates to Zarr.",
     )
 
 

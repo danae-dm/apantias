@@ -12,14 +12,12 @@ import numpy as np
 import pytest
 import yaml
 
-from apantias.pipelines import StandardAnalysis
-from apantias.settings import AnalysisSettings, AppSettings, RuntimeSettings
+from apantias.pipelines import StandardPipeline
+from apantias.settings import AnalysisSettings, AppSettings, FrameSettings, RuntimeSettings
 
 N_FRAMES, N_COLS, N_REPS, N_ROWS = 12, 4, 6, 4
 
-# Names and shapes of outputs that are written to the HDF5 archive.  Stages
-# tagged only as BRANCH are stored in the transient Zarr store but are not
-# copied to the archive, so they are intentionally omitted here.
+# Names and shapes of outputs that are written to the HDF5 archive.
 EXPECTED_SHAPES: dict[str, tuple[int, ...]] = {
     "median": (N_COLS, N_ROWS),
     "signals": (N_FRAMES, N_COLS, N_REPS, N_ROWS),
@@ -55,6 +53,12 @@ def config(tmp_path: Path, sample_h5_file: Path) -> AppSettings:
     """
     return AppSettings(
         runtime=RuntimeSettings(cpus=2, ram_mb=1024, dask_temp=tmp_path / "dask_temp"),
+        frame=FrameSettings(
+            n_frames=N_FRAMES,
+            n_rows=N_ROWS,
+            n_reps=N_REPS,
+            n_cols=N_COLS,
+        ),
         analysis=AnalysisSettings(
             h5_file=sample_h5_file,
             zarr_temp=tmp_path / "temp.zarr",
@@ -63,7 +67,7 @@ def config(tmp_path: Path, sample_h5_file: Path) -> AppSettings:
     )
 
 
-# The Zarr store is removed by ``StandardAnalysis._cleanup`` after archiving,
+# The Zarr store is removed by ``StandardPipeline._cleanup`` after archiving,
 # so the integration tests validate the persistent HDF5 archive rather than
 # the transient Zarr outputs.
 
@@ -75,7 +79,7 @@ def _with_keep_zarr_temp(config: AppSettings, keep: bool) -> AppSettings:
 
 def test_h5_archive_contents(config: AppSettings) -> None:
     """The archive must contain every output, the settings, and metadata."""
-    StandardAnalysis(config).run()
+    StandardPipeline(config).run()
 
     archive_path = Path(config.analysis.h5_archive)
     assert archive_path.exists(), "HDF5 archive was not created"
@@ -106,7 +110,7 @@ def test_h5_archive_contents(config: AppSettings) -> None:
 def test_keep_zarr_temp_preserves_store(config: AppSettings) -> None:
     """When keep_zarr_temp is True, the temporary Zarr store survives cleanup."""
     config = _with_keep_zarr_temp(config, True)
-    StandardAnalysis(config).run()
+    StandardPipeline(config).run()
 
     temp_root = Path(config.analysis.zarr_temp)
     assert temp_root.is_dir(), "Temporary Zarr store was removed despite keep_zarr_temp=True"
@@ -115,5 +119,5 @@ def test_keep_zarr_temp_preserves_store(config: AppSettings) -> None:
 
 def test_default_cleanup_removes_store(config: AppSettings) -> None:
     """By default the temporary Zarr store is removed after archiving."""
-    StandardAnalysis(config).run()
+    StandardPipeline(config).run()
     assert not Path(config.analysis.zarr_temp).is_dir(), "Temporary Zarr store was not cleaned up"

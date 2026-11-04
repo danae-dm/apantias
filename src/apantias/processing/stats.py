@@ -11,22 +11,58 @@ from .axis import FRAME, REP, ROW
 
 
 def compute_median(data_p: da.Array) -> da.Array:
+    """Compute pixel-wise median across frames and repetitions.
+
+    Args:
+        data_p: Pixel-chunked data with shape (n_frames, n_rows, n_reps, n_cols).
+
+    Returns:
+        Median per pixel with shape (n_rows, n_cols).
+    """
     median_array: da.Array = da.median(data_p, axis=(FRAME, REP))  # type: ignore[reportUnknownMemberType]
     return median_array.rechunk(-1)  # type: ignore[reportUnknownMemberType]
 
 
 def compute_offset_corr(data_f: da.Array, offset: da.Array, median: da.Array) -> da.Array:
-    # Both offset and median have shape (n_cols, n_rows) and broadcast into
-    # the 4D frame array as (1, n_cols, 1, n_rows).
+    """Apply offset and median correction to frame data.
+
+    Args:
+        data_f: Frame-chunked data with shape (n_frames, n_rows, n_reps, n_cols).
+        offset: Offset map with shape (n_rows, n_cols).
+        median: Per-pixel median with shape (n_rows, n_cols).
+
+    Returns:
+        Corrected data with same shape as input.
+
+    The offset and median arrays broadcast across the frame and rep axes.
+    """
     return data_f - offset[None, :, None, :] - median[None, :, None, :]  # type: ignore[reportUnknownVariableType]
 
 
 def compute_common_modes(data: da.Array) -> da.Array:
+    """Compute common-mode signal per frame, row and repetition.
+
+    Args:
+        data: Frame-chunked data with shape (n_frames, n_rows, n_reps, n_cols).
+
+    Returns:
+        Common-mode signal with shape (n_frames, n_reps, n_cols).
+        This is the median across the row axis (axis 1).
+    """
     return da.median(data, axis=ROW)  # type: ignore[reportUnknownMemberType]
 
 
 def compute_slopes(data: da.Array) -> da.Array:
-    # shape is (frames, columns, nreps, rows)
+    """Compute linear slope of signal versus repetition index.
+
+    Args:
+        data: Corrected signals with shape (n_frames, n_rows, n_reps, n_cols).
+
+    Returns:
+        Slopes per pixel with shape (n_frames, n_rows, n_cols).
+        Computed by fitting a line to the repetition axis (axis 2).
+    """
+    # shape is (n_frames, n_rows, n_reps, n_cols)
     n = data.shape[REP]  # nreps
     x = np.arange(n, dtype=np.float64)  # plain NumPy, tiny
     x_dev = x - x.mean()  # plain NumPy
@@ -39,17 +75,45 @@ def compute_slopes(data: da.Array) -> da.Array:
 
 
 def subtract(data: da.Array, common_modes: da.Array) -> da.Array:
-    # common_modes has shape (n_frames, n_cols, n_reps); the trailing None
+    """Subtract common-mode signal from corrected data.
+
+    Args:
+        data: Offset-corrected data with shape (n_frames, n_rows, n_reps, n_cols).
+        common_modes: Common-mode signal with shape (n_frames, n_reps, n_cols).
+
+    Returns:
+        Common-mode corrected data with same shape as input.
+    """
+    # common_modes has shape (n_frames, n_reps, n_cols); the trailing None
     # restores the row axis so the subtraction broadcasts per pixel.
     return data - common_modes[:, :, :, None]  # type: ignore[reportUnknownVariableType]
 
 
 def compute_msd(data: da.Array) -> da.Array:
+    """Compute mean squared deviation of the corrected signal.
+
+    Args:
+        data: Corrected signals with shape (n_frames, n_rows, n_reps, n_cols).
+
+    Returns:
+        MSD per pixel with shape (n_rows, n_cols).
+        Computed as mean of squared values across frame and rep axes.
+    """
     squared_diff = data**2  # type: ignore[reportUnknownVariableType]
     msd_array: da.Array = da.mean(squared_diff, axis=(FRAME, REP))  # type: ignore[reportUnknownMemberType]
-    # Output is tiny (n_cols, n_rows); one chunk is fine.
+    # Output is tiny (n_rows, n_cols); one chunk is fine.
     return msd_array.rechunk(-1)  # type: ignore[reportUnknownMemberType]
 
 
 def compute_signals_mean(signals: da.Array) -> da.Array:
+    """Compute mean corrected signal per frame and pixel.
+
+    Args:
+        signals: Common-mode corrected signals with shape
+                 (n_frames, n_rows, n_reps, n_cols).
+
+    Returns:
+        Mean signals with shape (n_frames, n_rows, n_cols).
+        Computed by averaging across the rep axis (axis 2).
+    """
     return da.mean(signals, axis=REP)  # type: ignore[reportUnknownMemberType]

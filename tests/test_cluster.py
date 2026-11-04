@@ -1,11 +1,11 @@
 """Tests for apantias.runtime.cluster."""
 
-from apantias.runtime.cluster import _resolve_worker_memory
+from apantias.runtime.cluster import resolve_worker_memory
 
 
 def test_resolve_worker_memory_no_reduction() -> None:
     """When RAM is plentiful the requested core count is preserved."""
-    cores, per_worker = _resolve_worker_memory(
+    cores, per_worker = resolve_worker_memory(
         cores=4,
         ram_mb=65536,
         min_worker_memory_mb=4096,
@@ -16,7 +16,7 @@ def test_resolve_worker_memory_no_reduction() -> None:
 
 def test_resolve_worker_memory_reduces_workers() -> None:
     """Too many cores for the RAM -> reduce workers to meet the memory floor."""
-    cores, per_worker = _resolve_worker_memory(
+    cores, per_worker = resolve_worker_memory(
         cores=38,
         ram_mb=144400,
         min_worker_memory_mb=4096,
@@ -29,7 +29,7 @@ def test_resolve_worker_memory_reduces_workers() -> None:
 
 def test_resolve_worker_memory_cannot_meet_minimum() -> None:
     """If total RAM is below the floor, keep the requested cores and cap at 256 MB."""
-    cores, per_worker = _resolve_worker_memory(
+    cores, per_worker = resolve_worker_memory(
         cores=4,
         ram_mb=1024,
         min_worker_memory_mb=4096,
@@ -40,7 +40,7 @@ def test_resolve_worker_memory_cannot_meet_minimum() -> None:
 
 def test_resolve_worker_memory_disabled_floor() -> None:
     """A floor of 256 MB disables the reduction logic."""
-    cores, per_worker = _resolve_worker_memory(
+    cores, per_worker = resolve_worker_memory(
         cores=38,
         ram_mb=144400,
         min_worker_memory_mb=256,

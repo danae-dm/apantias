@@ -274,7 +274,7 @@ class PreflightValidator:
             # Neither HDF5 nor zarr: existence is all we can verify here.
             return
         # Split "store.zarr/group/array" so nested array paths resolve the same
-        # way they are loaded in StandardAnalysis._load_offset.
+        # way they are loaded in StandardPipeline._load_offset.
         store_end = path_str.find(".zarr") + len(".zarr")
         store = path_str[:store_end]
         component = path_str[store_end:].lstrip("/") or None

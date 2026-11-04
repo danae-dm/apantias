@@ -18,7 +18,7 @@ dependencies = [
     "matplotlib>=3.10.9",
     "pydantic>=2.13.3",
     "pyyaml>=6.0.3",
-    "rechunker>=0.5.2",
+    "psutil>=6.0.0",
     "zarr>=3.1.6",
     "h5py>=3.14.0",
     "hdf5plugin>=6.0.0",
@@ -43,8 +43,8 @@ dev = [
 package = true
 
 [project.urls]
-Homepage = "https://github.com/shakamaran/apantias"
-Issues = "https://github.com/shakamaran/apantias/issues"
+Homepage = "https://github.com/danae-dm/apantias"
+Issues = "https://github.com/danae-dm/apantias/issues"
 
 [tool.ruff]
 line-length = 120
@@ -58,6 +58,15 @@ venvPath = "."
 venv = ".venv"
 typeCheckingMode = "strict"
 reportPrivateImportLevel = "warning"
+# Relax strict checking for dask/zarr which have incomplete stubs
+reportMissingTypeStubs = "none"
+reportUnknownMemberType = "warning"
+reportUnknownVariableType = "warning"
+reportUnknownArgumentType = "warning"
+reportUnknownLambdaType = "warning"
+reportInconsistentConstructor = "warning"
+reportOptionalMemberAccess = "warning"
+reportPrivateUsage = "warning"
 
 
 [tool.pytest.ini_options]

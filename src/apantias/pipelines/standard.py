@@ -1,415 +1,343 @@
-# Standard analysis orchestrates Dask/Zarr calls; both libraries ship incomplete
-# stubs, so strict-mode unknown-type checks are relaxed here.
-# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportAttributeAccessIssue=false
+"""Simplified pipeline declarations for standard analysis.
 
-"""Definition of the standard data analysis pipeline.
+Each pipeline stage is fully self-contained:
+- Inputs: which upstream stages it depends on
+- Computation: how to transform inputs to outputs
+- Output: where to write the result (auto-generated from name)
+- Description: metadata written to archive
+- Archive: whether to copy to HDF5 archive
 
-This module declares the analysis stages in a ``Pipeline``.  Each stage is
-registered together with metadata that controls where it is stored, whether
-downstream stages consume it (branch point), and whether it ends up in the
-final HDF5 archive.
+The pipeline runs stages in dependency order. Each stage:
+1. Loads inputs from their Zarr paths
+2. Builds the computation graph
+3. Writes output to its Zarr path (chunked according to current strategy)
+4. Returns a lazy handle to the written data
 
-Declaration and materialization are interleaved: every stage that later stages
-consume is materialized (in-memory persist or Zarr) immediately after its
-declaration, *before* the consuming stage's dask graph is built.  This is
-required because dask graphs capture arrays by value at declaration time —
-materializing after the fact cannot rewire an already-built graph.  Leaf
-outputs stay lazy and are written together in one batched ``da.store``.
-
-How a stage is archived is decided centrally by the HDF5 writer based on the
-configured chunk threshold.  Infrastructure lives in dedicated modules and is
-only wired together here: path layout in ``storage.paths``, the pipeline registry in
-``storage.outputs``, stage materialization in ``_persist_or_store``, and archiving
-in ``storage.hdf5``.
+Memory is bounded by the chunk size - workers process one chunk at a time.
+No intermediate persistence in worker memory.
 """
 
+from __future__ import annotations
+
 import logging
-import shutil
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING
 
 import dask.array as da
-import zarr
+import numpy as np
 
-from apantias.preflight import PreflightValidator
 from apantias.processing import stats
-from apantias.processing.rechunk import rechunk_to_pixels
 from apantias.processing.reductions import apply_pixelwise
-from apantias.runtime import init
-from apantias.settings import AppSettings, load_config
-from apantias.storage.hdf5 import write_analysis_outputs_to_h5
-from apantias.storage.outputs import ARCHIVE, BRANCH, Pipeline
-from apantias.storage.paths import AnalysisPaths
-from apantias.storage.zarr import h5_to_zarr
+from apantias.storage.outputs import ARCHIVE
+
+if TYPE_CHECKING:
+    from dask.distributed import Client, LocalCluster
+
+    from apantias.settings import AppSettings
+    from apantias.storage.outputs import Pipeline
 
 _logger = logging.getLogger(__name__)
 
 
-def _driver_rss_mb() -> float | None:
-    """Return the driver process RSS in MB, or None if psutil is unavailable."""
-    try:
-        import psutil
+@dataclass
+class PipelineStage:
+    """A single stage in the analysis pipeline.
 
-        return psutil.Process().memory_info().rss / (1024 * 1024)
-    except Exception:
-        return None
-
-
-def _log_driver_memory(prefix: str) -> None:
-    """Log driver RSS if we can read it."""
-    rss = _driver_rss_mb()
-    if rss is not None:
-        _logger.info("%s driver RSS: %.1f MB", prefix, rss)
-
-
-def _log_array(name: str, arr: da.Array) -> None:
-    """Log concise shape/chunk/nbytes info for a Dask array."""
-    _logger.info(
-        "Array %s: shape=%s chunks=%s dtype=%s nbytes=%.2f MB",
-        name,
-        arr.shape,
-        arr.chunksize,
-        arr.dtype,
-        arr.nbytes / 1e6,
-    )
-
-
-class StandardAnalysis:
-    """
-    Performs standard statistical analysis on zarr arrays.
-
-    Data shape is (n_frames, n_cols, n_reps, n_rows).
+    Each stage is self-contained: it declares what inputs it needs,
+    how to compute its output, and where to write the result.
     """
 
-    def __init__(self, path: Path | str | AppSettings | None = None) -> None:
-        if path is None:
-            raw_config = load_config()
-        elif isinstance(path, AppSettings):
-            raw_config = path
-        else:
-            raw_config = load_config(Path(path))
+    name: str
+    """Unique identifier for this stage. Also used to generate output_path."""
 
-        # Fail fast: validate inputs and infer FrameSettings before Dask starts
-        self.config = PreflightValidator(raw_config).validate()
+    inputs: list[str]
+    """Names of upstream stages this depends on."""
 
-        # Dask cluster starts only after inputs are proven valid
-        self._client, self._cluster = init(
-            self.config.runtime.dask_temp,
-            self.config.runtime.cpus,
-            self.config.runtime.ram_mb,
-            min_worker_memory_mb=self.config.runtime.min_worker_memory_mb,
-            dashboard=self.config.runtime.dask_dashboard,
-            use_nanny=self.config.runtime.dask_nanny,
-        )
+    compute_fn: Callable[..., da.Array]
+    """Function that computes the result. Can take any arguments."""
 
+    description: str
+    """Human-readable description written as metadata to the archive."""
+
+    is_archived: bool = False
+    """If True, this output will be copied to the HDF5 archive."""
+
+
+class StandardPipeline:
+    """Runs the standard analysis pipeline.
+
+    Each pipeline stage is declared once, fully specified, and executed
+    independently. No intermediate persistence - everything goes to Zarr.
+
+    Args:
+        config: Validated AppSettings with analysis parameters.
+        client: Optional Dask client. If provided, the pipeline runs on this
+                distributed cluster. If not provided, a local cluster is
+                created and cleaned up internally.
+    """
+
+    def __init__(self, config: AppSettings, client: Client | None = None) -> None:
+        from apantias.storage.paths import AnalysisPaths
+
+        self.config = config
         self.paths = AnalysisPaths.from_settings(self.config.analysis)
-        self.h5_path = Path(self.config.analysis.h5_file)
-        self.slope_threshold = self.config.analysis.slope_threshold
-        raw_ext = self.config.analysis.ext_offset
-        if raw_ext is not None and str(raw_ext) != "None":
-            self.ext_offset = Path(raw_ext)
-        else:
-            self.ext_offset = None
-        self._log_worker_memory("After cluster init")
+        self._provided_client: Client | None = client
+        self._internal_client: Client | None = None
+        self._internal_cluster: LocalCluster | None = None
 
-    def run(self) -> None:
-        client, cluster = self._client, self._cluster
+    def run(self) -> list[str]:
+        """Run all pipeline stages and return list of archived stage names."""
+        from apantias.processing.rechunk import rechunk_to_pixels as _rechunk
+        from apantias.runtime.cluster import init as _init_cluster
+        from apantias.storage.hdf5 import write_analysis_outputs_to_h5
+        from apantias.storage.zarr import h5_to_zarr
+
+        # Handle cluster setup/teardown
+        if self._provided_client is None:
+            self._internal_client, self._internal_cluster = _init_cluster(
+                self.config.runtime.dask_temp,
+                cores=self.config.runtime.cpus,
+                ram_mb=self.config.runtime.ram_mb,
+            )
+            client: Client = self._internal_client  # type: ignore[assignment]
+        else:
+            client = self._provided_client
+
         try:
-            self._run_analysis()
+            # Stage 0: Convert raw HDF5 to Zarr (frame-chunked and pixel-chunked)
+            _logger.info("Converting HDF5 to Zarr...")
+            h5_to_zarr(
+                Path(self.config.analysis.h5_file),
+                self.paths.raw_framewise,
+                self.config.frame,
+                self.config.analysis,
+                store_batch_size=1,  # Sequential for simplicity
+            )
+            _rechunk(self.paths.raw_framewise, self.paths.raw_pixelwise)
+
+            # Stage 1: Build and execute pipeline stages
+            stages = self._declare_stages()
+            self._execute_pipeline(stages, client)  # type: ignore[arg-type]
+
+            # Stage 2: Archive tagged outputs to HDF5
+            archived = [s.name for s in stages if s.is_archived]
+            _logger.info("Archiving stages: %s", archived)
+            write_analysis_outputs_to_h5(
+                self._to_pipeline_registry(stages),
+                Path(self.config.analysis.h5_archive),
+                config=self.config,
+            )
+
+            return archived
         finally:
             self._cleanup()
-            client.close()
-            cluster.close()
+            if self._internal_client is not None:
+                self._internal_client.close()  # type: ignore[func-returns-value]
+            if self._internal_cluster is not None:
+                self._internal_cluster.close()  # type: ignore[func-returns-value]
 
     def _cleanup(self) -> None:
-        """Remove the temporary Zarr store after archiving, unless configured to keep it.
-
-        Called in the finally block of ``run()`` so it always executes,
-        even when the analysis fails after the archive step has completed.
-        Errors during cleanup are logged but never raised — they cannot
-        undo the analysis results already written to the HDF5 archive.
-        """
+        """Remove the temporary Zarr store after archiving, unless configured to keep it."""
         if self.config.analysis.keep_zarr_temp:
             _logger.info("Keeping temp store: %s", self.paths.temp_root)
             return
 
         path = self.paths.temp_root
         if path.is_dir():
+            import shutil
+
             try:
                 shutil.rmtree(path)
                 _logger.info("Removed temp store: %s", path)
             except OSError as exc:
                 _logger.warning("Failed to remove temp store %s: %s", path, exc)
 
-    def _run_analysis(self) -> None:
-        _log_driver_memory("Start of run")
-        zarr.open_group(self.paths.temp_root, mode="a")
+    def _declare_stages(self) -> list[PipelineStage]:
+        """Declare all pipeline stages in dependency order."""
+        # Order matters: dependencies must be declared before dependents
+        return [
+            # Pixel-wise median (from pixel-chunked data)
+            PipelineStage(
+                name="median",
+                inputs=[],  # raw_pixelwise is written in Stage 0, not a pipeline stage
+                compute_fn=lambda: stats.compute_median(da.from_zarr(self.paths.raw_pixelwise)),  # type: ignore[reportUnknownVariableType]
+                description="Pixel-wise median across frames and repetitions",
+                is_archived=True,
+            ),
+            # Offset correction (frame-chunked)
+            PipelineStage(
+                name="offset_corr",
+                inputs=["median"],
+                compute_fn=lambda inputs: stats.compute_offset_corr(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
+                    da.from_zarr(self.paths.raw_framewise),  # type: ignore[reportUnknownVariableType]
+                    self._load_offset(),
+                    inputs["median"],  # type: ignore[reportUnknownArgumentType]
+                ),
+                description="Raw frames corrected by external offset and pixel median",
+                is_archived=False,  # intermediate
+            ),
+            # Common mode correction (frame-chunked)
+            PipelineStage(
+                name="common_modes",
+                inputs=["offset_corr"],
+                compute_fn=lambda inputs: stats.compute_common_modes(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
+                    inputs["offset_corr"],  # type: ignore[reportUnknownArgumentType]
+                ),
+                description="Common-mode signal per frame, row and repetition",
+                is_archived=False,  # intermediate
+            ),
+            # Final signals (frame-chunked)
+            PipelineStage(
+                name="signals",
+                inputs=["offset_corr", "common_modes"],
+                compute_fn=lambda inputs: stats.subtract(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
+                    inputs["offset_corr"],  # type: ignore[reportUnknownArgumentType]
+                    inputs["common_modes"],  # type: ignore[reportUnknownArgumentType]
+                ),
+                description="Offset- and common-mode-corrected detector signal",
+                is_archived=True,
+            ),
+            # Leaf outputs (no downstream consumers)
+            PipelineStage(
+                name="slopes",
+                inputs=["signals"],
+                compute_fn=lambda inputs: stats.compute_slopes(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
+                    inputs["signals"],  # type: ignore[reportUnknownArgumentType]
+                ),
+                description="Linear slope of signal versus repetition index",
+                is_archived=True,
+            ),
+            PipelineStage(
+                name="msd",
+                inputs=["signals"],
+                compute_fn=lambda inputs: stats.compute_msd(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
+                    inputs["signals"],  # type: ignore[reportUnknownArgumentType]
+                ),
+                description="Mean squared deviation of the corrected signal",
+                is_archived=True,
+            ),
+            PipelineStage(
+                name="signals_mean",
+                inputs=["signals"],
+                compute_fn=lambda inputs: stats.compute_signals_mean(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
+                    inputs["signals"],  # type: ignore[reportUnknownArgumentType]
+                ),
+                description="Mean corrected signal per frame and pixel",
+                is_archived=True,
+            ),
+            PipelineStage(
+                name="pixelwise",
+                inputs=[],  # raw_pixelwise is written in Stage 0
+                compute_fn=lambda: apply_pixelwise(
+                    da.from_zarr(self.paths.raw_pixelwise),  # type: ignore[reportUnknownVariableType]
+                    lambda t: t.max() - t.min(),
+                ),
+                description="Per-pixel max-min range of raw signal",
+                is_archived=True,
+            ),
+        ]
 
-        # ------------------------------------------------------------------
-        # Stage 1: convert the raw HDF5 input into frame-chunked Zarr and
-        # rechunk it into pixel-chunked Zarr for the per-pixel stages.
-        # ------------------------------------------------------------------
-        _logger.info("Start writing bin to zarr store.")
-        self._log_worker_memory("Before h5_to_zarr")
-        h5_to_zarr(
-            self.h5_path,
-            self.paths.raw_framewise,
-            self.config.frame,
-            self.config.analysis,
-            store_batch_size=len(self._cluster.workers),
-        )
-        _log_driver_memory("After h5_to_zarr")
-        self._log_worker_memory("After h5_to_zarr")
-        rechunk_to_pixels(self.paths.raw_framewise, self.paths.raw_pixelwise)
-        _log_driver_memory("After rechunk_to_pixels")
-        self._log_worker_memory("After rechunk_to_pixels")
-        _logger.info("Done.")
-
-        # ------------------------------------------------------------------
-        # Stage 2: declare the pipeline stage by stage.  Every stage that is
-        # consumed by a later stage is materialized right after its
-        # declaration (see _build_pipeline), so this is also the first place
-        # where real computation is triggered.
-        # ------------------------------------------------------------------
-        data_f, data_p = self._load_inputs()
-        _log_array("data_f", data_f)
-        _log_array("data_p", data_p)
-        pipeline = self._build_pipeline(data_f, data_p)
-        _log_driver_memory("After pipeline build")
-        _logger.info("\n%s", pipeline.summary())
-
-        # ------------------------------------------------------------------
-        # Stage 3: write the remaining leaf outputs (archived arrays that no
-        # later stage consumes) in one batched da.store.
-        # ------------------------------------------------------------------
-        self._save_final_outputs(pipeline)
-        _log_driver_memory("After saving final outputs")
-
-        # ------------------------------------------------------------------
-        # Stage 4: copy every archived Zarr output into the final HDF5 archive.
-        # ------------------------------------------------------------------
-        _logger.info("Writing HDF5 archive.")
-        write_analysis_outputs_to_h5(
-            pipeline,
-            self.config.analysis.h5_archive,
-            config=self.config,
-        )
-        _log_driver_memory("After HDF5 archive")
-
-    def _log_worker_memory(self, prefix: str) -> None:
-        """Query every worker's RSS and log min/max/mean.
-
-        This is intentionally a diagnostic helper: it makes a synchronous
-        round-trip to the scheduler, so it should not be called in a tight loop.
-        """
-        try:
-            import psutil
-
-            values = list(self._client.run(lambda: psutil.Process().memory_info().rss / (1024 * 1024)).values())
-            if values:
-                _logger.info(
-                    "%s worker RSS: min=%.1f MB, max=%.1f MB, mean=%.1f MB, workers=%d",
-                    prefix,
-                    min(values),
-                    max(values),
-                    sum(values) / len(values),
-                    len(values),
-                )
-        except Exception as exc:
-            _logger.debug("Could not query worker memory: %s", exc)
-
-    def _load_inputs(self) -> tuple[da.Array, da.Array]:
-        # da.from_zarr sees the inner Zarr chunks (single-column) because the
-        # frame-chunked store uses sharding. Downstream steps need full columns,
-        # so rechunk axis 1 (columns) to n_cols here once.
-        data_f = cast(
-            da.Array,
-            da.from_zarr(self.paths.raw_framewise).rechunk({1: self.config.frame.n_cols}),
-        )
-        data_p = cast(da.Array, da.from_zarr(self.paths.raw_pixelwise))
-        return data_f, data_p
-
-    def _load_offset(self) -> da.Array:
-        if self.ext_offset is None:
-            # Shape (n_cols, n_rows) broadcasts into the 4D frame array.
-            return da.zeros((self.config.frame.n_cols, self.config.frame.n_rows), chunks=-1)
-        return cast(da.Array, da.from_zarr(self.ext_offset))
-
-    def _build_pipeline(self, data_f: da.Array, data_p: da.Array) -> Pipeline:
-        """Declare every output of the standard analysis pipeline.
-
-        Stages are declared in dependency order.  A stage that later stages
-        consume (a branch point) is materialized immediately after its
-        declaration, *before* the consuming graph is built.  This ordering is
-        essential: dask graphs capture arrays by value at ``declare`` time, so
-        ``p["<name>"]`` hands the consuming stage whatever object the registry
-        holds at that moment.  Materializing between declarations guarantees
-        downstream graphs read the persisted array (cluster memory or Zarr)
-        instead of embedding the full lazy upstream — without this, shared
-        subgraphs are resubmitted to the scheduler several times (dask issue
-        #9888 warnings) and correctness would rely on the cluster's key cache.
-
-        Leaf outputs (nothing downstream consumes them) stay lazy and are
-        written together in one batched ``da.store`` by ``_save_final_outputs``.
-        """
-        p = Pipeline(
-            self.config.analysis,
-            memory_budget_bytes=self._memory_budget_bytes(),
-        )
-
-        def materialize(name: str) -> None:
-            """Persist stage *name* in place (memory if it fits, Zarr otherwise).
-
-            Replaces the stage's lazy array with the materialized handle so
-            subsequent ``p[name]`` lookups — and therefore all graphs built
-            afterwards — reference the persisted version.
-            """
-            stage = p.stage(name)
-            _log_array(stage.name, stage.array)
-            stage.array = self._persist_or_store(stage.array, stage.path, p)
-
-        _logger.info("Start calculating median.")
-        p.declare(
-            "median",
-            stats.compute_median(data_p),
-            "Pixel-wise median across frames and repetitions",
-            tags=[BRANCH, ARCHIVE],  # consumed by offset_corr
-        )
-        materialize("median")
-
-        _logger.info("Start applying offset.")
-        offset = self._load_offset()
-        p.declare(
-            "offset_corr",
-            # p["median"] is the materialized median here, so this graph reads
-            # the persisted store instead of recomputing the median from raw data.
-            stats.compute_offset_corr(data_f, offset, p["median"]),
-            "Raw frames corrected by external offset and pixel median",
-            tags=[BRANCH],  # consumed by common_modes and signals
-        )
-        materialize("offset_corr")
-
-        _logger.info("Start common mode correction.")
-        p.declare(
-            "common_modes",
-            stats.compute_common_modes(p["offset_corr"]),
-            "Common-mode signal per frame, row and repetition",
-            tags=[BRANCH],  # consumed by signals
-        )
-        materialize("common_modes")
-        p.declare(
-            "signals",
-            stats.subtract(p["offset_corr"], p["common_modes"]),
-            "Offset- and common-mode-corrected detector signal",
-            tags=[BRANCH, ARCHIVE],  # consumed by slopes, msd and signals_mean
-        )
-        materialize("signals")
-
-        _logger.info("Start calculating slopes, msd and mean signals.")
-        # Leaf outputs: declared on top of the materialized signals, but left
-        # lazy — they are stored in one batched da.store later.
-        p.declare(
-            "slopes",
-            stats.compute_slopes(p["signals"]),
-            "Linear slope of signal versus repetition index",
-            tags=[ARCHIVE],
-        )
-        p.declare(
-            "msd",
-            stats.compute_msd(p["signals"]),
-            "Mean squared deviation of the corrected signal",
-            tags=[ARCHIVE],
-        )
-        p.declare(
-            "signals_mean",
-            stats.compute_signals_mean(p["signals"]),
-            "Mean corrected signal per frame and pixel",
-            tags=[ARCHIVE],
-        )
-
-        _logger.info("Start pixelwise calculation.")
-        p.declare(
-            "pixelwise",
-            apply_pixelwise(data_p, lambda t: t.max() - t.min()),
-            "Per-pixel max-min range of raw signal",
-            tags=[ARCHIVE],
-        )
-
-        return p
-
-    def _persist_or_store(self, arr: da.Array, path: Path, pipeline: Pipeline) -> da.Array:
-        """Materialize a branch-point array to Zarr and return a disk-backed handle.
-
-        To keep worker memory bounded, branch points are always written to Zarr
-        and read back. This avoids accumulating large or many branch-point arrays
-        in distributed worker memory while still preventing recomputation.
-        """
-        budget_mb = (pipeline.memory_budget_bytes or 0) / 1e6
-        _logger.info(
-            "Memory budget: %.1f / %.1f MB available for %s (%.2f MB).",
-            pipeline.memory_used_bytes / 1e6,
-            budget_mb,
-            path.name,
-            arr.nbytes / 1e6,
-        )
-        self._log_worker_memory(f"Before zarr store {path.name}")
-        _logger.info(
-            "Store %s to zarr (%.2f MB).",
-            path.name,
-            arr.nbytes / 1e6,
-        )
-        arr.to_zarr(path, overwrite=True)
-        self._log_worker_memory(f"After zarr store {path.name}")
-        return cast(da.Array, da.from_zarr(path))
-
-    def _memory_budget_bytes(self) -> int:
-        """Return the total in-memory budget for persisted branch points.
-
-        The budget is ``analysis.persist_memory_percent`` percent of the
-        configured total RAM.
-        """
-        ram_mb = self.config.runtime.ram_mb
-        if ram_mb <= 0:
-            return 0
-        percent = self.config.analysis.persist_memory_percent
-        budget = int(ram_mb * 1024 * 1024 * (percent / 100.0))
-        _logger.info("Pipeline in-memory budget: %.1f MB (%.0f%% of %d MB).", budget / 1e6, percent, ram_mb)
-        return budget
-
-    def _save_final_outputs(self, pipeline: Pipeline) -> None:
-        """Write each leaf output to its Zarr store sequentially."""
-        stages = pipeline.leaf_outputs()
-
-        total_leaf_nbytes = sum(s.array.nbytes for s in stages)
-        _logger.info(
-            "Writing %d final outputs sequentially: %s (total %.2f MB).",
-            len(stages),
-            ", ".join(s.name for s in stages),
-            total_leaf_nbytes / 1e6,
-        )
-        for s in stages:
-            _log_array(s.name, s.array)
+    def _execute_pipeline(self, stages: list[PipelineStage], client: Client) -> None:
+        """Execute all pipeline stages in dependency order."""
+        results: dict[str, da.Array] = {}  # Cache already-executed stages
 
         for stage in stages:
-            # da.store needs writable array targets; Path objects do not support
-            # item assignment, so open one Zarr array per output first.
-            target = zarr.open_array(
-                str(stage.path),
-                mode="w",
-                shape=stage.array.shape,
-                chunks=stage.array.chunksize,
-                dtype=stage.array.dtype,
-                zarr_format=3,
-            )
-            _logger.info("Storing %s to %s...", stage.name, stage.path)
-            self._log_worker_memory(f"Before store {stage.name}")
-            da.store(stage.array, target, lock=False)
-            # Back-fill the registry with a disk-backed handle: after this point
-            # every stage of the pipeline refers to materialized data, so touching
-            # a stage later cannot silently recompute the whole upstream graph.
-            stage.array = cast(da.Array, da.from_zarr(stage.path))
-            self._log_worker_memory(f"After store {stage.name}")
-            _logger.info("Stored %s.", stage.name)
+            _logger.info("Executing stage: %s", stage.name)
 
-        self._log_worker_memory("After final outputs store")
-        _logger.info("Done.")
+            # Load inputs from Zarr (for stages that depend on other pipeline stages)
+            for inp in stage.inputs:
+                if inp not in results:
+                    input_path = self.paths.temp_root / inp
+                    results[inp] = da.from_zarr(input_path)  # type: ignore[reportUnknownVariableType]
+
+            # Get input arrays from cache
+            inputs = {inp: results[inp] for inp in stage.inputs}
+
+            # Build and execute computation (call the lambda with inputs if needed)
+            if stage.inputs:
+                result = stage.compute_fn(inputs)
+            else:
+                result = stage.compute_fn()
+
+            # Auto-generate output path from name
+            output_path = self.paths.temp_root / stage.name
+
+            # Write to Zarr (uses the provided Dask client)
+            _logger.info("Writing %s to %s", stage.name, output_path)
+            self._write_to_zarr(result, output_path, client)
+
+            # Cache for downstream stages
+            results[stage.name] = da.from_zarr(output_path)  # type: ignore[reportUnknownVariableType]
+
+    def _write_to_zarr(self, arr: da.Array, path: Path, client: Client) -> None:
+        """Write a dask array to Zarr, preserving current chunking strategy.
+
+        Uses the provided Dask client for distributed computation.
+
+        The chunk shape is preserved from the dask array. For 4D data with shape
+        (n_frames, n_rows, n_reps, n_cols), the chunks will be a tuple of 4
+        integers representing the chunk size along each axis.
+        """
+        import zarr
+
+        # Open or create Zarr array with matching chunking
+        # arr.chunks is a tuple of tuples, one per axis. We need the full shape.
+        chunks = tuple(c[0] for c in arr.chunks)  # type: ignore[reportUnknownVariableType]
+        target = zarr.open_array(  # type: ignore[reportUnknownVariableType]
+            str(path),
+            mode="w",
+            shape=arr.shape,
+            chunks=chunks,
+            dtype=arr.dtype,  # type: ignore[reportUnknownMemberType]
+            zarr_format=3,
+        )
+
+        # Write using da.store with the provided Dask client
+        # da.store accepts a client argument for distributed execution
+        da.store(arr, target, lock=False, compute_kwargs={"client": client})  # type: ignore[reportUnknownVariableType]
+
+    def _load_offset(self) -> da.Array:
+        """Load external offset if configured, otherwise return zeros.
+
+        Offset has shape (n_rows, n_cols) to broadcast with the 4D data array
+        of shape (n_frames, n_rows, n_reps, n_cols).
+        """
+        from apantias.storage.hdf5 import split_h5_dataset_path
+
+        ext = self.config.analysis.ext_offset
+        if ext is None or str(ext) == "None":
+            return da.zeros(  # type: ignore[reportUnknownVariableType]
+                (self.config.frame.n_rows, self.config.frame.n_cols),
+                chunks=-1,
+                dtype=np.float64,
+            )
+
+        # Check if it's an HDF5 reference or Zarr path
+        h5_ref = split_h5_dataset_path(ext)
+        if h5_ref is not None:
+            # HDF5 file: load as dask array (small, so eager reading is fine)
+            from apantias.storage.hdf5 import load_h5_dataset
+
+            file_path, dataset_name = h5_ref
+            return load_h5_dataset(file_path, dataset_name)
+        else:
+            # Zarr path
+            return da.from_zarr(ext)  # type: ignore[reportUnknownVariableType]
+
+    def _to_pipeline_registry(self, stages: list[PipelineStage]) -> Pipeline:
+        """Convert stages to Pipeline registry for archiving."""
+        from apantias.storage.outputs import Pipeline
+
+        p = Pipeline(self.config.analysis)
+        for stage in stages:
+            # Re-create stage with disk-backed array
+            arr = da.from_zarr(self.paths.temp_root / stage.name)  # type: ignore[reportUnknownVariableType]
+            p.declare(
+                name=stage.name,
+                array=arr,
+                description=stage.description,
+                tags=[ARCHIVE] if stage.is_archived else [],
+            )
+        return p

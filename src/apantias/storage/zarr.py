@@ -265,8 +265,8 @@ def h5_to_zarr(
         "Ready to da.store: %d blocks, shape=%s, chunks=%s, nbytes=%.2f MB.",
         len(blocks),
         data.shape,
-        data.chunksize,
-        data.nbytes / 1e6,
+        data.chunksize,  # type: ignore[attr-defined]
+        data.nbytes / 1e6,  # type: ignore[attr-defined]
     )
 
     if store_batch_size is None or len(blocks) <= store_batch_size:

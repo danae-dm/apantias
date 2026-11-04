@@ -40,7 +40,7 @@ def get_node_name() -> str:
     return node_name
 
 
-def _resolve_worker_memory(
+def resolve_worker_memory(
     cores: int,
     ram_mb: int,
     min_worker_memory_mb: int,
@@ -58,6 +58,10 @@ def _resolve_worker_memory(
         cores = max(1, int(available_mb / min_worker_memory_mb))
         per_worker_mb = max(min_worker_memory_mb, int(available_mb / max(1, cores)))
     return cores, int(per_worker_mb)
+
+
+# Backward compatibility alias
+_resolve_worker_memory = resolve_worker_memory
 
 
 def init(
