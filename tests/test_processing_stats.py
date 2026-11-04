@@ -5,6 +5,7 @@
 # pyright: reportUnknownMemberType=false
 
 from pathlib import Path
+from typing import Any
 
 import dask.array as da
 import numpy as np
@@ -129,24 +130,29 @@ def test_compute_slopes(tmp_path: Path) -> None:
 
 
 def test_apply_pixelwise() -> None:
-    """apply_pixelwise reduces each pixel's time series to one scalar.
+    """apply_pixelwise processes each pixel's time series to return parameters.
 
-    Input (n_frames, n_cols, n_reps, n_rows) chunked per pixel must produce
-    output (n_cols, n_rows), with each value computed from that pixel's
-    (n_frames, n_reps) series only.
+    Input (n_frames, n_pixels) chunked as (n_frames, 1) produces output
+    (n_pixels * k,) where k is the function's output dimension. The output
+    can be reshaped to (n_pixels, k) then to spatial dimensions.
     """
-    n_frames, n_cols, n_reps, n_rows = 4, 2, 3, 2
-    data: npt.NDArray[np.float64] = np.arange(n_frames * n_cols * n_reps * n_rows, dtype=np.float64).reshape(
-        n_frames, n_cols, n_reps, n_rows
-    )
-    d = _from_array(data, chunks=(n_frames, 1, n_reps, 1))  # one chunk per pixel
+    n_frames, n_pixels = 4, 6  # 2x3 grid
+    data: npt.NDArray[np.float64] = np.arange(n_frames * n_pixels, dtype=np.float64).reshape(n_frames, n_pixels)
+    d = da.from_array(data, chunks=(n_frames, 1))  # type: ignore[reportArgumentType]  # one chunk per pixel
 
-    result = apply_pixelwise(d, lambda t: t.max() - t.min())
+    def func(t: npt.NDArray[Any]) -> npt.NDArray[Any]:
+        return np.array([t.max() - t.min(), np.mean(t)])  # 2 parameters per pixel
 
-    assert result.shape == (n_cols, n_rows)
-    expected = np.empty((n_cols, n_rows), dtype=np.float64)
-    for c in range(n_cols):
-        for r in range(n_rows):
-            series = data[:, c, :, r]
-            expected[c, r] = series.max() - series.min()
-    np.testing.assert_allclose(np.asarray(result), expected)
+    result = apply_pixelwise(d, func)  # type: ignore[reportUnknownArgumentType]
+
+    # Result is flattened (n_pixels * k,)
+    computed = result.compute()  # type: ignore[assignment]
+    assert computed.shape == (n_pixels * 2,)
+    expected = np.empty((n_pixels, 2), dtype=np.float64)
+    for p in range(n_pixels):
+        series = data[:, p]
+        expected[p, 0] = series.max() - series.min()
+        expected[p, 1] = series.mean()
+    # Reshape to compare
+    computed_reshaped = computed.reshape(n_pixels, 2)  # type: ignore[union-attr]
+    np.testing.assert_allclose(computed_reshaped, expected)  # type: ignore[call-overload]

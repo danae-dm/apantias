@@ -14,6 +14,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "bokeh>=3.9.1",
+    "cycler>=0.12.0",
     "dask[array,distributed]>=2026.3.0",
     "matplotlib>=3.10.9",
     "pydantic>=2.13.3",

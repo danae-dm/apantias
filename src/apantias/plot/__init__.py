@@ -4,4 +4,6 @@ Visualization functions intended for interactive Jupyter use and for
 producing publication-style figures from analysis outputs.
 """
 
-__all__: list[str] = []
+from . import plotting
+
+__all__ = ["plotting"]

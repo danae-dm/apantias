@@ -213,6 +213,15 @@ class StandardPipeline:
                 description="Linear slope of signal versus repetition index",
                 is_archived=True,
             ),
+            PipelineStage(
+                name="slopes",
+                inputs=["signals"],
+                compute_fn=lambda inputs: stats.compute_slopes(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
+                    inputs["signals"],  # type: ignore[reportUnknownArgumentType]
+                ),
+                description="Linear slope of signal versus repetition index",
+                is_archived=True,
+            ),
         ]
 
     def _execute_pipeline(self, stages: list[PipelineStage], client: Client) -> None:
