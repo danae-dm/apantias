@@ -155,8 +155,18 @@ def h5_to_zarr(
     frame: FrameSettings,
     analysis: AnalysisSettings,
     dataset_name: str | None = None,
+    *,
+    store_batch_size: int | None = None,
 ) -> Path:
-    """Write the data of an HDF5 dataset to a Zarr v3 store."""
+    """Write the data of an HDF5 dataset to a Zarr v3 store.
+
+    Parameters
+    ----------
+    store_batch_size:
+        If given, ``da.store`` is called in waves of at most this many shards
+        instead of submitting the whole array in one graph. This bounds the
+        number of in-flight tasks and the transient memory per worker.
+    """
     h5_path = Path(h5_path)
     zarr_path = Path(zarr_path)
 
@@ -258,7 +268,41 @@ def h5_to_zarr(
         data.chunksize,
         data.nbytes / 1e6,
     )
-    da.store(data, target, lock=False)  # type: ignore[reportUnknownMemberType]
+
+    if store_batch_size is None or len(blocks) <= store_batch_size:
+        da.store(data, target, lock=False)  # type: ignore[reportUnknownMemberType]
+    else:
+        _logger.info(
+            "Storing in batches of %d blocks (%d batches total).",
+            store_batch_size,
+            (len(blocks) + store_batch_size - 1) // store_batch_size,
+        )
+        n_full_batches = len(blocks) // store_batch_size
+        for batch_idx in range(n_full_batches + (1 if len(blocks) % store_batch_size else 0)):
+            batch_start = batch_idx * store_batch_size
+            batch_end = min(batch_start + store_batch_size, len(blocks))
+            batch_blocks = blocks[batch_start:batch_end]
+            batch_data: da.Array = da.concatenate(batch_blocks, axis=0)  # type: ignore[reportUnknownMemberType]
+
+            out_start = batch_start * chunk_size
+            out_end = min(out_start + len(batch_blocks) * chunk_size, n_output_frames)
+            region = (slice(out_start, out_end), slice(None), slice(None), slice(None))
+
+            _logger.info(
+                "Storing batch %d/%d: blocks %d-%d -> output frames %d-%d.",
+                batch_idx + 1,
+                (len(blocks) + store_batch_size - 1) // store_batch_size,
+                batch_start,
+                batch_end - 1,
+                out_start,
+                out_end,
+            )
+            da.store(
+                batch_data,
+                target,
+                lock=False,
+                regions=[region],
+            )  # type: ignore[reportUnknownMemberType]
 
     _logger.info("Successfully wrote %d frames to %s", n_output_frames, zarr_path)
     return zarr_path

@@ -151,7 +151,13 @@ class StandardAnalysis:
         # ------------------------------------------------------------------
         _logger.info("Start writing bin to zarr store.")
         self._log_worker_memory("Before h5_to_zarr")
-        h5_to_zarr(self.h5_path, self.paths.raw_framewise, self.config.frame, self.config.analysis)
+        h5_to_zarr(
+            self.h5_path,
+            self.paths.raw_framewise,
+            self.config.frame,
+            self.config.analysis,
+            store_batch_size=len(self._cluster.workers),
+        )
         _log_driver_memory("After h5_to_zarr")
         self._log_worker_memory("After h5_to_zarr")
         rechunk_to_pixels(self.paths.raw_framewise, self.paths.raw_pixelwise)
@@ -332,42 +338,23 @@ class StandardAnalysis:
         return p
 
     def _persist_or_store(self, arr: da.Array, path: Path, pipeline: Pipeline) -> da.Array:
-        """Materialize a branch-point array so it is not recomputed.
+        """Materialize a branch-point array to Zarr and return a disk-backed handle.
 
-        The array is persisted in worker memory only while the configured
-        in-memory budget (``analysis.persist_memory_percent`` of total RAM) is
-        not exceeded.  Otherwise it is written to Zarr and read back from disk.
+        To keep worker memory bounded, branch points are always written to Zarr
+        and read back. This avoids accumulating large or many branch-point arrays
+        in distributed worker memory while still preventing recomputation.
         """
         budget_mb = (pipeline.memory_budget_bytes or 0) / 1e6
-        used_mb = pipeline.memory_used_bytes / 1e6
         _logger.info(
-            "Memory budget: %.1f / %.1f MB used before %s (%.2f MB).",
-            used_mb,
+            "Memory budget: %.1f / %.1f MB available for %s (%.2f MB).",
+            pipeline.memory_used_bytes / 1e6,
             budget_mb,
             path.name,
             arr.nbytes / 1e6,
         )
-        self._log_worker_memory(f"Before persist {path.name}")
-        if pipeline.can_persist_in_memory(arr.nbytes):
-            _logger.info("Persist %s in memory (%.2f MB).", path.name, arr.nbytes / 1e6)
-            persisted = cast(da.Array, self._client.persist(arr))
-            # Persist in memory for downstream use and also write a Zarr copy:
-            # the HDF5 archive pass reads archived stages from Zarr, and Zarr
-            # serves as the fallback when the memory budget is exhausted.
-            persisted.to_zarr(path, overwrite=True)
-            pipeline.record_memory_use(arr.nbytes)
-            self._log_worker_memory(f"After persist {path.name}")
-            _logger.info(
-                "Memory budget after %s: %.1f / %.1f MB used.",
-                path.name,
-                pipeline.memory_used_bytes / 1e6,
-                budget_mb,
-            )
-            return persisted
-
         self._log_worker_memory(f"Before zarr store {path.name}")
         _logger.info(
-            "Store %s to zarr (%.2f MB) — memory budget exhausted.",
+            "Store %s to zarr (%.2f MB).",
             path.name,
             arr.nbytes / 1e6,
         )
@@ -390,38 +377,39 @@ class StandardAnalysis:
         return budget
 
     def _save_final_outputs(self, pipeline: Pipeline) -> None:
-        """Write all leaf outputs to their Zarr stores."""
+        """Write each leaf output to its Zarr store sequentially."""
         stages = pipeline.leaf_outputs()
-        outputs = [s.array for s in stages]
-        paths = [s.path for s in stages]
 
-        total_leaf_nbytes = sum(out.nbytes for out in outputs)
+        total_leaf_nbytes = sum(s.array.nbytes for s in stages)
         _logger.info(
-            "Writing %d final outputs: %s (total %.2f MB).",
+            "Writing %d final outputs sequentially: %s (total %.2f MB).",
             len(stages),
             ", ".join(s.name for s in stages),
             total_leaf_nbytes / 1e6,
         )
         for s in stages:
             _log_array(s.name, s.array)
-        # da.store needs writable array targets; Path objects do not support
-        # item assignment, so open one Zarr array per output first.
-        targets = [
-            zarr.open_array(
-                str(path),
-                mode="w-",
-                shape=out.shape,
-                chunks=out.chunksize,
-                dtype=out.dtype,
+
+        for stage in stages:
+            # da.store needs writable array targets; Path objects do not support
+            # item assignment, so open one Zarr array per output first.
+            target = zarr.open_array(
+                str(stage.path),
+                mode="w",
+                shape=stage.array.shape,
+                chunks=stage.array.chunksize,
+                dtype=stage.array.dtype,
                 zarr_format=3,
             )
-            for out, path in zip(outputs, paths, strict=True)
-        ]
-        da.store(outputs, targets, lock=False)
-        # Back-fill the registry with disk-backed handles: after this point
-        # every stage of the pipeline refers to materialized data, so touching
-        # a stage later cannot silently recompute the whole upstream graph.
-        for stage in stages:
+            _logger.info("Storing %s to %s...", stage.name, stage.path)
+            self._log_worker_memory(f"Before store {stage.name}")
+            da.store(stage.array, target, lock=False)
+            # Back-fill the registry with a disk-backed handle: after this point
+            # every stage of the pipeline refers to materialized data, so touching
+            # a stage later cannot silently recompute the whole upstream graph.
             stage.array = cast(da.Array, da.from_zarr(stage.path))
+            self._log_worker_memory(f"After store {stage.name}")
+            _logger.info("Stored %s.", stage.name)
+
         self._log_worker_memory("After final outputs store")
         _logger.info("Done.")

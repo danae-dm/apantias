@@ -17,14 +17,11 @@ from apantias.settings import AnalysisSettings, AppSettings, RuntimeSettings
 
 N_FRAMES, N_COLS, N_REPS, N_ROWS = 12, 4, 6, 4
 
-# Names and shapes of every product of the standard pipeline.  The on-disk
-# layout is documented as <zarr_temp>/<stage name>; this test intentionally
-# resolves the paths from the raw settings instead of from AnalysisPaths or
-# Pipeline, so it independently verifies the documented contract.
+# Names and shapes of outputs that are written to the HDF5 archive.  Stages
+# tagged only as BRANCH are stored in the transient Zarr store but are not
+# copied to the archive, so they are intentionally omitted here.
 EXPECTED_SHAPES: dict[str, tuple[int, ...]] = {
     "median": (N_COLS, N_ROWS),
-    "offset_corr": (N_FRAMES, N_COLS, N_REPS, N_ROWS),
-    "common_modes": (N_FRAMES, N_COLS, N_REPS),
     "signals": (N_FRAMES, N_COLS, N_REPS, N_ROWS),
     "slopes": (N_FRAMES, N_COLS, N_ROWS),
     "msd": (N_COLS, N_ROWS),
