@@ -25,13 +25,12 @@ def _mock_resources(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # Names and shapes of outputs that are written to the HDF5 archive.
+# Note: median has shape (n_rows, n_reps, n_cols) because it's computed across frames (axis 0)
+# Only stages marked with is_archived=True are written to the HDF5 archive
 EXPECTED_SHAPES: dict[str, tuple[int, ...]] = {
-    "median": (N_COLS, N_ROWS),
+    "median": (N_ROWS, N_REPS, N_COLS),
     "signals": (N_FRAMES, N_COLS, N_REPS, N_ROWS),
     "slopes": (N_FRAMES, N_COLS, N_ROWS),
-    "msd": (N_COLS, N_ROWS),
-    "signals_mean": (N_FRAMES, N_COLS, N_ROWS),
-    "pixelwise": (N_COLS, N_ROWS),
 }
 
 
@@ -128,3 +127,69 @@ def test_default_cleanup_removes_store(config: AppSettings) -> None:
     """By default the temporary Zarr store is removed after archiving."""
     StandardPipeline(config).run()
     assert not Path(config.analysis.zarr_temp).is_dir(), "Temporary Zarr store was not cleaned up"
+
+
+def test_h5_archive_with_sign_flip_true(tmp_path: Path, sample_h5_file: Path) -> None:
+    """Test StandardPipeline with raw_sign_flip=True (new default)."""
+    config = AppSettings(
+        runtime=RuntimeSettings(dask_temp=tmp_path / "dask_temp"),
+        frame=FrameSettings(
+            n_frames=N_FRAMES,
+            n_rows=N_ROWS,
+            n_reps=N_REPS,
+            n_cols=N_COLS,
+        ),
+        analysis=AnalysisSettings(
+            h5_file=sample_h5_file,
+            zarr_temp=tmp_path / "temp.zarr",
+            h5_archive=tmp_path / "archive.h5",
+            raw_sign_flip=True,  # New default
+        ),
+    )
+
+    StandardPipeline(config).run()
+
+    archive_path = Path(config.analysis.h5_archive)
+    assert archive_path.exists(), "HDF5 archive was not created"
+
+    with h5py.File(archive_path, "r") as f:
+        # Verify archived outputs are finite and have expected shapes
+        for name, expected_shape in EXPECTED_SHAPES.items():
+            assert name in f, f"HDF5 dataset {name} missing from archive"
+            ds: Any = f[name]
+            assert tuple(ds.shape) == expected_shape, f"archive {name}: expected {expected_shape}, got {ds.shape}"
+            # All archived values must be finite
+            assert np.isfinite(np.asarray(ds[:])).all(), f"archive {name} contains non-finite values"
+
+
+def test_h5_archive_with_sign_flip_false(tmp_path: Path, sample_h5_file: Path) -> None:
+    """Test StandardPipeline with raw_sign_flip=False for backward compatibility."""
+    config = AppSettings(
+        runtime=RuntimeSettings(dask_temp=tmp_path / "dask_temp"),
+        frame=FrameSettings(
+            n_frames=N_FRAMES,
+            n_rows=N_ROWS,
+            n_reps=N_REPS,
+            n_cols=N_COLS,
+        ),
+        analysis=AnalysisSettings(
+            h5_file=sample_h5_file,
+            zarr_temp=tmp_path / "temp.zarr",
+            h5_archive=tmp_path / "archive.h5",
+            raw_sign_flip=False,  # Old behavior: no sign flip
+        ),
+    )
+
+    StandardPipeline(config).run()
+
+    archive_path = Path(config.analysis.h5_archive)
+    assert archive_path.exists(), "HDF5 archive was not created"
+
+    with h5py.File(archive_path, "r") as f:
+        # Verify archived outputs are finite and have expected shapes
+        for name, expected_shape in EXPECTED_SHAPES.items():
+            assert name in f, f"HDF5 dataset {name} missing from archive"
+            ds: Any = f[name]
+            assert tuple(ds.shape) == expected_shape, f"archive {name}: expected {expected_shape}, got {ds.shape}"
+            # All archived values must be finite
+            assert np.isfinite(np.asarray(ds[:])).all(), f"archive {name} contains non-finite values"

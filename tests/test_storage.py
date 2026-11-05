@@ -234,3 +234,84 @@ def test_read_frame_batch_asymmetric(tmp_path: Path) -> None:
         for row in range(rows):
             for w in range(cols):
                 assert out[0, row, rep, w] == rep * 100 + row * 10 + w
+
+
+def test_h5_to_zarr_sign_flip_true(tmp_path: Path) -> None:
+    """Test h5_to_zarr with raw_sign_flip=True: data should be negated and dtype should be int32 or float32."""
+    from apantias.settings import AnalysisSettings, FrameSettings, RangeSpec
+    from apantias.storage.zarr import h5_to_zarr
+
+    # Create a minimal HDF5 file with known data
+    # Layout: (n_frames, n_rows, n_reps, n_cols) = (1, 2, 2, 2)
+    h5_path = tmp_path / "input.h5"
+    data = np.array([[[[100, 200], [300, 400]], [[500, 600], [700, 800]]]], dtype=np.uint16)
+    with h5py.File(h5_path, "w") as f:
+        f.create_dataset("data", data=data)
+
+    zarr_path = tmp_path / "output.zarr/dataset"
+
+    # Create settings with raw_sign_flip=True
+    config = AnalysisSettings(
+        h5_file=h5_path,
+        zarr_temp=tmp_path / "temp.zarr",
+        h5_archive=tmp_path / "archive.h5",
+        raw_sign_flip=True,
+        nreps_range=RangeSpec(start=0, stop=-1, step=1),
+        frames_range=RangeSpec(start=0, stop=-1, step=1),
+    )
+    # Match the actual data shape: (1, 2, 2, 2)
+    frame = FrameSettings(n_frames=1, n_rows=2, n_reps=2, n_cols=2)
+
+    # Run h5_to_zarr
+    result_path = h5_to_zarr(h5_path, str(zarr_path), frame, config)
+
+    # Verify the output
+    z = zarr.open_array(str(result_path), mode="r")
+    result = np.asarray(z[:])
+
+    # Data should be negated (100->-100, 200->-200, etc.)
+    expected = data.astype(np.float32) * -1
+    np.testing.assert_array_equal(result, expected)
+
+    # dtype should be float32 (simpler choice for sign-flipped data)
+    assert result.dtype == np.dtype("float32"), f"Expected float32, got {result.dtype}"
+
+
+def test_h5_to_zarr_sign_flip_false(tmp_path: Path) -> None:
+    """Test h5_to_zarr with raw_sign_flip=False: data should be unchanged, dtype uint16."""
+    from apantias.settings import AnalysisSettings, FrameSettings, RangeSpec
+    from apantias.storage.zarr import h5_to_zarr
+
+    # Create a minimal HDF5 file with known data
+    # Layout: (n_frames, n_rows, n_reps, n_cols) = (1, 2, 2, 2)
+    h5_path = tmp_path / "input.h5"
+    data = np.array([[[[100, 200], [300, 400]], [[500, 600], [700, 800]]]], dtype=np.uint16)
+    with h5py.File(h5_path, "w") as f:
+        f.create_dataset("data", data=data)
+
+    zarr_path = tmp_path / "output.zarr/dataset"
+
+    # Create settings with raw_sign_flip=False
+    config = AnalysisSettings(
+        h5_file=h5_path,
+        zarr_temp=tmp_path / "temp.zarr",
+        h5_archive=tmp_path / "archive.h5",
+        raw_sign_flip=False,
+        nreps_range=RangeSpec(start=0, stop=-1, step=1),
+        frames_range=RangeSpec(start=0, stop=-1, step=1),
+    )
+    # Match the actual data shape: (1, 2, 2, 2)
+    frame = FrameSettings(n_frames=1, n_rows=2, n_reps=2, n_cols=2)
+
+    # Run h5_to_zarr
+    result_path = h5_to_zarr(h5_path, str(zarr_path), frame, config)
+
+    # Verify the output
+    z = zarr.open_array(str(result_path), mode="r")
+    result = np.asarray(z[:])
+
+    # Data should be unchanged (uint16)
+    np.testing.assert_array_equal(result, data)
+
+    # dtype should be uint16
+    assert result.dtype == np.dtype("uint16"), f"Expected uint16, got {result.dtype}"

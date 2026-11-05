@@ -203,16 +203,6 @@ class StandardPipeline:
                 description="Offset- and common-mode-corrected detector signal",
                 is_archived=True,
             ),
-            # Leaf outputs (no downstream consumers)
-            PipelineStage(
-                name="slopes",
-                inputs=["signals"],
-                compute_fn=lambda inputs: stats.compute_slopes(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
-                    inputs["signals"],  # type: ignore[reportUnknownArgumentType]
-                ),
-                description="Linear slope of signal versus repetition index",
-                is_archived=True,
-            ),
             PipelineStage(
                 name="slopes",
                 inputs=["signals"],

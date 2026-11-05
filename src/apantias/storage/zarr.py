@@ -12,6 +12,7 @@ from typing import Any, cast
 import dask.array as da
 import h5py  # pyright: ignore[reportMissingTypeStubs]
 import numpy as np
+import numpy.typing as npt
 import zarr
 from dask import delayed  # pyright: ignore
 from zarr.codecs import (
@@ -31,13 +32,22 @@ from .hdf5 import _find_h5_dataset, _read_h5_batch  # pyright: ignore[reportPriv
 _logger = logging.getLogger(__name__)
 
 
-def _blosc_codecs() -> list[BytesCodec | BloscCodec]:
-    """Inner codec pipeline for the raw uint16 detector data.
+def _blosc_codecs(dtype: np.dtype[Any] | None = None) -> list[BytesCodec | BloscCodec]:
+    """Inner codec pipeline for detector data.
 
     LZ4 + bitshuffle is chosen for speed: bitshuffle groups the near-constant
-    high bytes of the narrow-range uint16 values together, which already removes
+    high bytes of the narrow-range values together, which already removes
     most of the entropy, and LZ4 is one of the fastest Blosc codecs.
+
+    Parameters
+    ----------
+    dtype:
+        Data type of the array being compressed. The codec pipeline is
+        suitable for both uint16 and 4-byte integer/float dtypes; compressed
+        size may vary depending on dtype. Defaults to uint16 if not specified.
     """
+    if dtype is None:
+        dtype = np.dtype("uint16")
     return [
         BytesCodec(endian="little"),
         BloscCodec(
@@ -200,16 +210,44 @@ def h5_to_zarr(
     array_shape = (n_output_frames, frame.rows, eval_nreps, frame.cols)
     chunk_shape = (chunk_size, frame.rows, eval_nreps, frame.cols)
     inner_chunk_shape = (chunk_size, 1, eval_nreps, frame.cols)
-    bytes_per_frame = frame.rows * eval_nreps * frame.cols * 2
 
-    _logger.info(
-        "h5_to_zarr: input shape %s, output shape %s, chunk shape %s, bytes per frame %d, total output %.2f MB.",
-        shape,
-        array_shape,
-        chunk_shape,
-        bytes_per_frame,
-        np.prod(array_shape, dtype=np.int64) * 2 / 1e6,
-    )
+    # Determine storage dtype based on raw_sign_flip
+    raw_sign_flip = analysis.raw_sign_flip
+    _logger.info("h5_to_zarr: raw_sign_flip=%s", raw_sign_flip)
+
+    # Store dtype info for logging later
+    storage_dtype: np.dtype[Any]
+    storage_dtype_name: str
+
+    if raw_sign_flip:
+        # When sign flip is active, store as float32.
+        # Float32 is chosen because:
+        # 1. It handles all uint16 values (0-65535) without overflow when negated
+        # 2. Simple and predictable behavior
+        # 3. Good compression with Blosc/bitshuffle
+        storage_dtype = np.dtype("float32")
+        storage_dtype_name = "float32"
+        _logger.info(
+            "h5_to_zarr: using float32 storage for sign-flipped data. "
+            "Values will be cast from uint16 -> int32 -> negate -> float32."
+        )
+    else:
+        # Original behavior: uint16, no sign flip
+        storage_dtype = np.dtype("uint16")
+        storage_dtype_name = "uint16"
+        bytes_per_frame = frame.rows * eval_nreps * frame.cols * 2
+        total_output_mb = np.prod(array_shape, dtype=np.int64) * 2 / 1e6
+
+        _logger.info(
+            "h5_to_zarr: input shape %s, output shape %s, chunk shape %s, bytes per frame %d, "
+            "total output %.2f MB, storage dtype=%s (no sign flip).",
+            shape,
+            array_shape,
+            chunk_shape,
+            bytes_per_frame,
+            total_output_mb,
+            storage_dtype_name,
+        )
 
     full_array_path = (
         f"{store_path}/{group_path}/{output_dataset_name}" if group_path else f"{store_path}/{output_dataset_name}"
@@ -220,7 +258,7 @@ def h5_to_zarr(
         mode="w",
         shape=array_shape,
         chunks=chunk_shape,
-        dtype="uint16",
+        dtype=storage_dtype,
         zarr_format=3,
         codecs=_sharded_frame_codecs(inner_chunk_shape),
     )
@@ -242,17 +280,37 @@ def h5_to_zarr(
         h5_start = frame_indices[batch_start]
         h5_end = frame_indices[batch_end] if batch_end < n_output_frames else frame_indices[-1] + 1
 
+        # Create a delayed function that reads and optionally negates the data
+        def _read_and_transform(
+            h5_path: Path,
+            dataset_name: str,
+            batch_start_idx: int,
+            batch_end_idx: int,
+            frame_indices: list[int],
+            nreps_indices: list[int],
+            raw_sign_flip: bool,
+        ) -> npt.NDArray[Any]:
+            """Read batch from HDF5 and apply sign flip if configured."""
+            batch = _read_h5_batch(h5_path, dataset_name, batch_start_idx, batch_end_idx, frame_indices, nreps_indices)
+
+            if raw_sign_flip:
+                # Cast to int32 first, then negate to avoid uint16->int16 overflow
+                return batch.astype(np.int32) * -1
+            else:
+                return batch
+
         block = da.from_delayed(  # type: ignore[reportUnknownMemberType]
-            delayed(_read_h5_batch)(  # type: ignore[reportUnknownArgumentType]
+            delayed(_read_and_transform)(  # type: ignore[reportUnknownArgumentType]
                 h5_path,
                 dataset_name,
                 h5_start,
                 h5_end,
                 frame_indices=frame_indices,
                 nreps_indices=nreps_indices,
+                raw_sign_flip=raw_sign_flip,
             ),
             shape=(batch_end - batch_start, frame.rows, eval_nreps, frame.cols),
-            dtype=np.uint16,
+            dtype=storage_dtype,
         )
         blocks.append(block)
         block_num = len(blocks)
@@ -304,5 +362,5 @@ def h5_to_zarr(
                 regions=[region],
             )  # type: ignore[reportUnknownMemberType]
 
-    _logger.info("Successfully wrote %d frames to %s", n_output_frames, zarr_path)
+    _logger.info("Successfully wrote %d frames to %s with dtype=%s", n_output_frames, zarr_path, storage_dtype_name)
     return zarr_path

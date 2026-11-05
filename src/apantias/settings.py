@@ -177,6 +177,17 @@ class AnalysisSettings(BaseModel):
         default=True,
         description="[EXPERIMENTAL] Shifts the signals according to the pixel hist fit. Not currently used.",
     )
+    raw_sign_flip: bool = Field(
+        default=True,
+        description=(
+            "If True, negate the raw detector data during HDF5→Zarr conversion. "
+            "The raw array is stored as int32 or float32 (never int16, to avoid uint16→int16 overflow "
+            "for values above 32767). The choice between int32 and float32 is made automatically "
+            "based on compressed size. "
+            "Note: this only guarantees consistency for internally computed offsets; "
+            "external offsets must already match the chosen sign convention."
+        ),
+    )
     persist_memory_percent: int = Field(
         default=30,
         ge=0,

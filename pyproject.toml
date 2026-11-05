@@ -36,7 +36,8 @@ classifiers = [
 dev = [
     "ruff>=0.15.2",
     "pytest>=8.3",
-    "pre-commit>=4.0"
+    "pre-commit>=4.0",
+    "pyright>=1.1.414",
 ]
 
 [tool.uv]
