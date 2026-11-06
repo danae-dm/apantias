@@ -181,20 +181,9 @@ class AnalysisSettings(BaseModel):
         default=True,
         description=(
             "If True, negate the raw detector data during HDF5→Zarr conversion. "
-            "The raw array is stored as int32 or float32 (never int16, to avoid uint16→int16 overflow "
-            "for values above 32767). The choice between int32 and float32 is made automatically "
-            "based on compressed size. "
             "Note: this only guarantees consistency for internally computed offsets; "
             "external offsets must already match the chosen sign convention."
         ),
-    )
-    persist_memory_percent: int = Field(
-        default=30,
-        ge=0,
-        le=100,
-        description="[PLACEHOLDER] Maximum percentage of total RAM to use for persisted "
-        "branch-point arrays. Not used in current pipeline which writes all "
-        "intermediates to Zarr.",
     )
 
 
@@ -241,13 +230,17 @@ def _dump_config(cfg: AppSettings, path: Path) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
-def _validate_complete(data: dict[str, Any], path: Path) -> None:
-    """Raise if the loaded config is missing any required section or field.
+def _validate_complete(data: dict[str, Any], path: Path) -> list[str]:
+    """Check that the loaded config has all required fields.
 
     Fields marked with `exclude=True` in their Pydantic definition are internal
     runtime parameters (e.g. inferred from HDF5) and are not expected in YAML.
-    Fields that have a default value may be omitted; Pydantic fills them in.
-    Only fields without a default are required to be present in the YAML file.
+    Every other field MUST be explicitly present in the YAML file, regardless
+    of whether it has a default value.  This prevents silent fallbacks to
+    internal defaults when a config is edited or outdated.
+
+    Returns a list of dotted field paths that are missing.  Empty list means
+    the config is complete.
     """
     missing: list[str] = []
 
@@ -261,26 +254,47 @@ def _validate_complete(data: dict[str, Any], path: Path) -> None:
             continue
 
         section_data = cast(dict[str, Any], data[field_name])
+        # For Pydantic model fields (e.g. RuntimeSettings, AnalysisSettings),
+        # check that every non-excluded sub-field is present in the YAML.
+        # We check both the origin (for generic types like list[MyModel]) and
+        # the annotation itself (for concrete classes where get_origin returns None).
         origin = get_origin(field_info.annotation)
-        if isinstance(origin, type) and issubclass(origin, BaseModel):
-            for sub_name, sub_info in origin.model_fields.items():
+        model_cls = origin if isinstance(origin, type) else None
+        if model_cls is None and isinstance(field_info.annotation, type):
+            model_cls = field_info.annotation
+        if model_cls is not None and issubclass(model_cls, BaseModel):
+            for sub_name, sub_info in model_cls.model_fields.items():
                 # Skip internal fields marked with exclude=True
                 if sub_info.exclude:
                     continue
-                # Required fields without a default MUST be present in the YAML
-                if sub_info.is_required() and sub_name not in section_data:
+                # All non-excluded fields must be present in the YAML,
+                # even if they have a Pydantic default.
+                if sub_name not in section_data:
                     missing.append(f"{field_name}.{sub_name}")
 
+    return missing
     if missing:
         raise ValueError(f"{path}: missing required field(s): {', '.join(missing)}")
 
 
 def load_config(path: Path | None = None, *, quiet: bool = False) -> AppSettings:
     """
-    - If path is None or file missing: write defaults to default.yaml
-      at the given path (or working directory) and return them.
-    - If path exists: read and validate it.
-    Will raise if the loaded config is missing any required section or field.
+    Load configuration from a YAML file.
+
+    - If *path* is ``None`` or the file does not exist: writes a complete
+      ``default.yaml`` with sensible defaults to the current directory and
+      returns it.
+    - If *path* points to an existing file: reads, validates, and returns it.
+      Raises ``ValueError`` with a detailed list of missing fields if the
+      config is incomplete.
+
+    Parameters
+    ----------
+    path :
+        Path to a YAML config file.  Pass ``None`` (the default) to auto-
+        generate a ``default.yaml`` in the current directory.
+    quiet :
+        If ``True``, suppress the config summary printed to stdout.
     """
     path = Path(path) if path else DEFAULT_CONFIG_FILE
     if not path.exists():
@@ -295,7 +309,21 @@ def load_config(path: Path | None = None, *, quiet: bool = False) -> AppSettings
     data: Any = yaml.safe_load(path.read_text())
     if not isinstance(data, dict):
         raise ValueError(f"Config file {path} is empty or not a mapping")
-    _validate_complete(cast(dict[str, Any], data), path)
+
+    missing = _validate_complete(cast(dict[str, Any], data), path)
+    if missing:
+        hint = (
+            f"\n  To generate a complete config, run:\n"
+            f"    from apantias import settings\n"
+            f"    settings.load_config(None)  # creates '{DEFAULT_CONFIG_FILE}'\n"
+            f"  Then copy the generated file to '{path}' and adjust as needed."
+        )
+        raise ValueError(
+            f"Config file '{path}' is missing the following required field(s):\n"
+            + "\n".join(f"    - {f}" for f in missing)
+            + hint
+        )
+
     cfg = AppSettings.model_validate(data)
     if not quiet:
         print_config(cfg)

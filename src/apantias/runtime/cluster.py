@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-import dask.config
 from dask.distributed import Client, LocalCluster
 from distributed.worker import Worker
 
@@ -102,22 +101,12 @@ def init(
     )
     memory_limit = f"{per_worker_mb}MB"
 
-    # Route the Dask dashboard through JupyterHub's server proxy
-    prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
-    _ = dask.config.set({"distributed.dashboard.link": prefix + "proxy/{port}/status"})
-
-    # When the dashboard is disabled, distributed still starts an HTTP server on
-    # the default port (8787). Override the scheduler bind address to :0 so it
-    # picks a random free port instead of warning about 8787 being in use.
-    scheduler_kwargs = {"dashboard_address": ":0"} if not dashboard else None
-
     cluster_kwargs: dict[str, Any] = {
         "n_workers": n_workers,
         "threads_per_worker": 1,
         "processes": True,
         "memory_limit": memory_limit,
-        "dashboard_address": ":43359" if dashboard else None,  # pyright: ignore[reportArgumentType]  # None disables dashboard
-        "scheduler_kwargs": scheduler_kwargs,
+        "dashboard_address": "127.0.0.1:0" if dashboard else None,  # pyright: ignore[reportArgumentType]  # random free port on localhost
         "local_directory": local_directory,
     }
     if use_nanny:
@@ -129,8 +118,10 @@ def init(
     _logger.info(f"Initialized Dask on {n_workers} workers.")
     _logger.info(f"Worker memory limit: {memory_limit} per worker.")
     if dashboard:
-        node = get_node_name()
-        _logger.info("For Dashboard access open a ssh tunnel with this command:")
-        _logger.info(f"ssh -N -L 8787:{node}:43359 user@cbe.vbc.ac.at")
-        _logger.info("Access the Dashboard in your browser at http://localhost:8787")
+        port = cluster.scheduler.port
+        _logger.info("Dask dashboard running on port %d (localhost only)", port)
+        _logger.info("SSH tunnel: ssh -N -L 8787:%s:%d user@cbe.vbc.ac.at", get_node_name(), port)
+        _logger.info("Access in browser: http://localhost:8787")
+    else:
+        _logger.info("No dashboard created.")
     return Client(cluster), cluster

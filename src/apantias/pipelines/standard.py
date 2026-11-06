@@ -99,6 +99,7 @@ class StandardPipeline:
             self._internal_client, self._internal_cluster = _init_cluster(
                 self.config.runtime.dask_temp,
                 min_worker_memory_mb=self.config.runtime.min_worker_memory_mb,
+                dashboard=self.config.runtime.dask_dashboard,
             )
             client: Client = self._internal_client  # type: ignore[assignment]
         else:
@@ -201,7 +202,7 @@ class StandardPipeline:
                     inputs["common_modes"],  # type: ignore[reportUnknownArgumentType]
                 ),
                 description="Offset- and common-mode-corrected detector signal",
-                is_archived=True,
+                is_archived=False,
             ),
             PipelineStage(
                 name="slopes",
@@ -210,6 +211,15 @@ class StandardPipeline:
                     inputs["signals"],  # type: ignore[reportUnknownArgumentType]
                 ),
                 description="Linear slope of signal versus repetition index",
+                is_archived=True,
+            ),
+            PipelineStage(
+                name="signals_mean",
+                inputs=["signals"],
+                compute_fn=lambda inputs: stats.compute_signals_mean(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
+                    inputs["signals"],  # type: ignore[reportUnknownArgumentType]
+                ),
+                description="Mean across n_reps",
                 is_archived=True,
             ),
         ]

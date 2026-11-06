@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 import yaml
 from pytest import MonkeyPatch
 
@@ -38,3 +39,42 @@ def test_load_config_creates_default(tmp_path: Path, monkeypatch: MonkeyPatch) -
     assert "frame" in data
     assert "analysis" in data
     assert cfg.runtime.min_worker_memory_mb == 4096
+
+
+def test_load_config_missing_field_raises(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    """Loading a YAML with missing fields must raise ValueError (not silently default)."""
+    monkeypatch.setattr("apantias.runtime.resources.get_resources", lambda: (4, 8192))
+
+    yaml_content = """
+runtime:
+  dask_temp: /tmp/dask
+  dask_dashboard: false
+  dask_nanny: false
+  min_worker_memory_mb: 2048
+frame:
+  target_chunk_mb: 150
+analysis:
+  h5_file: /tmp/data.h5
+  zarr_temp: /tmp/temp.zarr
+  keep_zarr_temp: false
+  h5_archive: /tmp/archive.h5
+  ext_offset: null
+  nreps_range:
+    start: 0
+    stop: -1
+    step: 1
+  frames_range:
+    start: 0
+    stop: -1
+    step: 1
+  slope_threshold: 3
+  second_offset: true
+  # raw_sign_flip intentionally omitted
+"""
+    config_path = tmp_path / "incomplete.yaml"
+    config_path.write_text(yaml_content)
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path, quiet=True)
+
+    assert "raw_sign_flip" in str(exc_info.value)
