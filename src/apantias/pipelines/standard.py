@@ -1,9 +1,9 @@
 """Simplified pipeline declarations for standard analysis.
 
 Each pipeline stage is fully self-contained:
-- Inputs: which upstream stages it depends on
+- Inputs: which upstream outputs it depends on
 - Computation: how to transform inputs to outputs
-- Output: where to write the result (auto-generated from name)
+- Output: where to write the result (explicit ``output_name``)
 - Description: metadata written to archive
 - Archive: whether to copy to HDF5 archive
 
@@ -50,16 +50,23 @@ class PipelineStage:
     """
 
     name: str
-    """Unique identifier for this stage. Also used to generate output_path."""
+    """Unique identifier for this stage."""
 
     inputs: list[str]
-    """Names of upstream stages this depends on."""
+    """Names of upstream outputs this stage depends on."""
 
     compute_fn: Callable[..., da.Array]
     """Function that computes the result. Can take any arguments."""
 
     description: str
     """Human-readable description written as metadata to the archive."""
+
+    output_name: str
+    """Name of the output dataset produced by this stage.
+
+    This is the name used when writing the result to the temporary Zarr store
+    and the name downstream stages reference in ``inputs``.
+    """
 
     is_archived: bool = False
     """If True, this output will be copied to the HDF5 archive."""
@@ -167,6 +174,7 @@ class StandardPipeline:
             # Pixel-wise median (from pixel-chunked data)
             PipelineStage(
                 name="median",
+                output_name="median",
                 inputs=[],  # raw_pixelwise is written in Stage 0, not a pipeline stage
                 compute_fn=lambda: stats.compute_median(da.from_zarr(self.paths.raw_pixelwise)),  # type: ignore[reportUnknownVariableType]
                 description="Pixel-wise median across frames",
@@ -175,6 +183,7 @@ class StandardPipeline:
             # Offset correction (frame-chunked)
             PipelineStage(
                 name="offset_corr",
+                output_name="offset_corr",
                 inputs=["median"],
                 compute_fn=lambda inputs: stats.compute_offset_corr(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
                     da.from_zarr(self.paths.raw_framewise),  # type: ignore[reportUnknownVariableType]
@@ -186,6 +195,7 @@ class StandardPipeline:
             # Common mode correction (frame-chunked)
             PipelineStage(
                 name="common_modes",
+                output_name="common_modes",
                 inputs=["offset_corr"],
                 compute_fn=lambda inputs: stats.compute_common_modes(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
                     inputs["offset_corr"],  # type: ignore[reportUnknownArgumentType]
@@ -195,7 +205,8 @@ class StandardPipeline:
             ),
             # Final signals (frame-chunked)
             PipelineStage(
-                name="signals",
+                name="signals_corr",
+                output_name="signals_corr",
                 inputs=["offset_corr", "common_modes"],
                 compute_fn=lambda inputs: stats.subtract(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
                     inputs["offset_corr"],  # type: ignore[reportUnknownArgumentType]
@@ -206,35 +217,50 @@ class StandardPipeline:
             ),
             PipelineStage(
                 name="slopes",
-                inputs=["signals"],
+                output_name="slopes",
+                inputs=["signals_corr"],
                 compute_fn=lambda inputs: stats.compute_slopes(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
-                    inputs["signals"],  # type: ignore[reportUnknownArgumentType]
+                    inputs["signals_corr"],  # type: ignore[reportUnknownArgumentType]
                 ),
                 description="Linear slope of signal versus repetition index",
                 is_archived=True,
             ),
             PipelineStage(
-                name="signals_mean",
-                inputs=["signals"],
-                compute_fn=lambda inputs: stats.compute_signals_mean(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
-                    inputs["signals"],  # type: ignore[reportUnknownArgumentType]
+                name="signals_slope_corr",
+                output_name="signals_slope_corr",
+                inputs=["signals_corr", "slopes"],
+                compute_fn=lambda inputs: stats.mask_bad_slopes(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
+                    inputs["slopes"],  # type: ignore[reportUnknownArgumentType]
+                    inputs["signals_corr"],  # type: ignore[reportUnknownArgumentType]
+                    self.config.analysis.slope_threshold,
                 ),
-                description="Mean across n_reps",
+                description="Mask repetitions whose pixel slopes are scaled-MAD outliers",
+                is_archived=True,
+            ),
+            PipelineStage(
+                name="signals",
+                output_name="signals",
+                inputs=["signals_slope_corr"],
+                compute_fn=lambda inputs: stats.compute_signals_mean(  # type: ignore[reportUnknownArgumentType, reportUnknownParameterType]
+                    inputs["signals_slope_corr"],  # type: ignore[reportUnknownArgumentType]
+                ),
+                description="Mean across n_reps after slope outlier masking",
                 is_archived=True,
             ),
         ]
 
     def _execute_pipeline(self, stages: list[PipelineStage], client: Client) -> None:
         """Execute all pipeline stages in dependency order."""
-        results: dict[str, da.Array] = {}  # Cache already-executed stages
+        results: dict[str, da.Array] = {}  # Cache already-executed outputs
+        output_paths: dict[str, Path] = {}  # output_name -> actual output path
 
         for stage in stages:
             _logger.info("Executing stage: %s", stage.name)
 
-            # Load inputs from Zarr (for stages that depend on other pipeline stages)
+            # Load inputs from Zarr using the upstream output paths
             for inp in stage.inputs:
                 if inp not in results:
-                    input_path = self.paths.temp_root / inp
+                    input_path = output_paths[inp]
                     results[inp] = da.from_zarr(input_path)  # type: ignore[reportUnknownVariableType]
 
             # Get input arrays from cache
@@ -246,8 +272,8 @@ class StandardPipeline:
             else:
                 result = stage.compute_fn()
 
-            # Auto-generate output path from name
-            output_path = self.paths.temp_root / stage.name
+            output_path = self.paths.temp_root / stage.output_name
+            output_paths[stage.output_name] = output_path
 
             # Write to Zarr (uses the provided Dask client)
             _logger.info("Writing %s to %s", stage.name, output_path)
@@ -258,7 +284,7 @@ class StandardPipeline:
             _logger.info('Stage "%s" finished in %.2fs', stage.name, elapsed)
 
             # Cache for downstream stages
-            results[stage.name] = da.from_zarr(output_path)  # type: ignore[reportUnknownVariableType]
+            results[stage.output_name] = da.from_zarr(output_path)  # type: ignore[reportUnknownVariableType]
 
     def _write_to_zarr(self, arr: da.Array, path: Path, client: Client) -> None:
         """Write a dask array to Zarr, preserving current chunking strategy.
@@ -339,10 +365,9 @@ class StandardPipeline:
 
         p = Pipeline(self.config.analysis)
         for stage in stages:
-            # Re-create stage with disk-backed array
-            arr = da.from_zarr(self.paths.temp_root / stage.name)  # type: ignore[reportUnknownVariableType]
+            arr = da.from_zarr(self.paths.temp_root / stage.output_name)  # type: ignore[reportUnknownVariableType]
             p.declare(
-                name=stage.name,
+                name=stage.output_name,
                 array=arr,
                 description=stage.description,
                 tags=[ARCHIVE] if stage.is_archived else [],

@@ -10,6 +10,7 @@ from typing import Any
 import dask.array as da
 import numpy as np
 import numpy.typing as npt
+import pytest
 import zarr
 
 from apantias.processing.reductions import apply_pixelwise
@@ -20,6 +21,7 @@ from apantias.processing.stats import (
     compute_offset_corr,
     compute_signals_mean,
     compute_slopes,
+    mask_bad_slopes,
     subtract,
 )
 
@@ -127,6 +129,55 @@ def test_compute_slopes(tmp_path: Path) -> None:
     compute_slopes(d).to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
     result = _read_zarr(out)
     np.testing.assert_allclose(result, 1.0, atol=1e-10)
+
+
+def test_mask_bad_slopes_scaled_mad(tmp_path: Path) -> None:
+    """Outlier pixels are masked across all repetitions using scaled MAD."""
+    n_frames, n_rows, n_reps, n_cols = 2, 2, 3, 2
+    signals = np.ones((n_frames, n_rows, n_reps, n_cols), dtype=np.float64)
+    slopes = np.zeros((n_frames, n_rows, n_cols), dtype=np.float64)
+    slopes[0, 0, 0] = 100.0  # extreme outlier
+
+    s = _from_array(signals, chunks=(n_frames, n_rows, n_reps, n_cols))
+    slopes_d = _from_array(slopes, chunks=(n_frames, n_rows, n_cols))
+
+    out = tmp_path / "masked.zarr"
+    result = mask_bad_slopes(slopes_d, s, slope_threshold=3.0)
+    result.to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
+    result_np = _read_zarr(out)
+
+    # Bad pixel: all repetitions masked
+    assert np.isnan(result_np[0, 0, :, 0]).all()
+    # Other pixels: unchanged
+    assert not np.isnan(result_np[1, 1, :, 1]).any()
+
+
+def test_mask_bad_slopes_disabled(tmp_path: Path) -> None:
+    """When slope_threshold is 0 the input signal is returned unchanged."""
+    signals = np.ones((2, 2, 3, 2), dtype=np.float64)
+    slopes = np.zeros((2, 2, 2), dtype=np.float64)
+    s = _from_array(signals, chunks=(2, 2, 3, 2))
+    slopes_d = _from_array(slopes, chunks=(2, 2, 2))
+
+    out = tmp_path / "masked_disabled.zarr"
+    result = mask_bad_slopes(slopes_d, s, slope_threshold=0.0)
+    result.to_zarr(out, overwrite=True)  # type: ignore[reportUnknownMemberType]
+    result_np = _read_zarr(out)
+
+    np.testing.assert_array_equal(result_np, signals)
+
+
+def test_mask_bad_slopes_rejects_nan() -> None:
+    """NaN values in slopes raise a clear error."""
+    signals = np.ones((2, 2, 3, 2), dtype=np.float64)
+    slopes = np.zeros((2, 2, 2), dtype=np.float64)
+    slopes[0, 0, 0] = np.nan
+
+    s = _from_array(signals, chunks=(2, 2, 3, 2))
+    slopes_d = _from_array(slopes, chunks=(2, 2, 2))
+
+    with pytest.raises(ValueError, match="no NaN values should be present"):
+        mask_bad_slopes(slopes_d, s, slope_threshold=3.0)
 
 
 def test_apply_pixelwise() -> None:

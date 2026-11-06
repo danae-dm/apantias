@@ -9,6 +9,8 @@ import numpy as np
 
 from .axis import FRAME, REP, ROW
 
+_MAD_SCALE = 1.4826  # scales MAD to approximate std for normal data
+
 
 def compute_median(data_p: da.Array) -> da.Array:
     """Compute pixel-wise median across frames.
@@ -135,3 +137,54 @@ def compute_signals_mean(signals: da.Array) -> da.Array:
         Computed by averaging across the rep axis (axis 2).
     """
     return da.mean(signals, axis=REP)  # type: ignore[reportUnknownMemberType]
+
+
+def mask_bad_slopes(
+    slopes: da.Array,
+    signals: da.Array,
+    slope_threshold: float,
+) -> da.Array:
+    """Mask signal repetitions whose pixel slopes are outliers.
+
+    Computes the median slope and the scaled median absolute deviation
+    (MAD * 1.4826) across all pixels and frames. Pixels whose slope
+    deviates by more than ``slope_threshold * scaled_MAD`` from the
+    median are marked as bad, and all repetitions of those pixels in
+    ``signals`` are replaced with ``np.nan``.
+
+    If ``slope_threshold`` is 0, ``signals`` is returned unchanged.
+
+    Args:
+        slopes: Linear slopes with shape (n_frames, n_rows, n_cols).
+        signals: Corrected signals with shape
+                 (n_frames, n_rows, n_reps, n_cols).
+        slope_threshold: Multiplier for the scaled-MAD outlier threshold.
+
+    Returns:
+        Copy of ``signals`` with outlier pixels masked by ``np.nan``.
+
+    Raises:
+        ValueError: If ``slopes`` contains NaN values.
+    """
+    if slope_threshold == 0:
+        return signals
+
+    # Slopes is small (frames * rows * cols). Compute median/MAD eagerly to
+    # avoid expensive Dask P2P shuffle/rechunk operations from da.median on a
+    # flattened array. The actual masking of the full signal stays lazy.
+    slopes_np = slopes.compute()  # type: ignore[reportUnknownVariableType]
+    if np.isnan(slopes_np).any():
+        raise ValueError("no NaN values should be present in slopes at this stage")
+
+    center = float(np.median(slopes_np))
+    scaled_mad = float(np.median(np.abs(slopes_np - center))) * _MAD_SCALE
+
+    outliers = da.abs(slopes - center) > slope_threshold * scaled_mad  # type: ignore[reportUnknownVariableType]
+    # Align the outlier mask with the chunking of the full signal array before
+    # broadcasting over the repetition axis. This avoids an implicit Dask
+    # rechunk/P2P shuffle when the stored slopes have a different chunk layout
+    # than signals_corr.
+    outliers = outliers.rechunk((signals.chunks[0], signals.chunks[1], signals.chunks[3]))  # type: ignore[reportUnknownVariableType]
+    outliers = outliers[:, :, None, :]
+
+    return da.where(outliers, np.nan, signals)  # type: ignore[reportUnknownVariableType]

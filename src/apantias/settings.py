@@ -169,9 +169,15 @@ class AnalysisSettings(BaseModel):
     frames_range: RangeSpec = Field(
         default=RangeSpec(start=0, stop=-1, step=1), description="Frames range [start, stop, step] default stop=-1"
     )
-    slope_threshold: int = Field(
-        default=3,
-        description="[EXPERIMENTAL] Threshold for the Slope Filter. Not currently used in the pipeline.",
+    slope_threshold: float = Field(
+        default=3.0,
+        description=(
+            "Multiplier for the slope outlier filter. "
+            "Pixels whose slope deviates more than slope_threshold times the "
+            "scaled median absolute deviation (MAD * 1.4826) from the median "
+            "slope are masked with NaN in all repetitions before computing the "
+            "mean signal. Set to 0.0 to disable the filter."
+        ),
     )
     second_offset: bool = Field(
         default=True,

@@ -29,8 +29,10 @@ def _mock_resources(monkeypatch: pytest.MonkeyPatch) -> None:
 # Only stages marked with is_archived=True are written to the HDF5 archive
 EXPECTED_SHAPES: dict[str, tuple[int, ...]] = {
     "median": (N_ROWS, N_REPS, N_COLS),
-    "signals": (N_FRAMES, N_COLS, N_REPS, N_ROWS),
-    "slopes": (N_FRAMES, N_COLS, N_ROWS),
+    "signals_corr": (N_FRAMES, N_ROWS, N_REPS, N_COLS),
+    "slopes": (N_FRAMES, N_ROWS, N_COLS),
+    "signals_slope_corr": (N_FRAMES, N_ROWS, N_REPS, N_COLS),
+    "signals": (N_FRAMES, N_ROWS, N_COLS),
 }
 
 
@@ -69,6 +71,7 @@ def config(tmp_path: Path, sample_h5_file: Path) -> AppSettings:
             h5_file=sample_h5_file,
             zarr_temp=tmp_path / "temp.zarr",
             h5_archive=tmp_path / "archive.h5",
+            slope_threshold=0.0,
         ),
     )
 
@@ -144,6 +147,7 @@ def test_h5_archive_with_sign_flip_true(tmp_path: Path, sample_h5_file: Path) ->
             zarr_temp=tmp_path / "temp.zarr",
             h5_archive=tmp_path / "archive.h5",
             raw_sign_flip=True,  # New default
+            slope_threshold=0.0,
         ),
     )
 
@@ -177,6 +181,7 @@ def test_h5_archive_with_sign_flip_false(tmp_path: Path, sample_h5_file: Path) -
             zarr_temp=tmp_path / "temp.zarr",
             h5_archive=tmp_path / "archive.h5",
             raw_sign_flip=False,  # Old behavior: no sign flip
+            slope_threshold=0.0,
         ),
     )
 
